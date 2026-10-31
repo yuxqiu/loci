@@ -314,11 +314,15 @@ fn fetch_refusals() {
     let before = v.tree();
     let (code, env) = v.run(&["fetch", "inbox/drafts/again.md", "papers/heaps"]);
     assert_eq!((code, error_code(&env)), (1, "fetch.dest"));
-    let (code, env) = v.run(&["fetch", "inbox/drafts/again.md", "videos/again"]);
-    assert_eq!((code, error_code(&env)), (1, "fetch.dest"));
+    let (code, env) = v.run(&["fetch", "inbox/drafts/again.md", "Videos/again"]);
+    assert_eq!((code, error_code(&env)), (1, "fetch.dest"), "the type is a slug");
     let (code, env) = v.run(&["fetch", "inbox/drafts/again.md", "docs/Bad_Slug"]);
     assert_eq!((code, error_code(&env)), (1, "fetch.dest"));
     assert_eq!(v.tree(), before);
+    // Any slug is a type.
+    let (code, env) = v.run(&["fetch", "inbox/drafts/again.md", "books/again"]);
+    assert_eq!(code, 0, "{env:#}");
+    assert!(v.exists("sources/books/again/again.md") && v.exists("sources/books/again/source.yaml"));
 }
 
 // ---------------------------------------------------------------- init

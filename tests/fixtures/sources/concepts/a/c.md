@@ -8,7 +8,6 @@ sources:
   - "sources/papers/heaps#intro"
   - "sources/docs/guide#nope"
   - "sources/papers/missing"
-  - "commit:abc1234:concepts/a/c.md"
   - "elsewhere/thing"
 digest: Cites sources.
 ---

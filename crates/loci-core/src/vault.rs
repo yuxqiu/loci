@@ -47,9 +47,6 @@ impl Kind {
 }
 
 static SLUG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[\p{Ll}\p{Lo}\p{N}]+(-[\p{Ll}\p{Lo}\p{N}]+)*$").unwrap());
-static JOURNAL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^journal/[^/]+/(\d{4})/(\d{2})/(\d{2})-(\d{2})-(\d{2})(?:-([^/]+))?\.md$").unwrap());
-
 /// A slug (m0 §6.2): lowercase letters, other letters and digits, in `-`-joined words.
 pub fn is_slug(s: &str) -> bool {
     SLUG.is_match(s)
@@ -60,17 +57,11 @@ pub fn is_ulid(s: &str) -> bool {
     s.len() == 26 && s.bytes().all(|b| b"0123456789ABCDEFGHJKMNPQRSTVWXYZ".contains(&b))
 }
 
-/// A journal entry path (m0 §6.6): `journal/<stream>/YYYY/MM/YY-MM-DD[-slug].md`.
+/// A journal entry path (m0 §6.6): a file inside `journal/<stream>/`, the stream a
+/// slug. Folders and file names below the stream are the user's.
 pub fn journal_path_ok(path: &str) -> bool {
-    let Some(c) = JOURNAL.captures(path) else { return false };
-    let year = &c[1];
-    let month = &c[2];
-    let yy = &c[3];
-    let mm = &c[4];
-    let slug_ok = c.get(6).is_none_or(|s| is_slug(s.as_str()));
-    let month_n: u32 = month.parse().unwrap_or(0);
-    let day_n: u32 = c[5].parse().unwrap_or(0);
-    year.ends_with(yy) && month == mm && (1..=12).contains(&month_n) && (1..=31).contains(&day_n) && slug_ok
+    let parts: Vec<&str> = path.split('/').collect();
+    parts.len() >= 3 && parts[0] == "journal" && is_slug(parts[1])
 }
 
 /// NFC form of a string.

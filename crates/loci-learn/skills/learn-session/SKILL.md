@@ -17,8 +17,8 @@ path reaches something the user already knows.
   Use `"grader": "self", "grade": "again"|"hard"|"good"|"easy"` when the user grades
   themselves.
 - The session's questions on the material, their answers and grades, are recorded in
-  a dated journal entry for the session (`journal/learn/YYYY/MM/YY-MM-DD-<slug>.md`),
-  not in the review log.
+  a dated journal entry for the session in `journal/learn/` (named as the framework
+  rules say), not in the review log.
 - `loci learn state <slug>` shows what is known about a concept.
 
 ## Grading

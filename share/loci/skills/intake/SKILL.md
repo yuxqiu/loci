@@ -25,7 +25,8 @@ For each draft:
 3. Write in the user's style (`STYLE.md`). Keep every formula, image and code block
    the draft contains, moving images into the concept area's `attachments/` and
    embedding them by vault path.
-4. Results go into a journal entry (`journal/<stream>/YYYY/MM/YY-MM-DD-<slug>.md`);
+4. Results go into a journal entry in `journal/<stream>/` (named as the framework
+   rules say);
    open questions go into the concept's `## Open questions` or that journal entry.
 5. If the draft is mainly an ordered arrangement of existing concepts (a reading
    path, an outline), keep that arrangement as a view in `views/`.
@@ -33,14 +34,16 @@ For each draft:
 
 ## Journal entries (`inbox/journal/<stream>/`)
 
-Move each file to `journal/<stream>/YYYY/MM/` with `loci mv`, renaming it to the
-journal pattern. Extract concepts from it as for drafts, but keep the entry. Journal
+Move each file into `journal/<stream>/` with `loci mv`, keeping its name unless the
+stream's other entries follow a pattern it does not. Extract concepts from it as for drafts, but keep the entry. Journal
 entries have no frontmatter; add concept links in the body only.
 
 ## Sources (`inbox/sources/`)
 
-1. Choose the type (`papers`, `docs`, `clippings`) and a slug (a citekey for
-   papers), then `loci fetch inbox/sources/<file> <type>/<slug>`.
+1. Choose the type and a slug, then `loci fetch inbox/sources/<file> <type>/<slug>`.
+   Use a type the vault already has (`ls sources/`) when one fits, such as
+   `papers` (slug: the citekey), `docs` or `clippings`; otherwise agree a new one
+   with the user. Both are slugs.
 2. For an annotated PDF, the annotations are the user's: process highlights and
    comments like a draft. If the paper is already filed, keep the filed copy,
    process only the new annotations, and delete the new copy.

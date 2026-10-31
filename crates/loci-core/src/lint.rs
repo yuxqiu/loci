@@ -13,7 +13,7 @@ use crate::envelope::{Diagnostic, sort_diagnostics};
 use crate::git;
 use crate::index::{FileIssue, Index, LinkError};
 use crate::parse::{FmError, FmValue, LinkForm, Note, TopBlock, normalize_target, prereq_slug, verbatim};
-use crate::sources::{SOURCE_TYPES, SourceMeta, hex_sha256};
+use crate::sources::{SourceMeta, hex_sha256};
 use crate::vault::{self, Kind};
 
 static PAGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^p[1-9][0-9]*$").unwrap());
@@ -114,7 +114,7 @@ impl Lint<'_> {
         if note.kind == Kind::Journal && !vault::journal_path_ok(path) {
             out.push(d(
                 "journal.path",
-                "journal path does not match `journal/<stream>/YYYY/MM/YY-MM-DD[-slug].md`".into(),
+                "journal entry is not inside a `journal/<stream>/` folder whose name is a slug".into(),
             ));
         }
         self.links(note, out);
@@ -405,7 +405,7 @@ impl Lint<'_> {
         let mut folders: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for f in self.index.files.iter().filter(|f| f.starts_with("sources/")) {
             let parts: Vec<&str> = f.split('/').collect();
-            if parts.len() < 4 || !SOURCE_TYPES.contains(&parts[1]) {
+            if parts.len() < 4 || !vault::is_slug(parts[1]) || !vault::is_slug(parts[2]) {
                 out.push(
                     Diagnostic::error(
                         "sources.layout",
@@ -681,10 +681,11 @@ mod tests {
     #[test]
     fn journal_paths() {
         assert!(vault::journal_path_ok("journal/research/2025/03/25-03-14.md"));
-        assert!(vault::journal_path_ok("journal/life/2025/03/25-03-14-rent.md"));
-        assert!(!vault::journal_path_ok("journal/research/2025/04/25-03-14.md"));
-        assert!(!vault::journal_path_ok("journal/research/2024/03/25-03-14.md"));
-        assert!(!vault::journal_path_ok("journal/x.md"));
+        assert!(vault::journal_path_ok("journal/life/2025-03-14 rent.md"), "names below the stream are free");
+        assert!(vault::journal_path_ok("journal/life/a/b/notes.md"));
+        assert!(!vault::journal_path_ok("journal/x.md"), "outside a stream");
+        assert!(!vault::journal_path_ok("journal/My Stuff/2025/03/25-03-14.md"), "the stream is a slug");
+        assert!(!vault::journal_path_ok("journal/Research/2025/03/25-03-14.md"), "the stream is a slug");
     }
 
     #[test]

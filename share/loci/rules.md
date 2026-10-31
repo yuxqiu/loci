@@ -6,9 +6,13 @@ This vault is a loci knowledge base. These rules apply to every agent working in
 
 - `concepts/<area>/<slug>.md`: one note per concept: the canonical knowledge. Each
   area has an `AREA.md` (an H1 and one paragraph).
-- `sources/<type>/<slug>/`: external material (`papers`, `docs`, `clippings`), one
+- `sources/<type>/<slug>/`: external material, grouped by a type the user names
+  (`papers`, `docs`, `clippings`, or any other slug), one
   file plus `source.yaml`. Never modify a source.
-- `journal/<stream>/YYYY/MM/YY-MM-DD[-slug].md`: dated records. No frontmatter.
+- `journal/<stream>/...`: dated records, in folders and with names the user
+  chooses. No frontmatter. When you create an entry, follow the names already used
+  in that stream. In a new stream, ask the user how entries should be named, and
+  record the answer in `RULES.md`.
 - `views/`: ordered arrangements of concept links (reading paths, learning plans).
 - `inbox/drafts/`, `inbox/journal/<stream>/`, `inbox/sources/`: material waiting
   to be processed.

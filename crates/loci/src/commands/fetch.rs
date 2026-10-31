@@ -3,7 +3,7 @@
 use std::io::Read;
 
 use loci_core::envelope::{Exit, Outcome, Report};
-use loci_core::sources::{SOURCE_TYPES, SourceMeta, hex_sha256};
+use loci_core::sources::{SourceMeta, hex_sha256};
 use loci_core::vault::{is_slug, nfc, write_atomic};
 use serde_json::json;
 
@@ -15,10 +15,10 @@ pub fn run(ctx: &Ctx, from: &str, dest: &str) -> Result<Report, Report> {
     let Some((ty, slug)) = dest.split_once('/') else {
         return Err(Report::fail(Outcome::refused("fetch.dest", "the destination is `<type>/<slug>`")));
     };
-    if !SOURCE_TYPES.contains(&ty) || !is_slug(slug) {
+    if !is_slug(ty) || !is_slug(slug) {
         return Err(Report::fail(Outcome::refused(
             "fetch.dest",
-            format!("`{dest}` must be <type>/<slug> with type one of {}", SOURCE_TYPES.join(", ")),
+            format!("`{dest}` must be <type>/<slug>, both slugs (for example `papers/dijkstra-1959`)"),
         )));
     }
     let folder_rel = format!("sources/{ty}/{slug}");

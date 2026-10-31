@@ -447,7 +447,6 @@ fn sources_lint() {
             "sources/papers/heaps#intro",
             "sources/docs/guide#nope",
             "sources/papers/missing",
-            "commit:abc1234:concepts/a/c.md",
             "elsewhere/thing",
         ]
     );
@@ -458,7 +457,10 @@ fn sources_lint() {
     assert!(has_in("sources.bad-meta", "sources/clippings/badmeta/"));
     assert!(has_in("sources.uncovered", "sources/clippings/two/"));
     assert!(has(&env, "sources.layout", "sources/stray.md"));
-    assert!(has(&env, "sources.layout", "sources/videos/talk/talk.md"));
+    // Any slug is a source type; a type that is not a slug is a layout error.
+    assert!(has_in("sources.no-provenance", "sources/videos/talk/"));
+    assert!(!has(&env, "sources.layout", "sources/videos/talk/talk.md"));
+    assert!(has(&env, "sources.layout", "sources/Talks/intro/talk.md"));
     assert!(with_code(&env, "sources.hash-mismatch").is_empty());
     // No link diagnostics inside sources.
     for d in diags(&env) {
@@ -475,20 +477,6 @@ fn sources_hash_mismatch_after_edit() {
     let mm = with_code(&env, "sources.hash-mismatch");
     assert_eq!(mm.len(), 1, "{}", diag_lines(&env));
     assert_eq!(mm[0]["path"], "sources/papers/heaps/heaps.pdf");
-}
-
-#[test]
-fn commit_citations_are_not_sources() {
-    // A dissolved draft is found through git history, never cited (D103).
-    let v = TestVault::committed("sources");
-    let head = v.git(&["rev-parse", "HEAD"]).trim().to_string();
-    let text = v
-        .read("concepts/a/c.md")
-        .replace("  - \"commit:abc1234:concepts/a/c.md\"\n", &format!("  - \"commit:{head}:concepts/a/c.md\"\n"));
-    v.write("concepts/a/c.md", text);
-    let (_, env) = v.run(&["lint"]);
-    let unresolved = covered_by(&v, &env, "sources.unresolved", "concepts/a/c.md");
-    assert!(unresolved.contains(&format!("commit:{head}:concepts/a/c.md")), "{unresolved:?}");
 }
 
 // ---------------------------------------------------------------- vault discovery

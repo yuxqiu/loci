@@ -157,3 +157,9 @@ Append-only log of decisions about loci, newest last, with their reasons. `DESIG
   - **What the citations cost.** They broke on squash, rebase and shallow clones (`sources.unresolved`), added 40-hex noise to frontmatter, and existed partly to keep notes written from the user's own drafts from being flagged as unsourced.
   - **What `sources` holds now.** Only `sources/` and `journal/` evidence.
   - **Unchanged.** Inbox files must still be committed before intake, so a dissolved draft can be recovered.
+- D104. Source types and journal streams are user-named: any slug folder under `sources/` or `journal/` is a type or a stream. Nothing is declared in `loci.toml`.
+  - **Why.** The fixed list (`papers`, `docs`, `clippings`) carried no behaviour: page citations depend on the file extension, not the type. It only made books, talks or datasets lint errors.
+  - **What lint checks.** The type, the source folder's slug and the journal stream must be slugs (`sources.layout`, `journal.path`). Before this, lint checked none of them.
+- D105. Journal entries have no imposed name or folder format: any `.md` file inside `journal/<stream>/` (the stream a slug) is an entry. This replaces `YYYY/MM/YY-MM-DD[-slug].md`.
+  - **Why.** Nothing reads the date; timelines come from `git log`. The pattern repeated the year and month, and it forced migrated diaries to be renamed.
+  - **What agents do.** New entries follow the names already used in their stream. In a new stream the agent asks the user how to name entries and records the answer in `RULES.md`. Lint only reports a file outside a stream, or a stream that is not a slug (`journal.path`).

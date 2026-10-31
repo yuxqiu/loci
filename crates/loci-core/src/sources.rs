@@ -1,8 +1,6 @@
-//! Source folders (m0 §6.4): layout constants, `source.yaml`, hashing.
+//! Source folders (m0 §6.4): `source.yaml` and hashing.
 
 use sha2::{Digest, Sha256};
-
-pub const SOURCE_TYPES: [&str; 3] = ["papers", "docs", "clippings"];
 
 /// A source folder's `source.yaml` (m0 §6.4).
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -97,9 +97,9 @@ concepts/<area>/[<sub-area>/]
   AREA.md                         (top-level areas only) one paragraph on what the area holds
   <slug>.md                       concept notes
   attachments/                    images used by notes in this folder
-sources/<type>/<slug>/            type: papers, docs or clippings; the original file
+sources/<type>/<slug>/            type: any slug (e.g. papers, docs, clippings); the original file
   source.yaml                     plus its provenance record
-journal/<stream>/YYYY/MM/YY-MM-DD[-slug].md
+journal/<stream>/...               dated records; folders and names below the stream are free
 views/<name>.md                   a curated view: concept links in a chosen order
 views/learn/<concept>.md          a learning plan
 plugins/<name>/                   data owned by a plugin (e.g. plugins/learn/reviews.jsonl); core ignores it
@@ -107,8 +107,9 @@ bench/retrieval.jsonl             retrieval benchmark cases
 .loci/                            gitignored caches (including extracted PDF text) and exports
 ```
 
-All folders are fixed. Journal streams are subfolders of `journal/`, for example
-`research` and `life`.
+All top-level folders are fixed. Source types and journal streams are not declared
+anywhere: any slug folder under `sources/` or `journal/` is one, created on first
+use (for example `sources/books/`, `journal/reading/`).
 
 ### 4.2 Record kinds
 
@@ -256,7 +257,7 @@ anything except `sources/` and `plugins/` at any time. Nothing derived is stored
 there is nothing to sync and the agent is not involved unless asked. What a hand
 edit needs:
 
-| Change | Do |
+| Change | What to do |
 |---|---|
 | edit the text of a concept, journal entry or view | nothing; `loci lint` (or the editor's link checks) catches broken links |
 | create a concept | `loci new concepts/<area>/<slug>.md` (it writes the `id`), then write it |
@@ -276,7 +277,7 @@ It never rewrites hand-edited text unless the request covers it.
 | Dropped into | Becomes |
 |---|---|
 | `inbox/drafts/` | concept text merged into existing or new notes (links to existing concepts are kept as links); an arrangement of existing concepts becomes a view; results and questions go to the journal; the draft is deleted in the same commit, so `git log -p` on the concept shows it |
-| `inbox/journal/<stream>/` | a journal entry in `journal/<stream>/YYYY/MM/`; concepts are extracted from it |
+| `inbox/journal/<stream>/` | a journal entry in `journal/<stream>/`, named like the stream's other entries; concepts are extracted from it |
 | `inbox/sources/` (a clipping) | `sources/clippings/<slug>/`; concepts are extracted |
 | `inbox/sources/` (a PDF or other document) | `sources/papers/<key>/` or `sources/docs/<slug>/`; see below |
 
