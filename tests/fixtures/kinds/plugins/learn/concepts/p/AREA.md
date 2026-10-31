@@ -1,0 +1,1 @@
+# Plugin area zanzibar

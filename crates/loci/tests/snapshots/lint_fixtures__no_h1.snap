@@ -1,0 +1,12 @@
+---
+source: crates/loci/tests/lint_fixtures.rs
+expression: diag_lines(&env)
+---
+STYLE.md error h1.missing: no H1
+concepts/a/fm-no-h1.md error h1.missing: no H1
+journal/r/2025/03/25-03-14.md error h1.missing: no H1
+views/h2-only.md error h1.missing: no H1
+views/late.md:3:1 error h1.not-first: the H1 is not the first block after the frontmatter
+views/none.md error h1.missing: no H1
+views/setext-two.md:3:1 error h1.multiple: more than one H1
+views/two.md:3:1 error h1.multiple: more than one H1

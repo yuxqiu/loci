@@ -1,0 +1,40 @@
+---
+source: crates/loci/tests/mutate.rs
+expression: v.redact(&env)
+---
+{
+  "command": "mv",
+  "data": {
+    "aliases_added": [
+      {
+        "alias": "flow",
+        "path": "concepts/a/flow-new.md"
+      }
+    ],
+    "edited": [
+      {
+        "edits": 1,
+        "path": "concepts/a/empty-flow.md"
+      },
+      {
+        "edits": 1,
+        "path": "concepts/a/flow-new.md"
+      },
+      {
+        "edits": 3,
+        "path": "views/linker.md"
+      }
+    ],
+    "moved": [
+      [
+        "concepts/a/flow.md",
+        "concepts/a/flow-new.md"
+      ]
+    ]
+  },
+  "diagnostics": [],
+  "error": null,
+  "loci": "[version]",
+  "ok": true,
+  "schema": 1
+}

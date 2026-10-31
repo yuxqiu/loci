@@ -1,0 +1,49 @@
+---
+source: crates/loci/tests/workflow.rs
+expression: v.redact(&env)
+---
+{
+  "command": "status",
+  "data": {
+    "changes": {
+      "added": 0,
+      "deleted": 0,
+      "modified": 0,
+      "untracked": 0
+    },
+    "digest": "# Index\n\n## A (concepts/a, 2 concepts)\n\nArea a.\n",
+    "inbox": {
+      "files": [
+        "inbox/drafts/draft.md"
+      ],
+      "uncommitted": []
+    },
+    "install": [
+      {
+        "dir": ".agents/skills",
+        "skill": "concepts",
+        "state": "ok"
+      },
+      {
+        "dir": ".agents/skills",
+        "skill": "intake",
+        "state": "ok"
+      },
+      {
+        "dir": ".agents/skills",
+        "skill": "migrate",
+        "state": "ok"
+      }
+    ],
+    "plugins": [],
+    "rules": {
+      "RULES.md": "# Rules\n\n## Lessons\n\n- Keep notes short.\n",
+      "STYLE.md": "# Style\n\nPlain words.\n"
+    }
+  },
+  "diagnostics": [],
+  "error": null,
+  "loci": "[version]",
+  "ok": true,
+  "schema": 1
+}

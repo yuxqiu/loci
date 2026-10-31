@@ -1,0 +1,34 @@
+---
+source: crates/loci/tests/lint_fixtures.rs
+expression: env
+---
+{
+  "command": "digest",
+  "data": {
+    "areas": [
+      {
+        "area": "algorithms",
+        "concepts": 5,
+        "paragraph": "Techniques for searching, sorting and traversing data.",
+        "title": "Algorithms"
+      },
+      {
+        "area": "broken",
+        "concepts": 1,
+        "paragraph": null,
+        "title": "Broken Area"
+      },
+      {
+        "area": "missing",
+        "concepts": 1,
+        "paragraph": null,
+        "title": "missing"
+      }
+    ]
+  },
+  "diagnostics": [],
+  "error": null,
+  "loci": "[version]",
+  "ok": true,
+  "schema": 1
+}

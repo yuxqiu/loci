@@ -1,0 +1,96 @@
+---
+source: crates/loci/tests/lint_fixtures.rs
+expression: v.redact(&env)
+---
+{
+  "command": "lint",
+  "data": {
+    "errors": 7,
+    "files": 11,
+    "plugins": [],
+    "warnings": 0
+  },
+  "diagnostics": [
+    {
+      "byte_end": 195,
+      "byte_start": 191,
+      "code": "link.dangling",
+      "col": 31,
+      "hint": "link non-concepts by path",
+      "line": 10,
+      "message": "`plan` does not resolve",
+      "path": "concepts/algo/dfs.md",
+      "severity": "error"
+    },
+    {
+      "byte_end": 209,
+      "byte_start": 201,
+      "code": "link.dangling",
+      "col": 41,
+      "hint": "link non-concepts by path",
+      "line": 10,
+      "message": "`25-03-14` does not resolve",
+      "path": "concepts/algo/dfs.md",
+      "severity": "error"
+    },
+    {
+      "byte_end": 226,
+      "byte_start": 215,
+      "code": "link.dangling",
+      "col": 55,
+      "hint": "link non-concepts by path",
+      "line": 10,
+      "message": "`diagram.png` does not resolve",
+      "path": "concepts/algo/dfs.md",
+      "severity": "error"
+    },
+    {
+      "byte_end": 340,
+      "byte_start": 334,
+      "code": "link.path-form",
+      "col": 14,
+      "hint": null,
+      "line": 14,
+      "message": "`..` or a leading `/` is not allowed in a link",
+      "path": "concepts/algo/dfs.md",
+      "severity": "error"
+    },
+    {
+      "byte_end": 353,
+      "byte_start": 349,
+      "code": "link.path-form",
+      "col": 29,
+      "hint": null,
+      "line": 14,
+      "message": "`..` or a leading `/` is not allowed in a link",
+      "path": "concepts/algo/dfs.md",
+      "severity": "error"
+    },
+    {
+      "byte_end": 380,
+      "byte_start": 367,
+      "code": "link.dangling",
+      "col": 10,
+      "hint": "alias of [[bfs]]",
+      "line": 16,
+      "message": "`breadth-first` does not resolve",
+      "path": "concepts/algo/dfs.md",
+      "severity": "error"
+    },
+    {
+      "byte_end": null,
+      "byte_start": null,
+      "code": "slug.duplicate",
+      "col": null,
+      "hint": null,
+      "line": null,
+      "message": "slug `dup` is used by concepts/other/dup.md",
+      "path": "concepts/algo/dup.md",
+      "severity": "error"
+    }
+  ],
+  "error": null,
+  "loci": "[version]",
+  "ok": false,
+  "schema": 1
+}

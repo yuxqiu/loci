@@ -1,0 +1,9 @@
+---
+source: crates/loci/tests/lint_fixtures.rs
+expression: diag_lines(&env)
+---
+concepts/x.md error kind.unknown: file is outside every known folder
+inbox/journal/entry.md warning inbox.root-file: file directly in `inbox/` or `inbox/journal/`; move it into `drafts/`, `sources/` or a journal stream
+inbox/loose.md warning inbox.root-file: file directly in `inbox/` or `inbox/journal/`; move it into `drafts/`, `sources/` or a journal stream
+misc/readme.md error kind.unknown: file is outside every known folder
+notes.md error kind.unknown: file is outside every known folder

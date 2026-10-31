@@ -1,0 +1,16 @@
+---
+source: crates/loci/tests/workflow.rs
+expression: v.redact(&env)
+---
+{
+  "command": "new",
+  "data": {
+    "id": "[ulid]",
+    "path": "concepts/a/sub/fresh.md"
+  },
+  "diagnostics": [],
+  "error": null,
+  "loci": "[version]",
+  "ok": true,
+  "schema": 1
+}

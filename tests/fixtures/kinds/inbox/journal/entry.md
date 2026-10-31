@@ -1,0 +1,1 @@
+# Loose journal inbox file

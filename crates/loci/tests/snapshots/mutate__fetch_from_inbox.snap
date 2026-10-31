@@ -1,0 +1,18 @@
+---
+source: crates/loci/tests/mutate.rs
+expression: tree
+---
+== sources/clippings/clip/clip.md ==
+# A clipping
+
+Clipped text.
+
+== sources/clippings/clip/source.yaml ==
+sha256: 59f7b8a73a5575f990e6577f7c94246c281724afbaa6f916371708069340ef16
+
+== sources/papers/inbox-paper/paper.pdf ==
+%PDF-1.4
+fake inbox paper
+
+== sources/papers/inbox-paper/source.yaml ==
+sha256: 2a34b283ffadc232bfe684fd0f25452cd459982e380ecb1eca15a3fee5ee08f0

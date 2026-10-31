@@ -1,0 +1,3 @@
+# A clipping
+
+Clipped text.

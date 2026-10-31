@@ -1,0 +1,7 @@
+---
+source: crates/loci/tests/workflow.rs
+expression: "msgs.join(\"\\n\")"
+---
+deleted files held 1 fenced code blocks but only 0 were added elsewhere
+deleted files held 1 images but only 0 were added elsewhere
+deleted files held 2 math spans but only 0 were added elsewhere

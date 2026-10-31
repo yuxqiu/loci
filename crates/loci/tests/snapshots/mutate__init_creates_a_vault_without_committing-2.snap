@@ -1,0 +1,35 @@
+---
+source: crates/loci/tests/mutate.rs
+expression: v.tree()
+---
+== .gitignore ==
+/.agents/
+/.claude/skills
+/.loci/
+
+== AGENTS.md ==
+# Agents
+
+This vault is managed by loci (https://github.com/yuxqiu/loci).
+
+1. Check that the `loci` command is installed; if not, install it as described at
+   the URL above.
+2. Run `loci status` before anything else, and follow what it prints.
+
+== RULES.md ==
+# Rules
+
+## Lessons
+
+== STYLE.md ==
+# Style
+
+== loci.toml ==
+schema = 1
+
+[budgets]           # characters (Unicode scalar values)
+digest = 160
+area_paragraph = 600
+root_index = 8000
+area_index = 24000
+note = 12000        # body characters after the frontmatter (size.note)

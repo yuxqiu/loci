@@ -1,0 +1,74 @@
+---
+source: crates/loci/tests/mutate.rs
+expression: v.tree()
+---
+== concepts/a/AREA.md ==
+# A
+
+Area a.
+
+== concepts/a/absent.md ==
+---
+id: [ulid]
+digest: No aliases.
+---
+# Absent
+
+## Heading
+
+== concepts/a/block.md ==
+---
+id: [ulid]
+aliases:
+  - b1
+digest: Block aliases.
+---
+# Block
+
+Text. ^b
+
+== concepts/a/empty-flow.md ==
+---
+id: [ulid]
+aliases: []
+prereqs: ["[[flow-new]]", "[[absent]]"]
+digest: Empty flow aliases.
+---
+# Empty flow
+
+== concepts/a/flow-new.md ==
+---
+id: [ulid]
+aliases: [f1, flow]
+sources: ["sources/papers/p1#p2"]
+digest: Flow aliases.
+---
+# Flow
+
+== loci.toml ==
+schema = 1
+
+== plugins/learn/state.json ==
+{}
+
+== sources/papers/p1/p1.pdf ==
+%PDF-1.4
+p1
+
+== sources/papers/p1/source.yaml ==
+sha256: 6c5d0f5c6db495c6ccde41663173921a56f180c8aae3f5013379f91d5496a8d2
+
+== views/linker.md ==
+# Linker
+
+- [[flow-new]] and [[flow-new|label]] and [[flow-new]]
+- [[concepts/a/block]] and [[concepts/a/block#^b]]
+- [[absent#Heading]]
+- [markdown](concepts/a/flow.md) is not edited
+- ![[sources/papers/p1/p1.pdf]]
+- [[views/sub/inner]]
+
+== views/sub/inner.md ==
+# Inner
+
+Back to [[views/linker]].

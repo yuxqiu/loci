@@ -1,0 +1,1 @@
+# Journal stream inbox file

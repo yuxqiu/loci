@@ -1,0 +1,16 @@
+---
+source: crates/loci/tests/mutate.rs
+expression: t
+---
+---
+id: 01JB9XQ7Z3K4M5N6P7Q8R9S0H2
+digest: Wikilinks in a table.
+---
+# Table
+
+| Col | Link |
+|---|---|
+| a | [[renamed\|Target label]] |
+| b | [[renamed#Part\|part]] |
+| c | [[views/w\|the view]] |
+| d | [[missing\|nothing]] |

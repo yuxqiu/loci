@@ -1,0 +1,1 @@
+Style without a heading.

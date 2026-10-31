@@ -1,0 +1,50 @@
+---
+source: crates/loci/tests/mutate.rs
+expression: redact_ulids(&after)
+---
+---
+id: [ulid]
+digest: A note for block-ids.
+---
+# Cards note
+
+Intro paragraph before the section.
+
+## Cards
+
+First paragraph. ^[ulid]
+
+- q1 :: a1 ^[ulid]
+- q2 :: ^[ulid]
+  - sub one
+  - sub two
+- q3 :: a3 ^existing
+- q4 :: lead line
+  continued lead ^[ulid]
+
+  Second paragraph inside the item.
+
+A lazy
+continuation paragraph. ^[ulid]
+
+```
+code is never a target
+```
+
+| table | never |
+|---|---|
+| a | b |
+
+### Deeper heading
+
+Under an H3, still in the section. ^[ulid]
+
+## Other
+
+- untouched item
+
+Untouched paragraph.
+
+## Cards
+
+- second section item ^[ulid]

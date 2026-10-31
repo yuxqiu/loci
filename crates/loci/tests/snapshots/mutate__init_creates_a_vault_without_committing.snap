@@ -1,0 +1,22 @@
+---
+source: crates/loci/tests/mutate.rs
+expression: v.redact(&env)
+---
+{
+  "command": "init",
+  "data": {
+    "created": [
+      "loci.toml",
+      "RULES.md",
+      "STYLE.md",
+      "AGENTS.md",
+      ".gitignore"
+    ],
+    "skipped": []
+  },
+  "diagnostics": [],
+  "error": null,
+  "loci": "[version]",
+  "ok": true,
+  "schema": 1
+}

@@ -1,0 +1,225 @@
+//! The agent review workflow (fixture `agent-workflow`, m0 §13.2): `status`,
+//! `material-dropped` and `new`.
+
+mod common;
+
+use common::*;
+use insta::{assert_json_snapshot, assert_snapshot};
+use serde_json::json;
+
+fn core_skill_names(v: &TestVault) -> Vec<String> {
+    let (_, env) = v.run(&["skill", "show"]);
+    env["data"]["skills"].as_array().unwrap().iter().map(|s| s["name"].as_str().unwrap().to_string()).collect()
+}
+
+fn link_skills(v: &TestVault, dir: &str) {
+    for n in core_skill_names(v) {
+        let (_, env) = v.run(&["skill", "show", &n]);
+        v.write(&format!("{dir}/{n}/SKILL.md"), env["data"]["body"].as_str().unwrap());
+    }
+}
+
+// ---------------------------------------------------------------- status
+
+#[test]
+fn status_change_counts_and_inbox() {
+    let v = TestVault::committed("agent-workflow");
+    link_skills(&v, ".agents/skills");
+    v.write("concepts/a/x.md", v.read("concepts/a/x.md") + "\nMore.\n");
+    std::fs::remove_file(v.root.join("concepts/a/y.md")).unwrap();
+    v.write("views/staged.md", "# Staged\n");
+    v.git(&["add", "views/staged.md"]);
+    v.write("views/untracked.md", "# Untracked\n");
+    v.write("inbox/drafts/new.md", "# New draft\n");
+    let (code, env) = v.run(&["status"]);
+    assert_eq!(code, 0, "{env:#}");
+    assert_eq!(env["data"]["changes"], json!({"modified": 1, "deleted": 1, "added": 1, "untracked": 2}));
+    assert_eq!(env["data"]["inbox"]["files"], json!(["inbox/drafts/draft.md", "inbox/drafts/new.md"]));
+    assert_eq!(env["data"]["inbox"]["uncommitted"], json!(["inbox/drafts/new.md"]));
+    let unc = with_code(&env, "inbox.uncommitted");
+    assert_eq!(unc.len(), 1);
+    assert_eq!(unc[0]["path"], "inbox/drafts/new.md");
+    assert_eq!(unc[0]["severity"], "warning");
+    // A modified committed draft is uncommitted too.
+    v.write("inbox/drafts/draft.md", v.read("inbox/drafts/draft.md") + "\nEdit.\n");
+    let (_, env) = v.run(&["status"]);
+    assert_eq!(env["data"]["inbox"]["uncommitted"], json!(["inbox/drafts/draft.md", "inbox/drafts/new.md"]));
+}
+
+#[test]
+fn status_envelope() {
+    let v = TestVault::committed("agent-workflow");
+    link_skills(&v, ".agents/skills");
+    let (code, env) = v.run(&["status"]);
+    assert_eq!(code, 0);
+    assert!(diags(&env).is_empty(), "{}", diag_lines(&env));
+    assert_eq!(env["data"]["rules"]["RULES.md"], v.read("RULES.md"));
+    assert_eq!(env["data"]["rules"]["STYLE.md"], v.read("STYLE.md"));
+    let (_, digest, _) = v.run_raw(&["digest"]);
+    assert_eq!(env["data"]["digest"], digest);
+    assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
+    // The human output has every part, in order.
+    let (_, out, _) = v.run_raw(&["status"]);
+    let order = ["## Plugins", "## Uncommitted changes", "## Inbox", "# Index", "# Rules", "# Style"];
+    let pos: Vec<usize> = order.iter().map(|h| out.find(h).unwrap_or_else(|| panic!("no {h}:\n{out}"))).collect();
+    assert!(pos.windows(2).all(|w| w[0] < w[1]), "{out}");
+    // status writes nothing.
+    assert_eq!(v.git(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn status_reports_every_part_when_one_fails() {
+    let v = TestVault::committed("agent-workflow");
+    std::fs::remove_file(v.root.join("STYLE.md")).unwrap();
+    std::fs::write(v.root.join(".git/index"), "corrupt").unwrap();
+    let (code, env) = v.run(&["status"]);
+    assert_eq!(code, 0, "{env:#}");
+    assert!(env["data"]["changes"].is_null());
+    assert!(env["data"]["inbox"]["uncommitted"].is_null());
+    assert!(env["data"]["inbox"]["files"].is_array());
+    assert!(env["data"]["digest"].is_string());
+    assert!(env["data"]["rules"]["RULES.md"].is_string());
+    assert!(env["data"]["rules"]["STYLE.md"].is_null());
+    assert_eq!(with_code(&env, "status.git").len(), 1, "{env:#}");
+    assert!(has(&env, "status.rules", "STYLE.md"), "{env:#}");
+}
+
+#[test]
+fn status_install_missing_and_mismatch() {
+    let v = TestVault::committed("agent-workflow");
+    let names = core_skill_names(&v);
+    assert!(!names.is_empty());
+    let (_, env) = v.run(&["status"]);
+    let missing = with_code(&env, "install.missing");
+    assert_eq!(missing.len(), names.len(), "{}", diag_lines(&env));
+    assert!(
+        missing.iter().all(|d| d["severity"] == "warning" && d["hint"].as_str().unwrap().contains("loci skill show"))
+    );
+
+    link_skills(&v, ".agents/skills");
+    let edited = &names[0];
+    let p = format!(".agents/skills/{edited}/SKILL.md");
+    v.write(&p, v.read(&p) + "\nlocal edit\n");
+    std::fs::remove_file(v.root.join(format!(".agents/skills/{}/SKILL.md", names[1]))).unwrap();
+    let (_, env) = v.run(&["status"]);
+    let mm = with_code(&env, "install.mismatch");
+    assert_eq!(mm.len(), 1, "{}", diag_lines(&env));
+    assert!(mm[0]["message"].as_str().unwrap().contains(edited.as_str()));
+    assert!(mm[0]["hint"].as_str().unwrap().contains("loci skill show"));
+    let missing = with_code(&env, "install.missing");
+    assert_eq!(missing.len(), 1, "{}", diag_lines(&env));
+    assert!(missing[0]["message"].as_str().unwrap().contains(names[1].as_str()));
+
+    // `.claude/skills` is checked too, once it exists.
+    std::fs::create_dir_all(v.root.join(".claude/skills")).unwrap();
+    let (_, env) = v.run(&["status"]);
+    let claude: Vec<_> =
+        env["data"]["install"].as_array().unwrap().iter().filter(|i| i["dir"] == ".claude/skills").collect();
+    assert_eq!(claude.len(), names.len());
+    assert!(claude.iter().all(|i| i["state"] == "missing"));
+
+    // A missing AGENTS.md.
+    std::fs::remove_file(v.root.join("AGENTS.md")).unwrap();
+    let (_, env) = v.run(&["status"]);
+    assert!(with_code(&env, "install.missing").iter().any(|d| d["message"].as_str().unwrap().contains("AGENTS.md")));
+}
+
+// ---------------------------------------------------------------- material-dropped
+
+fn dropped(env: &serde_json::Value) -> Vec<String> {
+    with_code(env, "material-dropped").iter().map(|d| d["message"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn material_dropped_when_a_deleted_draft_is_not_absorbed() {
+    let v = TestVault::committed("agent-workflow");
+    std::fs::remove_file(v.root.join("inbox/drafts/draft.md")).unwrap();
+    let (code, env) = v.run(&["lint"]);
+    assert_eq!(code, 0, "warnings only: {}", diag_lines(&env));
+    let msgs = dropped(&env);
+    assert_eq!(msgs.len(), 3, "{}", diag_lines(&env));
+    assert!(with_code(&env, "material-dropped").iter().all(|d| d["severity"] == "warning"));
+    assert_snapshot!(msgs.join("\n"));
+}
+
+#[test]
+fn material_dropped_silent_when_absorbed() {
+    let v = TestVault::committed("agent-workflow");
+    let draft = v.read("inbox/drafts/draft.md");
+    std::fs::remove_file(v.root.join("inbox/drafts/draft.md")).unwrap();
+    let body = draft.strip_prefix("# Draft\n").unwrap();
+    v.write("concepts/a/x.md", v.read("concepts/a/x.md") + body);
+    let (_, env) = v.run(&["lint"]);
+    assert!(dropped(&env).is_empty(), "{}", diag_lines(&env));
+    // Partly absorbed: only the code block is kept.
+    let v = TestVault::committed("agent-workflow");
+    std::fs::remove_file(v.root.join("inbox/drafts/draft.md")).unwrap();
+    v.write("views/kept.md", "# Kept\n\n```python\nprint(\"hi\")\n```\n");
+    let (_, env) = v.run(&["lint"]);
+    let msgs = dropped(&env);
+    assert_eq!(msgs.len(), 2, "{}", diag_lines(&env));
+    assert!(msgs.iter().all(|m| !m.contains("code")), "{msgs:?}");
+}
+
+#[test]
+fn material_dropped_skipped_without_head() {
+    let v = TestVault::git_no_head("agent-workflow");
+    std::fs::remove_file(v.root.join("inbox/drafts/draft.md")).unwrap();
+    let (code, env) = v.run(&["lint"]);
+    assert_eq!(code, 0, "{}", diag_lines(&env));
+    assert!(dropped(&env).is_empty());
+}
+
+// ---------------------------------------------------------------- new
+
+#[test]
+fn new_writes_the_skeleton() {
+    let v = TestVault::committed("agent-workflow");
+    let (code, env) = v.run(&["new", "concepts/a/sub/fresh"]);
+    assert_eq!(code, 0, "{env:#}");
+    assert_eq!(env["command"], "new");
+    assert_eq!(env["data"]["path"], "concepts/a/sub/fresh.md");
+    let id = env["data"]["id"].as_str().unwrap();
+    assert!(is_ulid(id), "{id}");
+    let text = v.read("concepts/a/sub/fresh.md");
+    assert_eq!(text, format!("---\nid: {id}\naliases: []\nprereqs: []\nsources: []\ndigest: \"\"\n---\n# fresh\n"));
+    assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
+    // The empty digest is fm.missing-field until filled.
+    let (_, env) = v.run(&["lint"]);
+    assert_eq!(codes_on(&env, "concepts/a/sub/fresh.md"), ["fm.missing-field"]);
+
+    let (code, env) = v.run(&["new", "concepts/a/titled.md", "--title", "A Title"]);
+    assert_eq!(code, 0);
+    assert!(v.read("concepts/a/titled.md").ends_with("---\n# A Title\n"));
+    assert_ne!(env["data"]["id"], id);
+}
+
+#[test]
+fn new_refusals() {
+    let v = TestVault::committed("agent-workflow");
+    let before = v.tree();
+    for (path, code) in [
+        ("concepts/a/x.md", "new.exists"),
+        ("concepts/a/Bad_Slug", "slug.format"),
+        ("concepts/b/x", "new.collision"),
+        ("concepts/b/ex", "new.collision"),
+        ("concepts/b/EX", "slug.format"),
+        ("views/x", "new.no-area"),
+        ("concepts/top", "new.no-area"),
+        ("journal/r/2025/01/25-01-01", "new.no-area"),
+    ] {
+        let (exit, env) = v.run(&["new", path]);
+        assert_eq!((exit, error_code(&env)), (1, code), "new {path}: {env:#}");
+    }
+    assert_eq!(v.tree(), before);
+}
+
+#[test]
+fn material_dropped_reports_on_the_deleted_path() {
+    let v = TestVault::committed("agent-workflow");
+    std::fs::remove_file(v.root.join("inbox/drafts/draft.md")).unwrap();
+    let (_, env) = v.run(&["lint"]);
+    let d = with_code(&env, "material-dropped");
+    assert!(!d.is_empty());
+    assert!(d.iter().all(|d| d["path"] == "inbox/drafts/draft.md"), "{}", diag_lines(&env));
+}
