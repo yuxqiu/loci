@@ -6,7 +6,6 @@ use loci_core::git;
 use loci_core::index::Index;
 use serde_json::json;
 
-use super::skill::all_skills;
 use super::{Ctx, plugins};
 use crate::assets;
 
@@ -16,37 +15,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Report> {
     let mut diags: Vec<Diagnostic> = vec![];
     let mut human = String::new();
 
-    // 1. Install check.
-    let (skills, skill_diags) = all_skills(root);
-    diags.extend(skill_diags);
-    let mut install = vec![];
-    let mut dirs = vec![".agents/skills"];
-    if root.join(".claude/skills").is_dir() {
-        dirs.push(".claude/skills");
-    }
-    for dir in &dirs {
-        for (skill, _) in &skills {
-            let rel = format!("{dir}/{}/SKILL.md", skill.name);
-            let state = match std::fs::read(root.join(&rel)) {
-                Err(_) => {
-                    diags.push(
-                        Diagnostic::warning("install.missing", format!("`{rel}` is missing"))
-                            .with_hint("link the skills (home-manager module) or read them with `loci skill show`"),
-                    );
-                    "missing"
-                }
-                Ok(bytes) if bytes != skill.body.as_bytes() => {
-                    diags.push(
-                        Diagnostic::warning("install.mismatch", format!("`{rel}` differs from the installed loci"))
-                            .with_hint("relink the skills, or read them with `loci skill show`"),
-                    );
-                    "mismatch"
-                }
-                Ok(_) => "ok",
-            };
-            install.push(json!({"dir": dir, "skill": skill.name, "state": state}));
-        }
-    }
+    // 1. The agent entry point.
     if !root.join("AGENTS.md").is_file() {
         diags.push(
             Diagnostic::warning("install.missing", "`AGENTS.md` is missing")
@@ -133,7 +102,6 @@ pub fn run(ctx: &Ctx) -> Result<Report, Report> {
     }
 
     let data = json!({
-        "install": install,
         "plugins": installed,
         "changes": changes.as_ref().map(|c| json!({
             "modified": c.modified.len(),

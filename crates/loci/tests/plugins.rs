@@ -222,38 +222,12 @@ fn skills_plugin_failures_drop_the_output() {
 }
 
 #[test]
-fn status_lists_the_plugin_and_checks_its_linked_skills() {
+fn status_lists_the_plugin() {
     let v = vault_with(Stub::default());
-    // Link every skill byte for byte.
-    let (_, env) = v.run(&["skill", "show"]);
-    let names: Vec<String> =
-        env["data"]["skills"].as_array().unwrap().iter().map(|s| s["name"].as_str().unwrap().to_string()).collect();
-    for n in &names {
-        let (_, env) = v.run(&["skill", "show", n]);
-        v.write(&format!(".agents/skills/{n}/SKILL.md"), env["data"]["body"].as_str().unwrap());
-    }
     let (code, env) = v.run(&["status"]);
     assert_eq!(code, 0);
     assert_eq!(env["command"], "status");
     assert_eq!(env["data"]["plugins"], json!([{"name": "stub", "path": v.bin().join("loci-stub").to_str().unwrap()}]));
-    assert!(
-        with_code(&env, "install.missing").is_empty() && with_code(&env, "install.mismatch").is_empty(),
-        "{}",
-        diag_lines(&env)
-    );
-    let install = env["data"]["install"].as_array().unwrap();
-    assert!(install.iter().any(|i| i["skill"] == "stub-hello" && i["state"] == "ok" && i["dir"] == ".agents/skills"));
-    // One byte off is a mismatch.
-    v.write(".agents/skills/stub-hello/SKILL.md", format!("{STUB_SKILL_BODY} "));
-    let (_, env) = v.run(&["status"]);
-    let mm = with_code(&env, "install.mismatch");
-    assert_eq!(mm.len(), 1, "{}", diag_lines(&env));
-    assert!(mm[0]["message"].as_str().unwrap().contains("stub-hello"));
-    assert!(
-        env["data"]["install"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|i| i["skill"] == "stub-hello" && i["state"] == "mismatch")
-    );
+    let install = diags(&env).iter().filter(|d| d["code"].as_str().unwrap().starts_with("install.")).count();
+    assert_eq!(install, 0, "skills installed elsewhere are not checked: {}", diag_lines(&env));
 }

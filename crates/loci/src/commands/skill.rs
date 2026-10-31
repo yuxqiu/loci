@@ -9,7 +9,7 @@ use crate::{VERSION, assets};
 
 /// Core skills and every installed plugin's skills, with the owning plugin. Plugins
 /// whose `skills` hook fails become diagnostics.
-pub fn all_skills(vault_root: &std::path::Path) -> (Vec<(Skill, Option<String>)>, Vec<Diagnostic>) {
+fn all_skills(vault_root: &std::path::Path) -> (Vec<(Skill, Option<String>)>, Vec<Diagnostic>) {
     let mut out: Vec<(Skill, Option<String>)> = assets::skills().into_iter().map(|s| (s, None)).collect();
     let mut diags = vec![];
     for p in plugins() {

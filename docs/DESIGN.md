@@ -42,8 +42,8 @@ agents, and projects that live outside the vault (see the roadmap).
 
 ## 3. Repositories and installation
 
-- **System repository:** the `loci` Rust crate, the Nix flake (package and
-  home-manager module), the skills, the framework rules and these docs. MIT license.
+- **System repository:** the `loci` Rust crate, the Nix flake (packages), the
+  skills, the framework rules and these docs. MIT license.
 - **Vault repository:** the user's content, at any path.
 
 The package ships three things:
@@ -52,9 +52,9 @@ The package ships three things:
 - **The framework rules and the skills,** both compiled into the binary.
 - **The skills as files,** under `share/loci/skills/`.
 
-The home-manager module symlinks the skills into each configured vault as
-`.agents/skills/`, and optionally also as `.claude/skills/`. Without Nix, the user
-copies them there. The vault gitignores these links.
+loci does not install the skills anywhere: the user installs the
+`share/loci/skills/` folders wherever their agent loads skills from (the vault's
+`.agents/skills/`, a user-wide skills folder, or the agent's own mechanism).
 
 The vault commits a small `AGENTS.md` stub. It tells any agent to install loci and
 run `loci status` first. `loci status` prints:
@@ -65,19 +65,18 @@ run `loci status` first. `loci status` prints:
 - the inbox;
 - a summary of uncommitted changes.
 
-It warns if the skill links are missing or belong to a different loci version.
 `loci skill show <name>` prints any skill from the binary, so an agent that has
-`loci` but no links (for example, one working from a fresh clone) can still read the
-skills.
+`loci` but no installed skills (for example, one working from a fresh clone) can
+still read them.
 
 Agent setup:
 
-| Agent | Setup |
+| Agent | Reads |
 |---|---|
-| Codex, Cursor, Copilot, opencode | none; they read `AGENTS.md` and `.agents/skills/` |
-| Claude Code | link `.claude/skills` (module option); it reads `AGENTS.md` only when there is no `CLAUDE.md` |
-| Gemini CLI | set the context file name to `AGENTS.md` |
-| any other agent with a shell | `loci status` and `loci skill show` |
+| Codex, Cursor, Copilot, opencode | `AGENTS.md` |
+| Claude Code | `AGENTS.md` only when there is no `CLAUDE.md` |
+| Gemini CLI | `AGENTS.md` once the context file name is set to it |
+| any other agent with a shell | told to run `loci status` and `loci skill show` |
 
 ## 4. Vault
 
@@ -85,7 +84,6 @@ Agent setup:
 
 ```
 AGENTS.md                         committed stub: "run `loci status` first"
-.agents/skills/                   skill links (gitignored)
 loci.toml                         schema version and size budgets
 RULES.md                          vault rules, with a "Lessons" section the agent maintains
 STYLE.md                          the user's writing style
@@ -458,10 +456,8 @@ Learn plugin commands: `loci learn lint`, `skills`, `log`, `state`,
   entries) is ordinary content, reviewed as a diff like any other agent work.
 
   Rust plugins link `loci-core`; others use the core CLI's JSON output.
-- **Installation.** The Nix flake builds `loci` and each plugin. The home-manager
-  module installs the plugins the user enables and links their skills into the
-  vault. `loci status` lists the installed plugins and checks that the linked skill
-  files match the copies compiled into the binaries.
+- **Installation.** The Nix flake builds `loci` and each plugin, each with its
+  skills under `share/loci/skills/`. `loci status` lists the installed plugins.
 
 Implementation:
 
@@ -537,7 +533,7 @@ Every bug found on a real vault becomes a fixture with no private content.
 | Milestone | Delivers | Done when |
 |---|---|---|
 | M0 | Cargo workspace (`loci-core`, `loci`); parser; `init`, `lint`, `find`, `digest`, `mv`; plugin dispatch; Nix package; fixture, golden and property tests | fixture, golden and property tests pass |
-| M0.5 | `status`, `skill show`, `new`, `block-ids`, `fetch`; the lint safety checks; the `AGENTS.md` stub, framework rules, first skills and the home-manager module | the commands and skills work on a fixture vault, and lint catches a modified source and dropped material |
+| M0.5 | `status`, `skill show`, `new`, `block-ids`, `fetch`; the lint safety checks; the `AGENTS.md` stub, framework rules and first skills | the commands and skills work on a fixture vault, and lint catches a modified source and dropped material |
 | M1 | draft and journal intake, `merge`, the pilot area, `bench`, the sample vault | the pilot is kept, and the benchmark baseline is recorded |
 | M2 | PDF intake | an annotated paper becomes a source, concepts and a journal entry in one diff |
 | M3 | the `loci-learn` plugin (`init`, `lint`, `log`, `state`, `review`), `closure`, the learn skill | a "learn X" session runs end to end and reviews are scheduled; then the evaluation: just-in-time vs prerequisites-first teaching, whether the diagnostic changes plans, lapse rates by card type, grader agreement with the user, and estimate accuracy (Brier score) against simple baselines |

@@ -3,8 +3,6 @@ source: crates/loci/tests/mutate.rs
 expression: v.tree()
 ---
 == .gitignore ==
-/.agents/
-/.claude/skills
 /.loci/
 
 == AGENTS.md ==

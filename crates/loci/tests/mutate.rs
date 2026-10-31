@@ -372,18 +372,18 @@ fn init_skips_existing_files() {
     }
     assert_eq!(v.read("RULES.md"), "# My rules\n");
     // Missing .gitignore lines are appended once; existing ones are kept.
-    assert_eq!(v.read(".gitignore"), "target/\n/.agents/\n/.claude/skills\n/.loci/\n");
+    assert_eq!(v.read(".gitignore"), "target/\n/.loci/\n", "an existing line is not added again");
 }
 
 #[test]
 fn init_keeps_a_non_utf8_gitignore() {
     let v = TestVault::empty();
-    let original = b"# caf\xe9 build outputs\nsecrets.env\n/.loci/\n";
+    let original = b"# caf\xe9 build outputs\nsecrets.env\n";
     std::fs::write(v.root.join(".gitignore"), original).unwrap();
     let (code, env) = init_in(&v.root, &v);
     assert_eq!(code, 0, "{env:#}");
     let mut expected = original.to_vec();
-    expected.extend_from_slice(b"/.agents/\n/.claude/skills\n");
+    expected.extend_from_slice(b"/.loci/\n");
     assert_eq!(std::fs::read(v.root.join(".gitignore")).unwrap(), expected);
 }
 

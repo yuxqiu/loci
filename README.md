@@ -6,32 +6,23 @@ The name: *loci communes* were the topic headings of a commonplace book; the met
 
 ## Setup
 
-1. Install `loci` (and the `loci-learn` plugin if you want review cards). With
-   Nix, use this flake's packages, or its home-manager module:
+1. Install `loci`, and the `loci-learn` plugin if you want review cards. This
+   repository is a Nix flake with packages `loci` and `loci-learn`; without Nix,
+   build them with `cargo install --path crates/loci` (and `crates/loci-learn`).
+2. Install the agent skills the way your agent expects. They are the folders in
+   `share/loci/skills/` (and `crates/loci-learn/skills/` for the plugin), also
+   installed by the Nix packages under `share/loci/skills/`. An agent without them
+   can read them with `loci skill show`.
+3. In the folder for your notes, run `loci init`. It creates the vault, the git
+   repository and an `AGENTS.md` that tells agents to run `loci status` first.
+   Agents read `AGENTS.md` as follows:
 
-   ```nix
-   # flake input `loci`; import loci.homeManagerModules.default
-   programs.loci = {
-     enable = true;
-     vaults = [ "notes" ];               # paths relative to $HOME
-     plugins = [ loci.packages.${system}.loci-learn ];
-     claudeSkills = true;                # also link .claude/skills
-   };
-   ```
-
-   The module links the agent skills into each vault as `.agents/skills/`.
-   Without Nix, put the binaries on `PATH` and copy `share/loci/skills/` into the
-   vault as `.agents/skills/`.
-2. In the folder for your notes, run `loci init`. It creates the vault, the git repository
-   and an `AGENTS.md` that tells agents to run `loci status` first.
-3. Point your agent at the vault:
-
-   | Agent | Setup |
+   | Agent | Reads `AGENTS.md` |
    |---|---|
-   | Codex, Cursor, Copilot, opencode | none; they read `AGENTS.md` and `.agents/skills/` |
-   | Claude Code | link `.claude/skills` (`claudeSkills = true`); it reads `AGENTS.md` only when there is no `CLAUDE.md` |
-   | Gemini CLI | set the context file name to `AGENTS.md` |
-   | any other agent with a shell | tell it to run `loci status` and `loci skill show` |
+   | Codex, Cursor, Copilot, opencode | yes |
+   | Claude Code | only when there is no `CLAUDE.md` |
+   | Gemini CLI | once its context file name is set to `AGENTS.md` |
+   | any other agent with a shell | tell it to run `loci status` first |
 
 ## Using it
 

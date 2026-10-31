@@ -18,23 +18,6 @@ expression: v.redact(&env)
       ],
       "uncommitted": []
     },
-    "install": [
-      {
-        "dir": ".agents/skills",
-        "skill": "concepts",
-        "state": "ok"
-      },
-      {
-        "dir": ".agents/skills",
-        "skill": "intake",
-        "state": "ok"
-      },
-      {
-        "dir": ".agents/skills",
-        "skill": "migrate",
-        "state": "ok"
-      }
-    ],
     "plugins": [],
     "rules": {
       "RULES.md": "# Rules\n\n## Lessons\n\n- Keep notes short.\n",

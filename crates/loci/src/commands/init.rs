@@ -8,7 +8,7 @@ use serde_json::json;
 use super::Ctx;
 use crate::assets;
 
-const GITIGNORE_LINES: [&str; 3] = ["/.agents/", "/.claude/skills", "/.loci/"];
+const GITIGNORE_LINES: [&str; 1] = ["/.loci/"];
 
 pub fn run(ctx: &Ctx) -> Result<Report, Report> {
     let dir = match &ctx.explicit_vault {

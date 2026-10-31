@@ -163,3 +163,7 @@ Append-only log of decisions about loci, newest last, with their reasons. `DESIG
 - D105. Journal entries have no imposed name or folder format: any `.md` file inside `journal/<stream>/` (the stream a slug) is an entry. This replaces `YYYY/MM/YY-MM-DD[-slug].md`.
   - **Why.** Nothing reads the date; timelines come from `git log`. The pattern repeated the year and month, and it forced migrated diaries to be renamed.
   - **What agents do.** New entries follow the names already used in their stream. In a new stream the agent asks the user how to name entries and records the answer in `RULES.md`. Lint only reports a file outside a stream, or a stream that is not a slug (`journal.path`).
+- D106. loci packages its skills (`share/loci/skills/`, and compiled in for `loci skill show`) but does not install them.
+  - **Removed.** The home-manager module (`vaults`, `claudeSkills`, skill links), the `status` skill checks (`install.missing`/`install.mismatch` on `.agents/skills/` and `.claude/skills/`), and `init`'s `.gitignore` lines for those folders.
+  - **Why.** Users manage skills their own way: per vault, user-wide, or through the agent's mechanism. Checks against one fixed folder would warn falsely for everyone else.
+  - **Kept.** `status` still warns about a missing `AGENTS.md`.

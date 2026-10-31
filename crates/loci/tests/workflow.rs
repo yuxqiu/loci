@@ -7,24 +7,11 @@ use common::*;
 use insta::{assert_json_snapshot, assert_snapshot};
 use serde_json::json;
 
-fn core_skill_names(v: &TestVault) -> Vec<String> {
-    let (_, env) = v.run(&["skill", "show"]);
-    env["data"]["skills"].as_array().unwrap().iter().map(|s| s["name"].as_str().unwrap().to_string()).collect()
-}
-
-fn link_skills(v: &TestVault, dir: &str) {
-    for n in core_skill_names(v) {
-        let (_, env) = v.run(&["skill", "show", &n]);
-        v.write(&format!("{dir}/{n}/SKILL.md"), env["data"]["body"].as_str().unwrap());
-    }
-}
-
 // ---------------------------------------------------------------- status
 
 #[test]
 fn status_change_counts_and_inbox() {
     let v = TestVault::committed("agent-workflow");
-    link_skills(&v, ".agents/skills");
     v.write("concepts/a/x.md", v.read("concepts/a/x.md") + "\nMore.\n");
     std::fs::remove_file(v.root.join("concepts/a/y.md")).unwrap();
     v.write("views/staged.md", "# Staged\n");
@@ -49,7 +36,6 @@ fn status_change_counts_and_inbox() {
 #[test]
 fn status_envelope() {
     let v = TestVault::committed("agent-workflow");
-    link_skills(&v, ".agents/skills");
     let (code, env) = v.run(&["status"]);
     assert_eq!(code, 0);
     assert!(diags(&env).is_empty(), "{}", diag_lines(&env));
@@ -85,43 +71,16 @@ fn status_reports_every_part_when_one_fails() {
 }
 
 #[test]
-fn status_install_missing_and_mismatch() {
+fn status_checks_agents_md_but_not_skills() {
+    // Skills are managed outside loci: a vault without skill folders gets no warning.
     let v = TestVault::committed("agent-workflow");
-    let names = core_skill_names(&v);
-    assert!(!names.is_empty());
     let (_, env) = v.run(&["status"]);
-    let missing = with_code(&env, "install.missing");
-    assert_eq!(missing.len(), names.len(), "{}", diag_lines(&env));
-    assert!(
-        missing.iter().all(|d| d["severity"] == "warning" && d["hint"].as_str().unwrap().contains("loci skill show"))
-    );
-
-    link_skills(&v, ".agents/skills");
-    let edited = &names[0];
-    let p = format!(".agents/skills/{edited}/SKILL.md");
-    v.write(&p, v.read(&p) + "\nlocal edit\n");
-    std::fs::remove_file(v.root.join(format!(".agents/skills/{}/SKILL.md", names[1]))).unwrap();
-    let (_, env) = v.run(&["status"]);
-    let mm = with_code(&env, "install.mismatch");
-    assert_eq!(mm.len(), 1, "{}", diag_lines(&env));
-    assert!(mm[0]["message"].as_str().unwrap().contains(edited.as_str()));
-    assert!(mm[0]["hint"].as_str().unwrap().contains("loci skill show"));
-    let missing = with_code(&env, "install.missing");
-    assert_eq!(missing.len(), 1, "{}", diag_lines(&env));
-    assert!(missing[0]["message"].as_str().unwrap().contains(names[1].as_str()));
-
-    // `.claude/skills` is checked too, once it exists.
-    std::fs::create_dir_all(v.root.join(".claude/skills")).unwrap();
-    let (_, env) = v.run(&["status"]);
-    let claude: Vec<_> =
-        env["data"]["install"].as_array().unwrap().iter().filter(|i| i["dir"] == ".claude/skills").collect();
-    assert_eq!(claude.len(), names.len());
-    assert!(claude.iter().all(|i| i["state"] == "missing"));
-
-    // A missing AGENTS.md.
+    assert!(with_code(&env, "install.missing").is_empty(), "{}", diag_lines(&env));
     std::fs::remove_file(v.root.join("AGENTS.md")).unwrap();
     let (_, env) = v.run(&["status"]);
-    assert!(with_code(&env, "install.missing").iter().any(|d| d["message"].as_str().unwrap().contains("AGENTS.md")));
+    let missing = with_code(&env, "install.missing");
+    assert_eq!(missing.len(), 1, "{}", diag_lines(&env));
+    assert!(missing[0]["message"].as_str().unwrap().contains("AGENTS.md"));
 }
 
 // ---------------------------------------------------------------- material-dropped
