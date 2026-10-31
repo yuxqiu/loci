@@ -180,6 +180,39 @@ impl Index {
             .collect()
     }
 
+    /// Where `link` in note `from` points, ignoring its fragment: a note or file path,
+    /// a source folder (`sources/<type>/<slug>`), or `None` when it does not resolve.
+    pub fn link_target(&self, from: &Note, link: &Link) -> Option<String> {
+        if link.form != LinkForm::Source {
+            let whole = Link { fragment: None, ..link.clone() };
+            return self.resolve(from, &whole).ok().map(|r| r.path().to_string());
+        }
+        let note = format!("{}.md", link.target);
+        let folder = format!("{}/", link.target);
+        if self.notes.contains_key(&note) {
+            Some(note)
+        } else if self.files.iter().any(|f| f.starts_with(&folder)) {
+            Some(link.target.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Every link that points at `path`, or at the source folder holding it, as
+    /// (linking note, link), in note path order.
+    pub fn incoming(&self, path: &str) -> Vec<(&Note, &Link)> {
+        let mut out = vec![];
+        for note in self.notes.values() {
+            for link in &note.links {
+                let Some(target) = self.link_target(note, link) else { continue };
+                if target == path || path.strip_prefix(&target).is_some_and(|rest| rest.starts_with('/')) {
+                    out.push((note, link));
+                }
+            }
+        }
+        out
+    }
+
     pub fn concepts(&self) -> impl Iterator<Item = &Note> {
         self.notes.values().filter(|n| n.kind == Kind::Concept)
     }

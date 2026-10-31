@@ -421,7 +421,7 @@ and `docs/specs/m1-m4.md`, the learn plugin in `docs/specs/learn-plugin.md`.
 | structure | `new`, `block-ids --section`, `mv` (links are rewritten, and the old slug becomes an alias), `merge` (M1) |
 | sources | `fetch` |
 | health | `lint` (also runs each installed plugin's lint) |
-| find | `digest`, `find`, `closure` |
+| find | `digest`, `find`, `closure`, `links` (a note's links and the links to it) |
 | views | `export` |
 | benchmark | `bench` |
 

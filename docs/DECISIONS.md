@@ -167,3 +167,6 @@ Append-only log of decisions about loci, newest last, with their reasons. `DESIG
   - **Removed.** The home-manager module (`vaults`, `claudeSkills`, skill links), the `status` skill checks (`install.missing`/`install.mismatch` on `.agents/skills/` and `.claude/skills/`), and `init`'s `.gitignore` lines for those folders.
   - **Why.** Users manage skills their own way: per vault, user-wide, or through the agent's mechanism. Checks against one fixed folder would warn falsely for everyone else.
   - **Kept.** `status` still warns about a missing `AGENTS.md`.
+- D107. `loci links <note>` lists a note's outgoing links and the links pointing at it, from the in-memory index (m1-m4 §5).
+  - **Why.** Agents had to search the files by hand to judge whether an idea deserves its own note, or what a merge will touch, and a text search misses path-form and frontmatter links.
+  - **Not added.** An orphan list. Obsidian's CLI (`backlinks`, `links`, `orphans`) and MCP servers (`get_backlinks`) were the reference.

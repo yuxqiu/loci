@@ -9,6 +9,7 @@ pub mod export;
 pub mod fetch;
 pub mod find;
 pub mod init;
+pub mod links;
 pub mod lint;
 pub mod merge;
 pub mod mv;

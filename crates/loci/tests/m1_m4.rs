@@ -282,3 +282,62 @@ fn an_ambiguous_slug_is_refused() {
     let (code, env) = v.run(&["closure", "concepts/h/bfs"]);
     assert_eq!(code, 0, "a path is never ambiguous: {env:#}");
 }
+
+#[test]
+fn links_lists_outgoing_and_incoming() {
+    let v = vault(&[
+        (
+            "concepts/g/bfs.md",
+            concept(
+                IDS[0],
+                "prereqs: [\"[[queue]]\"]\nsources: [\"sources/papers/p#p2\"]\n",
+                "d",
+                "# BFS\n\n## Proof\n\nSee [[missing]].\n\n![[concepts/g/attachments/grid.png]]\n",
+            ),
+        ),
+        ("concepts/g/queue.md", concept(IDS[1], "", "d", "# Queue\n")),
+        ("views/v.md", "# V\n\n[[bfs#Proof]] and [[concepts/g/bfs]].\n".into()),
+        ("concepts/g/attachments/grid.png", "PNG".into()),
+        ("sources/papers/p/p.pdf", "%PDF".into()),
+    ]);
+    let (code, env) = v.run(&["links", "bfs"]);
+    assert_eq!(code, 0, "{env:#}");
+    let d = &env["data"];
+    assert_eq!(d["note"], "concepts/g/bfs.md");
+    let out: Vec<(String, serde_json::Value)> = d["outgoing"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| (l["form"].as_str().unwrap().to_string(), l["target"].clone()))
+        .collect();
+    assert_eq!(
+        out,
+        [
+            ("prereq".into(), json!("concepts/g/queue.md")),
+            ("source".into(), json!("sources/papers/p")),
+            ("wiki".into(), json!(null)),
+            ("embed".into(), json!("concepts/g/attachments/grid.png")),
+        ]
+    );
+    // Incoming, fragments ignored: both view links.
+    let incoming: Vec<(&str, u64)> = d["incoming"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| (l["path"].as_str().unwrap(), l["line"].as_u64().unwrap()))
+        .collect();
+    assert_eq!(incoming, [("views/v.md", 3), ("views/v.md", 3)]);
+
+    // A prerequisite is an incoming link; a source file is cited through its folder; an image is embedded.
+    let (_, env) = v.run(&["links", "queue"]);
+    assert_eq!(env["data"]["incoming"][0]["path"], "concepts/g/bfs.md");
+    assert_eq!(env["data"]["incoming"][0]["form"], "prereq");
+    let (_, env) = v.run(&["links", "sources/papers/p/p.pdf"]);
+    assert_eq!(env["data"]["incoming"][0]["form"], "source", "{env:#}");
+    let (_, env) = v.run(&["links", "concepts/g/attachments/grid.png"]);
+    assert_eq!(env["data"]["incoming"][0]["form"], "embed", "{env:#}");
+    assert_eq!(env["data"]["outgoing"], json!([]));
+
+    let (code, env) = v.run(&["links", "views/nothing"]);
+    assert_eq!((code, error_code(&env)), (1, "links.unknown"));
+}

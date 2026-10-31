@@ -98,7 +98,9 @@ pub struct BlockId {
     pub kind: BlockKind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Serialized in lowercase (`wiki`, `embed`, `prereq`, `source`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum LinkForm {
     Wiki,
     Embed,

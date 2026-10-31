@@ -25,6 +25,7 @@ pub const CORE_COMMANDS: &[&str] = &[
     "block-ids",
     "merge",
     "closure",
+    "links",
     "bench",
     "export",
     "help",
@@ -89,6 +90,8 @@ enum Cmd {
     },
     /// Fold concept FROM into concept INTO after merging their content.
     Merge { from: String, into: String },
+    /// List a note's links and the links pointing at it.
+    Links { note: String },
     /// List a concept's prerequisite closure, prerequisites first.
     Closure {
         concept: String,
@@ -140,6 +143,7 @@ fn main() -> ExitCode {
         Cmd::Skill { action: SkillCmd::Show { name } } => ("skill show", commands::skill::run(&ctx, name.as_deref())),
         Cmd::BlockIds { note, section } => ("block-ids", commands::blockids::run(&ctx, &note, &section)),
         Cmd::Merge { from, into } => ("merge", commands::merge::run(&ctx, &from, &into)),
+        Cmd::Links { note } => ("links", commands::links::run(&ctx, &note)),
         Cmd::Closure { concept, depth } => ("closure", commands::closure::run(&ctx, &concept, depth)),
         Cmd::Bench { agent, k } => ("bench", commands::bench::run(&ctx, agent.as_deref(), k)),
         Cmd::Export { target, depth, format, output } => {

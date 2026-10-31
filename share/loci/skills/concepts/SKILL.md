@@ -27,15 +27,17 @@ Explanation, linking related concepts by bare slug.
 - `prereqs` lists direct prerequisites only, each quoted.
 - `digest` is one sentence with no links; it is what `loci digest` shows.
 - One note per concept. An idea gets its own note once it has its own definition
-  and other notes need to link to it on its own; otherwise it is a heading in its
-  parent, with its name in the parent's `aliases`.
+  and other notes need to link to it on its own (`loci links <note>` lists what
+  links to a note); otherwise it is a heading in its parent, with its name in the
+  parent's `aliases`.
 
 ## Revising
 
 - New material that contradicts a concept: decide whether it is a duplicate, a
   refinement or a contradiction, and make the change with both sources cited.
 - Never cite another concept as evidence; cite the sources it cites.
-- Possible duplicates: tell the user and propose a merge; do not merge on your own.
+- Possible duplicates: tell the user and propose a merge (`loci links` on both notes
+  shows what the merge will touch); do not merge on your own.
 
 ## Areas
 
