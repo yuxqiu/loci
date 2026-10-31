@@ -32,7 +32,10 @@ impl Config {
     pub fn parse(text: &str) -> Result<Self, String> {
         let config: Config = toml::from_str(text).map_err(|e| e.to_string())?;
         if config.schema != 1 {
-            return Err(format!("unknown schema {}", config.schema));
+            return Err(format!(
+                "`schema = {}` is not supported: this loci reads schema 1 (a newer schema needs a newer loci)",
+                config.schema
+            ));
         }
         Ok(config)
     }

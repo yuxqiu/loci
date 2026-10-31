@@ -182,3 +182,53 @@ fn material_dropped_reports_on_the_deleted_path() {
     assert!(!d.is_empty());
     assert!(d.iter().all(|d| d["path"] == "inbox/drafts/draft.md"), "{}", diag_lines(&env));
 }
+
+// ---------------------------------------------------------------- done
+
+#[test]
+fn done_records_the_agent_work_without_touching_the_index() {
+    let v = TestVault::committed("agent-workflow");
+    let head = v.git(&["rev-parse", "HEAD"]).trim().to_string();
+    let reference = format!("refs/loci/agent/{head}");
+    // Nothing changed: nothing recorded.
+    let (code, env) = v.run(&["done"]);
+    assert_eq!(code, 0, "{env:#}");
+    assert!(env["data"]["record"].is_null());
+    // The agent edits a note, creates one, and leaves an ignored file.
+    v.write("concepts/a/x.md", v.read("concepts/a/x.md") + "\nAgent text.\n");
+    v.write("views/new.md", "# New\n");
+    v.write(".gitignore", v.read(".gitignore") + "scratch.txt\n");
+    v.write("scratch.txt", "ignored");
+    let status_before = v.git(&["status", "--porcelain"]);
+    let (code, env) = v.run(&["done"]);
+    assert_eq!(code, 0, "{env:#}");
+    assert_eq!(env["data"]["record"], reference);
+    assert!(env["data"]["files"].is_number(), "the lint data is kept");
+    assert_eq!(v.git(&["status", "--porcelain"]), status_before, "the working tree and index are untouched");
+    assert_eq!(v.git(&["diff", "--cached", "--name-only"]), "");
+    assert_eq!(v.git(&["rev-parse", &format!("{reference}^")]).trim(), head, "the parent is the starting commit");
+    let changed = v.git(&["diff", "--name-only", &head, &reference]);
+    assert_eq!(changed, ".gitignore\nconcepts/a/x.md\nviews/new.md\n");
+    // A second run on the same base replaces the record.
+    v.write("views/new.md", "# New, revised\n");
+    let (_, env) = v.run(&["done"]);
+    assert_eq!(env["data"]["record"], reference);
+    assert_eq!(v.git(&["for-each-ref", "--format=%(refname)", "refs/loci/agent/"]).lines().count(), 1);
+    assert_eq!(v.git(&["show", &format!("{reference}:views/new.md")]), "# New, revised\n");
+    // `loci status` counts the records.
+    let (_, env) = v.run(&["status"]);
+    assert_eq!(env["data"]["agent_records"], 1);
+}
+
+#[test]
+fn done_prunes_old_records() {
+    let v = TestVault::committed("agent-workflow");
+    // The test git is dated 2025-01-01, long before now.
+    let old = v.git(&["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "old"]).trim().to_string();
+    v.git(&["update-ref", "refs/loci/agent/old", &old]);
+    v.write("views/new.md", "# New\n");
+    let (code, env) = v.run(&["done"]);
+    assert_eq!(code, 0, "{env:#}");
+    let refs = v.git(&["for-each-ref", "--format=%(refname)", "refs/loci/agent/"]);
+    assert_eq!(refs.trim(), env["data"]["record"].as_str().unwrap(), "only the new record remains");
+}

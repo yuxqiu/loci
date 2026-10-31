@@ -5,6 +5,7 @@ pub mod blockids;
 pub mod closure;
 pub mod digest;
 pub mod dispatch;
+pub mod done;
 pub mod export;
 pub mod fetch;
 pub mod find;

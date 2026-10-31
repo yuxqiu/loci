@@ -26,7 +26,10 @@ This vault is a loci knowledge base. These rules apply to every agent working in
    files, stop and ask the user to commit them.
 2. Edit the working tree directly. Never commit. Run `git add -N <path>` on every
    file you create, so `git diff` shows it.
-3. Finish every task by running `loci lint` and fixing what you introduced.
+3. Check your work with `loci lint` as you go. Finish every task by running
+   `loci done` and fixing what it reports: it lints, then records your result as a
+   local git ref so the user's later corrections can be found (the `improve`
+   skill). Never run `loci done` for work the user did.
 4. The user reviews with `git diff`, then commits or discards (`git reset --hard`).
 5. The user edits notes by hand at any time; there is nothing to sync. Change text
    the user wrote only when the request covers it.
@@ -47,6 +50,21 @@ This vault is a loci knowledge base. These rules apply to every agent working in
   merges to the user; never merge on your own.
 - Follow `STYLE.md`. Record reusable lessons in the `## Lessons` section of
   `RULES.md`.
+
+## Lessons
+
+- A lesson is one dated bullet, specific enough to check (`- 2025-03-14: ...`).
+  Lessons about writing go in `STYLE.md` instead.
+- Before adding a lesson, update or delete an existing one it overlaps or
+  contradicts. Never only append.
+- Prefer a check to a lesson: if a correction can become a `bench/retrieval.jsonl`
+  case or a `loci.toml` budget, propose that instead.
+- When asked to review the lessons, propose deleting those that are stale,
+  contradict each other, or are now enforced by `loci lint`.
+- If loci itself falls short (you keep doing by hand what a command could do, or a
+  lesson keeps recurring that a check could enforce), tell the user and offer a
+  short issue draft for the loci repository that uses neutral examples and no
+  vault content. For a full review, follow the `improve` skill.
 
 ## Safety
 

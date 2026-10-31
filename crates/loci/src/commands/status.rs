@@ -56,6 +56,19 @@ pub fn run(ctx: &Ctx) -> Result<Report, Report> {
         }
     };
 
+    // Agent work recorded by `loci done`, waiting for the `improve` skill.
+    let records = match git::agent_refs(root) {
+        Ok(r) => {
+            human.push_str(&format!("\n## Agent work to review\n\n{} task(s) recorded by `loci done`\n", r.len()));
+            Some(r.len())
+        }
+        Err(e) => {
+            human.push_str("\n## Agent work to review\n\nunknown: git failed\n");
+            diags.push(Diagnostic::warning("status.git", format!("listing agent records failed: {e}")));
+            None
+        }
+    };
+
     // 5. Inbox.
     let index = Index::open(&vault);
     let inbox: Vec<&String> = index.files.iter().filter(|f| f.starts_with("inbox/")).collect();
@@ -110,6 +123,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Report> {
             "untracked": c.untracked.len(),
         })),
         "inbox": {"files": inbox, "uncommitted": uncommitted},
+        "agent_records": records,
         "digest": digest_text,
         "rules": rules,
     });

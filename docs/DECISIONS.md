@@ -170,3 +170,15 @@ Append-only log of decisions about loci, newest last, with their reasons. `DESIG
 - D107. `loci links <note>` lists a note's outgoing links and the links pointing at it, from the in-memory index (m1-m4 §5).
   - **Why.** Agents had to search the files by hand to judge whether an idea deserves its own note, or what a merge will touch, and a text search misses path-form and frontmatter links.
   - **Not added.** An orphan list. Obsidian's CLI (`backlinks`, `links`, `orphans`) and MCP servers (`get_backlinks`) were the reference.
+- D108. Co-evolution policy, from research/10. Only cheap, always-right items now:
+  - **Lessons.** The framework rules give lesson upkeep rules: one dated, checkable bullet each; edit or delete instead of only appending; writing preferences go to `STYLE.md`; prefer a benchmark case or budget over a lesson; review on request; offer a neutral issue draft when loci itself falls short.
+  - **Schema.** The schema changes only when old vaults would be misread (m0 §11). A loci refuses other schemas with a message naming the one it reads. A schema change ships with `loci upgrade`: it refuses a dirty tree, never commits, converts one step at a time, is safe to rerun, and leaves prose alone. Features are retired in two releases, a `deprecated.*` warning first. This revisits D55, which predates the policy; no `loci upgrade` exists until a schema change needs it.
+- D109. The `improve` skill is loci's self-improvement loop, after Harness² with the user as the gate.
+  - **The loop.** The agent gathers evidence (the user's corrections in `git log -p`, recurring lessons, repeated hand work, standing lint warnings, bench results) and proposes fixes at the level that owns them: the vault, the user's workflow, or loci itself. It prefers a command or check over prose, and tests rule changes with `loci bench --agent` where cheap.
+  - **The gate.** Changes land only as working-tree edits the user reviews. Upstream changes stay as neutral issue drafts the user files.
+  - **Why not automatic.** Self-improving agents have gamed their own benchmarks (Darwin Gödel Machine), and Harness² describes no review step.
+- D110. Agents finish every task with `loci done`, which lints and then records their working tree as a local ref `refs/loci/agent/<base commit>`, whose parent is the commit they started from. This narrows D73 to one local ref per task: still no job states, no approval steps, no agent commits on branches.
+  - **Why.** The `improve` skill needs to tell the user's corrections from agent edits, and a convention the user must follow (a commit trailer) cannot be enforced.
+  - **Shape.** One ref per base commit, replaced by later runs: an agent often runs it several times in one task. Records are built in a private index, never pushed by default, pruned after 90 days, and deleted by `improve` once reviewed.
+  - **Not adopted.** Agent hooks (not general across agents); the `check.relaxed` warning (the user's decision).
+  - **Limits.** Uncommitted user work at the start of a task, or between two tasks, is counted as the agent's. The "commit first" rule covers it.

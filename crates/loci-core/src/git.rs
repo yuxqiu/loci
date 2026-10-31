@@ -19,6 +19,89 @@ pub fn run(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     }
 }
 
+/// Prefix of the local refs that record an agent's finished work (`loci done`).
+/// Refs outside `refs/heads/` and `refs/tags/` are not pushed by default.
+pub const AGENT_REFS: &str = "refs/loci/agent/";
+
+fn trimmed(out: Vec<u8>) -> String {
+    String::from_utf8_lossy(&out).trim().to_string()
+}
+
+/// Records the working tree as a commit whose parent is HEAD, under
+/// `refs/loci/agent/<HEAD id>` (replacing an earlier record for the same HEAD),
+/// without touching the index or any branch. `now` (Unix seconds) dates the record.
+/// Returns the ref, or `None` when there is no HEAD or the tree equals HEAD's.
+pub fn record_agent_tree(root: &Path, now: u64) -> Result<Option<String>, String> {
+    if !has_head(root) {
+        return Ok(None);
+    }
+    let head = trimmed(run(root, &["rev-parse", "HEAD"])?);
+    let git_dir = trimmed(run(root, &["rev-parse", "--absolute-git-dir"])?);
+    // A private index, so the user's staging is untouched.
+    let index = Path::new(&git_dir).join(format!("loci-agent-index-{}", std::process::id()));
+    let with_index = |args: &[&str]| -> Result<Vec<u8>, String> {
+        let out = git(root).env("GIT_INDEX_FILE", &index).args(args).stdin(Stdio::null()).output();
+        let out = out.map_err(|e| e.to_string())?;
+        if out.status.success() {
+            Ok(out.stdout)
+        } else {
+            Err(format!("git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()))
+        }
+    };
+    let tree = with_index(&["read-tree", &head])
+        .and_then(|_| with_index(&["add", "-A"]))
+        .and_then(|_| with_index(&["write-tree"]).map(trimmed));
+    match std::fs::remove_file(&index) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
+        _ => {}
+    }
+    let tree = tree?;
+    if tree == trimmed(run(root, &["rev-parse", &format!("{head}^{{tree}}")])?) {
+        return Ok(None);
+    }
+    let date = format!("@{now} +0000");
+    let out = git(root)
+        .env("GIT_AUTHOR_NAME", "loci")
+        .env("GIT_AUTHOR_EMAIL", "loci@localhost")
+        .env("GIT_AUTHOR_DATE", &date)
+        .env("GIT_COMMITTER_NAME", "loci")
+        .env("GIT_COMMITTER_EMAIL", "loci@localhost")
+        .env("GIT_COMMITTER_DATE", &date)
+        .args(["commit-tree", &tree, "-p", &head, "--no-gpg-sign", "-m", "loci done: the agent's work"])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(format!("git commit-tree: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    let name = format!("{AGENT_REFS}{head}");
+    run(root, &["update-ref", &name, &trimmed(out.stdout)])?;
+    Ok(Some(name))
+}
+
+/// The agent records (`loci done`), as (ref, Unix seconds of the record), by ref name.
+pub fn agent_refs(root: &Path) -> Result<Vec<(String, u64)>, String> {
+    let out = run(root, &["for-each-ref", "--format=%(refname) %(committerdate:unix)", AGENT_REFS])?;
+    let text = String::from_utf8_lossy(&out);
+    text.lines()
+        .map(|l| {
+            let (name, time) = l.rsplit_once(' ').ok_or_else(|| format!("unexpected for-each-ref line `{l}`"))?;
+            let time = time.parse().map_err(|_| format!("unexpected for-each-ref line `{l}`"))?;
+            Ok((name.to_string(), time))
+        })
+        .collect()
+}
+
+/// Deletes agent records older than `max_age` seconds at time `now`; returns how many.
+pub fn prune_agent_refs(root: &Path, now: u64, max_age: u64) -> Result<usize, String> {
+    let old: Vec<String> =
+        agent_refs(root)?.into_iter().filter(|(_, t)| now.saturating_sub(*t) > max_age).map(|(n, _)| n).collect();
+    for name in &old {
+        run(root, &["update-ref", "-d", name])?;
+    }
+    Ok(old.len())
+}
+
 /// Whether `path` is gitignored (`git check-ignore`: exit 0 ignored, 1 not ignored,
 /// anything else an error).
 pub fn is_ignored(root: &Path, path: &str) -> Result<bool, String> {

@@ -16,6 +16,7 @@ pub const RULES: &str = include_str!("../../../share/loci/rules.md");
 
 const SKILL_FILES: &[(&str, &str)] = &[
     ("concepts", include_str!("../../../share/loci/skills/concepts/SKILL.md")),
+    ("improve", include_str!("../../../share/loci/skills/improve/SKILL.md")),
     ("intake", include_str!("../../../share/loci/skills/intake/SKILL.md")),
     ("migrate", include_str!("../../../share/loci/skills/migrate/SKILL.md")),
 ];

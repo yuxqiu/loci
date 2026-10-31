@@ -65,4 +65,4 @@ that does not see the first verdict, and log only that one.
    `loci block-ids <note> --section Cards`. The step-0 questions become cards on the
    closest concept.
 
-Finish with `loci lint`.
+Finish with `loci done`.

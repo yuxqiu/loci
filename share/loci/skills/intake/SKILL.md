@@ -52,6 +52,6 @@ entries have no frontmatter; add concept links in the body only.
 
 ## Finish
 
-Run `loci lint`. Fix every error you introduced, and check that no
-`material-dropped` warning reports material you lost. Then summarise for the user
+Run `loci done`. Fix every error you introduced (then run it again), and check that
+no `material-dropped` warning reports material you lost. Then summarise for the user
 what went where.

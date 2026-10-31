@@ -15,6 +15,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const CORE_COMMANDS: &[&str] = &[
     "init",
     "lint",
+    "done",
     "find",
     "digest",
     "mv",
@@ -51,6 +52,8 @@ enum Cmd {
     Init,
     /// Lint the working tree (core rules and every installed plugin).
     Lint,
+    /// End an agent task: lint, then record the agent's work for review.
+    Done,
     /// Full-text search.
     Find {
         query: String,
@@ -132,6 +135,7 @@ fn main() -> ExitCode {
     let (name, report) = match cli.command {
         Cmd::Init => ("init", commands::init::run(&ctx)),
         Cmd::Lint => ("lint", commands::lint::run(&ctx)),
+        Cmd::Done => ("done", commands::done::run(&ctx)),
         Cmd::Find { query, k, kinds } => {
             ("find", commands::find::run(&ctx, &query, k, &kinds.into_iter().map(Kind::from).collect::<Vec<_>>()))
         }

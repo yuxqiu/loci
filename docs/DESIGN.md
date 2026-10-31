@@ -420,7 +420,7 @@ and `docs/specs/m1-m4.md`, the learn plugin in `docs/specs/learn-plugin.md`.
 | session | `status`, `skill show [<name>]` |
 | structure | `new`, `block-ids --section`, `mv` (links are rewritten, and the old slug becomes an alias), `merge` (M1) |
 | sources | `fetch` |
-| health | `lint` (also runs each installed plugin's lint) |
+| health | `lint` (also runs each installed plugin's lint), `done` (an agent's last step: lint, then a local record of its work for the `improve` skill) |
 | find | `digest`, `find`, `closure`, `links` (a note's links and the links to it) |
 | views | `export` |
 | benchmark | `bench` |
