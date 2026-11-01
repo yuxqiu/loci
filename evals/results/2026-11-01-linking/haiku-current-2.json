@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "loci": "0.1.0",
+  "command": "bench",
+  "ok": true,
+  "data": {
+    "cases": 4,
+    "median_s": 24.136190679,
+    "pass_rate": 0.75,
+    "results": [
+      {
+        "pass": true,
+        "q": "Add a concept note on A* search: a best-first search for shortest paths that adds a heuristic estimate of the remaining distance to the distance so far; it generalises Dijkstra's algorithm and keeps its frontier in a priority queue over a graph. Follow the framework rules for adding a concept."
+      },
+      {
+        "pass": false,
+        "q": "Add a concept note on red-black trees: a self-balancing binary search tree that colours nodes red or black so that every path has the same number of black nodes, keeping operations logarithmic; used for ordered maps where a hash table gives no order. Follow the framework rules for adding a concept."
+      },
+      {
+        "pass": true,
+        "q": "Add a concept note on momentum: mass times velocity, conserved in an isolated system; Newton's second law says force is its rate of change, its derivative with respect to time. Follow the framework rules for adding a concept."
+      },
+      {
+        "pass": true,
+        "q": "Add a concept note on the determinant: a number computed from a square matrix that is zero exactly when the matrix is not invertible; the eigenvalues are the roots of the determinant of the matrix minus λ times the identity. Follow the framework rules for adding a concept."
+      }
+    ]
+  },
+  "diagnostics": [],
+  "error": null
+}

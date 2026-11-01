@@ -50,10 +50,12 @@ This vault is a loci knowledge base. These rules apply to every agent working in
      folders (`ls concepts/<area>/`). Create a sub-folder when several notes in
      the area share a topic; otherwise put the note at the area's root.
   3. Create it with `loci new concepts/<area>/.../<slug>.md` (never invent ids),
-     and link the first mention of every concept that has a note.
-  4. Link it from the notes that mention it: `loci links <new note>` lists them
-     under "unlinked mentions". Adding a link to an existing note is part of
-     adding a concept, even in text the user wrote.
+     write it, and link the first mention of every concept that has a note:
+     `loci links <new note>` lists those not yet linked under "unlinked mentions
+     in".
+  4. Link it from the notes that mention it: the same command lists them under
+     "unlinked mentions of". Adding a link to an existing note is part of adding a
+     concept, even in text the user wrote.
 - Frontmatter holds only `id` and `prereqs`. Other names for a concept go in its H1
   or text.
 - Cite evidence with a link next to the claim it supports:
@@ -109,7 +111,7 @@ This vault is a loci knowledge base. These rules apply to every agent working in
     match per file. If a search may hit many notes, list or count first, then read.
   - No output means no match for that spelling in those folders; try other names.
 - After a hit, `loci links <note>` shows its neighbours: the notes it links to, the
-  notes that link to it, and the notes that mention it without linking it. Write
-  `[[slug]]` only for a note you have seen.
+  notes that link to it, and the unlinked mentions both ways. Write `[[slug]]` only
+  for a note you have seen.
 - `loci skill show` lists the procedures for larger tasks; read one before starting
   such a task.

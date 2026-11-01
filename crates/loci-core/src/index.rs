@@ -220,57 +220,31 @@ impl Index {
         self.slugs.get(&slug.to_lowercase()).map_or(&[], Vec::as_slice)
     }
 
-    /// The formed notes ([`Kind::is_formed`]) that mention `target` but do not link
-    /// it, with the byte offset of the first mention, in note path order. A mention is
-    /// the title, the title without its parenthesised parts, each parenthesised name
-    /// (`# Breadth-first search (BFS)`), or the slug read as words. ASCII case is
-    /// folded and `-` matches a space; a Latin match must stand as whole words;
-    /// mentions inside links are not counted.
-    pub fn unlinked_mentions(&self, target: &Note) -> Vec<(&Note, usize)> {
-        // Byte for byte, so offsets into the folded text are offsets into the note.
-        let fold = |s: &str| s.to_ascii_lowercase().replace('-', " ");
-        let title = target.title();
-        let mut names = vec![title.to_string(), vault::stem(&target.path).to_string()];
-        let (mut bare, mut rest) = (String::new(), title);
-        while let Some((before, after)) = rest.split_once('(') {
-            bare.push_str(before);
-            let Some((inner, tail)) = after.split_once(')') else { break };
-            names.push(inner.to_string());
-            rest = tail;
-        }
-        bare.push_str(rest);
-        names.push(bare);
-        let mut names: Vec<String> = names
-            .iter()
-            .map(|n| fold(n).split_whitespace().collect::<Vec<_>>().join(" "))
-            .filter(|n| !n.is_empty())
-            .collect();
-        names.sort();
-        names.dedup();
+    /// The formed notes ([`Kind::is_formed`]) that mention `target` without linking it,
+    /// with the byte range of the first mention, in note path order: the missing links
+    /// into `target` ([`mention_names`] says what a mention is).
+    pub fn unlinked_mentions_of(&self, target: &Note) -> Vec<(&Note, std::ops::Range<usize>)> {
+        let names = mention_names(target);
         let linking: BTreeSet<&str> = self.incoming(&target.path).iter().map(|(n, _)| n.path.as_str()).collect();
-        let edge = |c: Option<char>| !c.is_some_and(|c| c.is_ascii_alphanumeric());
-        let mut out = vec![];
-        for note in self.notes() {
-            if !note.kind.is_formed() || note.path == target.path || linking.contains(note.path.as_str()) {
-                continue;
-            }
-            let text = fold(&note.text);
-            let start = note.body_start();
-            let in_link = |at: usize| note.links.iter().any(|l| l.range.contains(&at));
-            let first = names
-                .iter()
-                .filter_map(|name| {
-                    text[start..].match_indices(name.as_str()).map(|(i, _)| start + i).find(|&at| {
-                        edge(text[..at].chars().next_back())
-                            && edge(text[at + name.len()..].chars().next())
-                            && !in_link(at)
-                    })
-                })
-                .min();
-            if let Some(at) = first {
-                out.push((note, at));
-            }
-        }
+        self.notes()
+            .filter(|n| n.kind.is_formed() && n.path != target.path && !linking.contains(n.path.as_str()))
+            .filter_map(|n| first_mention(n, &names).map(|at| (n, at)))
+            .collect()
+    }
+
+    /// The concepts that `note` mentions without linking them, with the byte range of
+    /// the first mention in `note`, in text order: the missing links out of `note`. A
+    /// mention inside a longer one ("queue" in "priority queue") does not count.
+    pub fn unlinked_mentions_in(&self, note: &Note) -> Vec<(&Note, std::ops::Range<usize>)> {
+        let linked: BTreeSet<String> = note.links.iter().filter_map(|l| self.link_target(note, l)).collect();
+        let mut out: Vec<(&Note, std::ops::Range<usize>)> = self
+            .concepts()
+            .filter(|c| c.path != note.path && !linked.contains(&c.path))
+            .filter_map(|c| first_mention(note, &mention_names(c)).map(|at| (c, at)))
+            .collect();
+        let ranges: Vec<std::ops::Range<usize>> = out.iter().map(|(_, r)| r.clone()).collect();
+        out.retain(|(_, r)| !ranges.iter().any(|o| o != r && o.start <= r.start && r.end <= o.end));
+        out.sort_by_key(|(c, r)| (r.start, c.path.clone()));
         out
     }
 
@@ -358,6 +332,58 @@ pub fn heading_key(s: &str) -> String {
     s.to_lowercase().replace(' ', "-")
 }
 
+/// ASCII case folded and `-` read as a space, byte for byte, so offsets into the
+/// folded text are offsets into the original.
+fn fold(s: &str) -> String {
+    s.to_ascii_lowercase().replace('-', " ")
+}
+
+/// The names a mention of `note` may use, folded: its title, the title without its
+/// parenthesised parts, each parenthesised name (`# Breadth-first search (BFS)`), and
+/// its slug read as words.
+fn mention_names(note: &Note) -> Vec<String> {
+    let title = note.title();
+    let mut names = vec![title.to_string(), vault::stem(&note.path).to_string()];
+    let (mut bare, mut rest) = (String::new(), title);
+    while let Some((before, after)) = rest.split_once('(') {
+        bare.push_str(before);
+        let Some((inner, tail)) = after.split_once(')') else { break };
+        names.push(inner.to_string());
+        rest = tail;
+    }
+    bare.push_str(rest);
+    names.push(bare);
+    let mut names: Vec<String> = names
+        .iter()
+        .map(|n| fold(n).split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|n| !n.is_empty())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// The byte range of the first mention of any of `names` in the body of `note`: a
+/// Latin match stands as whole words, and text inside a link does not count.
+fn first_mention(note: &Note, names: &[String]) -> Option<std::ops::Range<usize>> {
+    let edge = |c: Option<char>| !c.is_some_and(|c| c.is_ascii_alphanumeric());
+    let text = fold(&note.text);
+    let start = note.body_start();
+    let in_link = |at: usize| note.links.iter().any(|l| l.range.contains(&at));
+    names
+        .iter()
+        .filter_map(|name| {
+            text[start..]
+                .match_indices(name.as_str())
+                .map(|(i, _)| start + i)
+                .find(|&at| {
+                    edge(text[..at].chars().next_back()) && edge(text[at + name.len()..].chars().next()) && !in_link(at)
+                })
+                .map(|at| at..at + name.len())
+        })
+        .min_by_key(|r| (r.start, std::cmp::Reverse(r.end)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,6 +413,27 @@ mod tests {
     }
 
     #[test]
+    fn unlinked_mentions_in_a_note_are_the_concepts_it_names() {
+        let i = from_texts(&[
+            ("concepts/a/queue.md", "# Queue\n"),
+            ("concepts/a/priority-queue.md", "# Priority queue\n"),
+            ("concepts/a/graph.md", "# Graph\n"),
+            ("concepts/a/heap.md", "# Heap\n"),
+            ("concepts/a/limit.md", "# Limit\n"),
+            (
+                "concepts/a/dijkstra.md",
+                "# Dijkstra\n\nOn a graph, take from a priority queue; see [[heap]] and the heap. No graphs here.\n",
+            ),
+        ]);
+        let n = i.parsed("concepts/a/dijkstra.md").unwrap();
+        let found: Vec<(&str, &str)> =
+            i.unlinked_mentions_in(n).into_iter().map(|(c, r)| (vault::stem(&c.path), &n.text[r])).collect();
+        // "queue" inside "priority queue" is not a mention of Queue; Heap is linked
+        // already; "graphs" is another word; Limit is not named.
+        assert_eq!(found, [("graph", "graph"), ("priority-queue", "priority queue")]);
+    }
+
+    #[test]
     fn unlinked_mentions_are_whole_names_outside_links() {
         let i = from_texts(&[
             ("concepts/a/breadth-first-search.md", "# Breadth-first search (BFS)\n"),
@@ -401,7 +448,7 @@ mod tests {
         ]);
         let found = |p: &str| -> Vec<(String, usize)> {
             let n = i.parsed(p).unwrap();
-            i.unlinked_mentions(n).into_iter().map(|(n, at)| (n.path.clone(), line_col(&n.text, at).0)).collect()
+            i.unlinked_mentions_of(n).into_iter().map(|(n, r)| (n.path.clone(), line_col(&n.text, r.start).0)).collect()
         };
         // Hyphen or space, the alias, case; not inside a link, not in a note that links
         // it, not inside another word, not in drafts or sources.

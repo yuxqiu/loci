@@ -34,8 +34,9 @@ them under its version.
   named. The framework rules, `RULES.md`, `STYLE.md`, the index and the plugin
   list are no longer printed. The agent reads the rules at session start, as the
   `AGENTS.md` that `loci init` writes says, through the new `loci rules`.
-- `loci links` lists **unlinked mentions**: notes that name the note (title,
-  parenthesised alias or slug) without linking it, and marks prerequisites
+- `loci links` lists **unlinked mentions** both ways: notes that name the note
+  (title, parenthesised alias or slug) without linking it, and concepts the note
+  names without linking them, and marks prerequisites
   `(prereq)`. `loci new` runs `git add -N` on the file it creates and, on a slug
   collision, names the note that has the slug. A dangling `[[slug]]` suggests the
   closest concept. `loci status` ends with the next step. Every argument has a

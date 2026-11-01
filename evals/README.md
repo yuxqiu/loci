@@ -9,6 +9,9 @@ run to run, so they are run on demand, never in CI.
   `{"q": "<question or task>", "check": "<shell command>"}`. The check runs in the
   agent's copy of the vault after it finishes and passes on exit 0; it reads the
   reply from `$LOCI_BENCH_OUTPUT` or inspects the vault (m1-m4 §3).
+- `checks/`: scripts that checks call for longer conditions, e.g.
+  `new_concept.py` (one new concept in the right folder, linked both ways, lint
+  clean). `run.sh` exports `EVALS` and puts `loci` on `PATH` for them.
 - `arms/make_arms.py`: rule variants to compare, each a function of
   `share/loci/rules.md`, served by a `loci` shim for `loci rules`.
 - `agent.sh`: the agent, Claude Code headless, without the user's own settings.

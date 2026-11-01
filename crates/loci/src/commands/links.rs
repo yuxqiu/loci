@@ -37,19 +37,32 @@ pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
         human.push_str(&format!("  {}:{line}: {}{}\n", note.path, link.raw, form_note(link.form)));
         incoming.push(json!({"path": note.path, "line": line, "form": link.form, "raw": link.raw}));
     }
-    // Notes that name this one without linking it: candidates for a link.
-    let mut unlinked = vec![];
+    // Missing links, both ways: notes that name this one, and concepts this one names.
+    let (mut unlinked_in, mut unlinked_out) = (vec![], vec![]);
     if let Some(note) = index.parsed(&path) {
         human.push_str(&format!("unlinked mentions of {path}:\n"));
-        for (other, at) in index.unlinked_mentions(note) {
-            let line = line_col(&other.text, at).0;
-            let text = other.text.lines().nth(line - 1).unwrap_or_default().trim();
+        for (other, r) in index.unlinked_mentions_of(note) {
+            let (line, text) = line_text(other, r.start);
             human.push_str(&format!("  {}:{line}: {text}\n", other.path));
-            unlinked.push(json!({"path": other.path, "line": line, "text": text}));
+            unlinked_in.push(json!({"path": other.path, "line": line, "text": text}));
+        }
+        human.push_str(&format!("unlinked mentions in {path}:\n"));
+        for (concept, r) in index.unlinked_mentions_in(note) {
+            let line = line_col(&note.text, r.start).0;
+            let words = &note.text[r];
+            let slug = loci_core::vault::stem(&concept.path);
+            human.push_str(&format!("  {line}: {words} -> [[{slug}]]\n"));
+            unlinked_out.push(json!({"line": line, "text": words, "concept": concept.path}));
         }
     }
-    let data = json!({"note": path, "outgoing": outgoing, "incoming": incoming, "unlinked": unlinked});
+    let data = json!({"note": path, "outgoing": outgoing, "incoming": incoming, "unlinked_in": unlinked_in, "unlinked_out": unlinked_out});
     Ok(Report::ok(data, human))
+}
+
+/// The 1-based line of byte offset `at` in `note`, and that line, trimmed.
+fn line_text(note: &loci_core::parse::Note, at: usize) -> (usize, &str) {
+    let line = line_col(&note.text, at).0;
+    (line, note.text.lines().nth(line - 1).unwrap_or_default().trim())
 }
 
 /// A marker for links that are not body wikilinks.

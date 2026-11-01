@@ -25,7 +25,21 @@ def patterns(rules):
     return rules[: rules.index("- After a hit, `loci links <note>`")] + rules[end:]
 
 
-ARMS = {"current": lambda r: r, "bare": bare, "patterns": patterns}
+def nolinks(rules):
+    """Steps 3 and 4 of "Adding a concept" without pointing at `loci links`."""
+    step3 = rules.index("  3. Create it with `loci new")
+    step4_end = rules.index("- Frontmatter holds only")
+    return (
+        rules[:step3]
+        + "  3. Create it with `loci new concepts/<area>/.../<slug>.md` (never invent ids),\n"
+        "     write it, and link the first mention of every concept that has a note.\n"
+        "  4. Link it from the notes that mention it. Adding a link to an existing note\n"
+        "     is part of adding a concept, even in text the user wrote.\n"
+        + rules[step4_end:]
+    )
+
+
+ARMS = {"current": lambda r: r, "bare": bare, "patterns": patterns, "nolinks": nolinks}
 
 if __name__ == "__main__":
     out, loci, names = sys.argv[1], os.path.abspath(sys.argv[2]), sys.argv[3:] or list(ARMS)

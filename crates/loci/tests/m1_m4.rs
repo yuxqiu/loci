@@ -304,7 +304,9 @@ fn links_lists_outgoing_and_incoming() {
         .collect();
     assert_eq!(incoming, [("views/v.md", 3), ("views/v.md", 3)]);
     // A note that names it without linking it is a candidate for a link.
-    assert_eq!(d["unlinked"], json!([{"path": "concepts/g/graph.md", "line": 6, "text": "Walked by BFS."}]));
+    assert_eq!(d["unlinked_in"], json!([{"path": "concepts/g/graph.md", "line": 6, "text": "Walked by BFS."}]));
+    let (_, env) = v.run(&["links", "concepts/g/graph"]);
+    assert_eq!(env["data"]["unlinked_out"], json!([{"line": 6, "text": "BFS", "concept": "concepts/g/bfs.md"}]));
     let (_, human, _) = v.run_raw(&["links", "bfs"]);
     assert!(human.contains("-> concepts/g/queue.md (prereq)\n"), "{human}");
     assert!(

@@ -4,10 +4,12 @@
 # Environment: REPS (default 3), ARMS (default: every arm in arms/make_arms.py).
 set -eu
 EVALS=$(cd "$(dirname "$0")" && pwd)
+export EVALS  # checks may call scripts in $EVALS/checks
 ROOT=$(dirname "$EVALS")
 SUITE=$1; shift
 cargo build --quiet --manifest-path "$ROOT/Cargo.toml" -p loci
 LOCI="$ROOT/target/debug/loci"
+export PATH="$ROOT/target/debug:$PATH"  # checks call `loci`
 WORK=$(mktemp -d)
 OUT="$EVALS/results/$(date -u +%Y-%m-%d)-$SUITE"
 mkdir -p "$OUT"
