@@ -15,7 +15,7 @@ pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal
         path.push_str(".md");
     }
     if vault::kind_of(&path) != Some(Kind::Concept) {
-        return Err(Refusal::refused("new.no-area", format!("`{path}` is not inside an area")));
+        return Err(Refusal::refused("new.no-area", format!("`{path}` {}", vault::why_not_concept(&path))));
     }
     if let Some((code, message)) = vault::path_problem(&path) {
         return Err(Refusal::refused(code, format!("`{path}`: {message}")));

@@ -575,52 +575,28 @@ fn material_dropped_ignores_plugin_data() {
     assert!(with_code(&env, "material-dropped").is_empty(), "{}", diag_lines(&env));
 }
 
-/// An unreadable note does not switch `material-dropped` off: it is `file.unreadable`,
-/// and the material of the deleted draft is still checked.
+/// A file with a non-UTF-8 name where core does not read (`plugins/`) stays out of the
+/// way: it does not switch `material-dropped` off.
 #[test]
-fn an_unreadable_note_does_not_disable_material_dropped() {
-    use std::os::unix::fs::PermissionsExt;
-    let v = TestVault::committed(BIN, "mv-rename");
-    v.write("inbox/drafts/d.md", "# D\n\n```\ncode\n```\n");
-    v.commit_all("draft");
-    std::fs::remove_file(v.root.join("inbox/drafts/d.md")).unwrap();
-    v.write("views/linker.md", "# Linker\n\nEdited.\n");
-    let mode = |m: u32| std::fs::set_permissions(v.root.join("views/linker.md"), std::fs::Permissions::from_mode(m));
-    mode(0o000).unwrap();
-    let (_, env) = v.run(&["lint"]);
-    mode(0o644).unwrap();
-    assert_eq!(with_code(&env, "material-dropped").len(), 1, "{}", diag_lines(&env));
-    assert!(with_code(&env, "git.failed").is_empty(), "{}", diag_lines(&env));
-    assert!(has(&env, "file.unreadable", "views/linker.md"), "{}", diag_lines(&env));
-}
-
-/// A non-UTF-8 name is `file.unreadable` only where core reads files, and a modified
-/// one does not switch `material-dropped` off.
-#[test]
-fn non_utf8_names_stay_out_of_the_way() {
+fn non_utf8_names_outside_core_stay_out_of_the_way() {
     use std::os::unix::ffi::OsStrExt;
     let v = TestVault::committed(BIN, "mv-rename");
     let raw = |p: &[u8]| v.root.join(std::ffi::OsStr::from_bytes(p));
-    std::fs::write(raw(b"views/odd\xff.md"), "# Odd\n").unwrap();
-    v.write("inbox/drafts/d.md", "# D\n\n```\ncode\n```\n");
-    v.commit_all("odd and draft");
-    std::fs::write(raw(b"views/odd\xff.md"), "# Odd, edited\n").unwrap();
-    std::fs::remove_file(v.root.join("inbox/drafts/d.md")).unwrap();
     std::fs::create_dir_all(v.root.join("plugins/x")).unwrap();
     std::fs::write(raw(b"plugins/x/data\xff"), "x").unwrap();
+    v.write("inbox/drafts/d.md", "# D\n\n```\ncode\n```\n");
+    v.commit_all("odd and draft");
+    std::fs::write(raw(b"plugins/x/data\xff"), "y").unwrap();
+    std::fs::remove_file(v.root.join("inbox/drafts/d.md")).unwrap();
     let (_, env) = v.run(&["lint"]);
     assert_eq!(with_code(&env, "material-dropped").len(), 1, "{}", diag_lines(&env));
     assert!(with_code(&env, "git.failed").is_empty(), "{}", diag_lines(&env));
-    let unreadable: Vec<&str> =
-        with_code(&env, "file.unreadable").iter().map(|d| d["path"].as_str().unwrap()).collect();
-    assert_eq!(unreadable, ["views/odd\u{fffd}.md"], "{}", diag_lines(&env));
+    assert!(with_code(&env, "file.unreadable").is_empty(), "{}", diag_lines(&env));
 }
 
-/// `init` refuses a symlink among the files it manages before writing anything; a folder
-/// `mv` refuses to leave a file with a non-UTF-8 name behind.
+/// `init` refuses a symlink among the files it manages before writing anything.
 #[test]
-fn init_and_mv_respect_the_vault_boundary() {
-    use std::os::unix::ffi::OsStrExt;
+fn init_respects_the_vault_boundary() {
     let fresh = TestVault::empty(BIN);
     std::os::unix::fs::symlink(fresh.tmp.path().join("made.md"), fresh.root.join("AGENTS.md")).unwrap();
     let names = || {
@@ -633,29 +609,68 @@ fn init_and_mv_respect_the_vault_boundary() {
     assert_eq!((code, error_code(&env)), (1, "file.symlink"), "{env:#}");
     assert_eq!(names(), before, "nothing written");
     assert!(!fresh.tmp.path().join("made.md").exists());
-
-    let v = TestVault::committed(BIN, "mv-rename");
-    let odd = v.root.join(std::ffi::OsStr::from_bytes(b"views/sub/bad\xff.png"));
-    std::fs::write(odd, "x").unwrap();
-    v.commit_all("odd name");
-    let (code, env) = v.run(&["mv", "views/sub", "views/other"]);
-    assert_eq!((code, error_code(&env)), (1, "mv.from"), "{env:#}");
 }
 
+/// A tracked file that is gone from disk is a pending deletion, not an unreadable file:
+/// even when its folder became a file, or its name is not UTF-8.
 #[test]
-fn unreadable_files_and_folders_are_errors() {
+fn a_deleted_file_does_not_refuse_the_vault() {
+    use std::os::unix::ffi::OsStrExt;
+    let v = TestVault::committed(BIN, "mv-rename");
+    v.write("views/a/b.md", "# B\n");
+    std::fs::create_dir_all(v.root.join("views/sub")).unwrap();
+    std::fs::write(v.root.join(std::ffi::OsStr::from_bytes(b"views/sub/odd\xff.png")), "x").unwrap();
+    v.write("views/sub/s.md", "# S\n");
+    v.commit_all("files to delete");
+    std::fs::remove_dir_all(v.root.join("views/a")).unwrap();
+    v.write("views/a", "# A\n");
+    std::fs::remove_file(v.root.join(std::ffi::OsStr::from_bytes(b"views/sub/odd\xff.png"))).unwrap();
+    let (code, env) = v.run(&["status"]);
+    assert_eq!(code, 0, "{env:#}");
+    let (code, env) = v.run(&["mv", "views/sub", "views/other"]);
+    assert_eq!(code, 0, "{env:#}");
+    assert!(v.exists("views/other/s.md"));
+}
+
+/// Every file core reads must be readable: one that is not, by content, permission,
+/// folder or name, refuses the vault for every command, naming each.
+#[test]
+fn an_unreadable_file_refuses_the_vault() {
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::PermissionsExt;
     let v = TestVault::committed(BIN, "kinds");
-    v.write("views/locked.md", "# Locked\n");
     v.write("views/closed/inner.md", "# Inner\n");
+    v.commit_all("inner");
+    std::fs::write(v.root.join("views/bad.md"), b"# Bad \xff\n").unwrap();
+    v.write("views/locked.md", "# Locked\n");
+    std::fs::write(v.root.join(std::ffi::OsStr::from_bytes(b"views/odd\xff.png")), "x").unwrap();
+    v.write("inbox/shut/x.md", "# X\n");
     let mode = |p: &str, m: u32| std::fs::set_permissions(v.root.join(p), std::fs::Permissions::from_mode(m)).unwrap();
-    mode("views/locked.md", 0o000);
-    mode("views/closed", 0o000);
-    let (code, env) = v.run(&["lint"]);
-    mode("views/closed", 0o755);
-    assert_eq!(code, 1, "{env:#}");
-    assert!(has(&env, "file.unreadable", "views/locked.md"), "{env:#}");
-    // Git skips a folder it cannot open with a warning, reported at the vault root.
-    let folder = with_code(&env, "file.unreadable").into_iter().find(|d| d["path"] == ".").cloned();
-    assert!(folder.is_some_and(|d| d["message"].as_str().unwrap().contains("views/closed")), "{env:#}");
+    std::fs::create_dir_all(v.root.join("sources/papers")).unwrap();
+    std::fs::write(v.root.join("sources/papers/p.pdf"), "%PDF").unwrap();
+    for p in ["views/locked.md", "views/closed", "inbox/shut", "sources/papers/p.pdf"] {
+        mode(p, 0o000);
+    }
+    let runs: Vec<_> = [&["lint"][..], &["status"], &["find", "inner"], &["new", "concepts/a/fresh"]]
+        .iter()
+        .map(|args| v.run(args))
+        .collect();
+    for p in ["views/closed", "inbox/shut"] {
+        mode(p, 0o755);
+    }
+    for (code, env) in runs {
+        assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
+        let message = env["error"]["message"].as_str().unwrap();
+        for part in [
+            "`views/bad.md` is not valid UTF-8",
+            "`views/locked.md` cannot be read",
+            "`sources/papers/p.pdf` cannot be read",
+            "`views/closed/inner.md` cannot be read",
+            "`views/odd\u{fffd}.png` has a name that is not UTF-8",
+            "inbox/shut",
+        ] {
+            assert!(message.contains(part), "{part}: {message}");
+        }
+    }
+    assert!(!v.exists("concepts/a/fresh.md"), "nothing written");
 }

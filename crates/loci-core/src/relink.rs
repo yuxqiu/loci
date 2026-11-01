@@ -39,7 +39,7 @@ pub fn link_edits(
     skip: &BTreeSet<String>,
 ) -> BTreeMap<String, Vec<Edit>> {
     let mut edits: BTreeMap<String, Vec<Edit>> = BTreeMap::new();
-    for note in index.markdown.values().filter(|n| n.kind != Kind::Source && !skip.contains(&n.path)) {
+    for note in index.notes().filter(|n| n.kind != Kind::Source && !skip.contains(&n.path)) {
         for link in &note.links {
             if let Some(new_raw) = rewrite(index, note, link, targets) {
                 edits.entry(note.path.clone()).or_default().push(Edit::replace(link.target_range.clone(), new_raw));
@@ -78,7 +78,7 @@ fn rewrite(index: &Index, note: &Note, link: &Link, targets: &BTreeMap<String, S
 /// Applies per-file edits into `change.writes`.
 pub fn add_writes(index: &Index, change: &mut Change, edits: BTreeMap<String, Vec<Edit>>) -> Result<(), Refusal> {
     for (path, file_edits) in edits {
-        let note = &index.markdown[&path];
+        let note = index.parsed(&path).expect("edits are only made to readable notes");
         let count = file_edits.len();
         let text =
             splice::apply(&note.text, file_edits).map_err(|e| Refusal::internal("change.edit", e.to_string()))?;
@@ -101,22 +101,19 @@ pub fn verify(
     let mut files: Vec<String> =
         index.files.iter().filter(|f| !change.deleted.contains(*f)).map(|f| change.final_path(f)).collect();
     files.sort();
-    let contents: BTreeMap<String, Vec<u8>> = index
-        .markdown
-        .values()
+    let contents: BTreeMap<String, String> = index
+        .notes()
         .filter(|n| !change.deleted.contains(&n.path))
         .map(|n| {
             let p = change.final_path(&n.path);
             let text = change.writes.get(&p).cloned().unwrap_or_else(|| n.text.clone());
-            (p, text.into_bytes())
+            (p, text)
         })
         .collect();
-    let after = index::build(files, |p| {
-        contents.get(p).cloned().ok_or_else(|| std::io::Error::other("not a readable note before the change"))
-    });
-    for note in index.markdown.values().filter(|n| n.kind != Kind::Source && !change.deleted.contains(&n.path)) {
+    let after = index::build(files, |p| contents[p].clone());
+    for note in index.notes().filter(|n| n.kind != Kind::Source && !change.deleted.contains(&n.path)) {
         let new_path = change.final_path(&note.path);
-        let Some(new_note) = after.markdown.get(&new_path) else {
+        let Some(new_note) = after.parsed(&new_path) else {
             return Err(Refusal::refused(code, format!("{new_path} would no longer parse as a note")));
         };
         if note.fm_error.is_none() && new_note.fm_error.is_some() {

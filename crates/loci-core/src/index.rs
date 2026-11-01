@@ -7,14 +7,6 @@ use crate::envelope::Refusal;
 use crate::parse::{self, Link, LinkForm, Note};
 use crate::vault::{self, Kind};
 
-/// A file that could not be read as a note.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FileIssue {
-    NotUtf8,
-    /// Reading or listing failed, or the name is not UTF-8; the reason.
-    Unreadable(String),
-}
-
 /// A note argument as a note path: `.md` added when missing.
 fn note_path(arg: &str) -> String {
     if arg.ends_with(".md") { arg.to_string() } else { format!("{arg}.md") }
@@ -28,8 +20,6 @@ pub enum ConceptLookup {
     Ambiguous(Vec<String>),
     /// The argument names a note that is not a concept: its path.
     NotConcept(String),
-    /// The argument names a markdown file that cannot be read: its path and the reason.
-    Unreadable(String, String),
 }
 
 impl ConceptLookup {
@@ -39,9 +29,6 @@ impl ConceptLookup {
         match self {
             ConceptLookup::Unknown => Refusal::refused(unknown_code, format!("no note named `{arg}`")),
             ConceptLookup::NotConcept(path) => Refusal::refused(unknown_code, format!("`{path}` is not a concept")),
-            ConceptLookup::Unreadable(path, why) => {
-                Refusal::refused(unknown_code, format!("`{path}` cannot be read: {why}"))
-            }
             ConceptLookup::Ambiguous(paths) => Refusal::refused(
                 "concept.ambiguous",
                 format!("`{arg}` names several concepts ({}); name one by path", paths.join(", ")),
@@ -54,10 +41,8 @@ impl ConceptLookup {
 pub struct Index {
     /// Every file core reads, sorted.
     pub files: Vec<String>,
-    /// Every markdown file core reads, parsed, by path: concepts, area files, views,
-    /// journal entries, rule files, markdown sources and inbox drafts.
-    pub markdown: BTreeMap<String, Note>,
-    pub issues: BTreeMap<String, FileIssue>,
+    /// Every markdown file core reads, parsed, by path.
+    markdown: BTreeMap<String, Note>,
     /// Lowercased concept slug -> concept paths.
     pub slugs: BTreeMap<String, Vec<String>>,
     /// Link targets by path: notes without `.md`, other files with their extension.
@@ -91,44 +76,22 @@ pub enum LinkError {
 /// An index of in-memory files: `.md` texts are parsed, other contents are unused.
 pub fn from_texts(files: &[(impl AsRef<str>, impl AsRef<str>)]) -> Index {
     let map: BTreeMap<&str, &str> = files.iter().map(|(p, t)| (p.as_ref(), t.as_ref())).collect();
-    build(map.keys().map(|p| p.to_string()).collect(), |p| {
-        map.get(p).map(|t| t.as_bytes().to_vec()).ok_or_else(|| std::io::Error::other("not in memory"))
-    })
+    build(map.keys().map(|p| p.to_string()).collect(), |p| map[p].to_string())
 }
 
-/// Indexes `files` (sorted vault paths), reading each `.md` file with `read`.
-pub fn build(files: Vec<String>, read: impl Fn(&str) -> std::io::Result<Vec<u8>>) -> Index {
-    let mut index = Index {
-        files: files.clone(),
-        markdown: BTreeMap::new(),
-        issues: BTreeMap::new(),
-        slugs: BTreeMap::new(),
-        targets: BTreeSet::new(),
-    };
+/// Indexes `files` (sorted vault paths), taking each `.md` file's text from `text`.
+pub fn build(files: Vec<String>, text: impl Fn(&str) -> String) -> Index {
+    let mut index =
+        Index { files: files.clone(), markdown: BTreeMap::new(), slugs: BTreeMap::new(), targets: BTreeSet::new() };
     for path in files {
         let kind = vault::kind_of(&path).expect("the index holds only paths core reads");
         if let Some(stripped) = path.strip_suffix(".md") {
             index.targets.insert(stripped.to_string());
-            let bytes = match read(&path) {
-                Ok(b) => b,
-                Err(e) => {
-                    index.issues.insert(path, FileIssue::Unreadable(e.to_string()));
-                    continue;
-                }
-            };
-            match String::from_utf8(bytes) {
-                Ok(text) => {
-                    let note = parse::parse(&path, kind, text);
-                    if kind == Kind::Concept {
-                        let slug = vault::stem(&path).to_lowercase();
-                        index.slugs.entry(slug).or_default().push(path.clone());
-                    }
-                    index.markdown.insert(path, note);
-                }
-                Err(_) => {
-                    index.issues.insert(path, FileIssue::NotUtf8);
-                }
+            if kind == Kind::Concept {
+                index.slugs.entry(vault::stem(&path).to_lowercase()).or_default().push(path.clone());
             }
+            let note = parse::parse(&path, kind, text(&path));
+            index.markdown.insert(path, note);
         } else {
             index.targets.insert(path);
         }
@@ -137,36 +100,30 @@ pub fn build(files: Vec<String>, read: impl Fn(&str) -> std::io::Result<Vec<u8>>
 }
 
 impl Index {
+    /// The index of the files listed when `vault` was opened.
     pub fn open(vault: &vault::Vault) -> Self {
-        let root = vault.root.clone();
         let listing = vault.listing();
-        let mut index = build(listing.files.clone(), |p| std::fs::read(root.join(p)));
-        for (path, reason) in &listing.unreadable {
-            index.issues.insert(path.clone(), FileIssue::Unreadable(reason.clone()));
-        }
-        index
+        build(listing.files.clone(), |p| listing.markdown[p].clone())
     }
 
     /// The note a note argument names (m0 §8): a vault path to any note (`.md`
     /// optional), else a concept slug (case-insensitive). A slug shared by several
     /// concepts is ambiguous. `arg` is a [`vault::path_arg`] result.
     pub fn note(&self, arg: &str) -> Result<&Note, ConceptLookup> {
-        let path = note_path(arg);
-        if let Some(n) = self.markdown.get(&path) {
-            return Ok(n);
+        if let Some(note) = self.markdown.get(&note_path(arg)) {
+            return Ok(note);
         }
-        if let Some(issue) = self.issues.get(&path) {
-            let why = match issue {
-                FileIssue::NotUtf8 => "it is not valid UTF-8".to_string(),
-                FileIssue::Unreadable(reason) => reason.clone(),
-            };
-            return Err(ConceptLookup::Unreadable(path, why));
-        }
+        // No markdown file at that path: the argument may be a concept slug.
         match self.slugs.get(&arg.to_lowercase()).map(Vec::as_slice) {
             None | Some([]) => Err(ConceptLookup::Unknown),
-            Some([p]) => Ok(self.markdown.get(p).expect("slugs are taken from parsed notes")),
+            Some([p]) => Ok(&self.markdown[p]),
             Some(ps) => Err(ConceptLookup::Ambiguous(ps.to_vec())),
         }
+    }
+
+    /// The parsed note at vault path `path`, if there is a markdown file there.
+    pub fn parsed(&self, path: &str) -> Option<&Note> {
+        self.markdown.get(path)
     }
 
     /// The concept a note argument names: [`Index::note`], refused when that note is
@@ -192,10 +149,10 @@ impl Index {
     /// Area names (m0 §6.3): the folders `concepts/<area>/` that hold a concept or an
     /// `AREA.md`.
     pub fn areas(&self) -> BTreeSet<&str> {
-        self.markdown
-            .values()
-            .filter(|n| matches!(n.kind, Kind::Concept | Kind::Area))
-            .filter_map(|n| vault::area_of(&n.path))
+        self.files
+            .iter()
+            .filter(|f| matches!(vault::kind_of(f), Some(Kind::Concept | Kind::Area)))
+            .filter_map(|f| vault::area_of(f))
             .collect()
     }
 
@@ -252,6 +209,13 @@ impl Index {
         self.slugs.get(&slug.to_lowercase()).is_some_and(|ps| ps.iter().any(|p| !moving(p)))
     }
 
+    /// Every markdown note (concepts, area files, views, journal entries, rule files,
+    /// markdown sources, inbox drafts), by path.
+    pub fn notes(&self) -> impl Iterator<Item = &Note> {
+        self.markdown.values()
+    }
+
+    /// Every concept, by path.
     pub fn concepts(&self) -> impl Iterator<Item = &Note> {
         self.markdown.values().filter(|n| n.kind == Kind::Concept)
     }
@@ -299,10 +263,8 @@ impl Index {
     }
 
     /// Checks a `#fragment` against the headings or block ids of note `path` (§5.4).
-    pub fn check_fragment(&self, path: &str, frag: &str) -> Result<(), LinkError> {
-        // An unreadable note is reported on its own path (`file.*`); its fragments
-        // cannot be checked.
-        let Some(note) = self.markdown.get(path) else { return Ok(()) };
+    fn check_fragment(&self, path: &str, frag: &str) -> Result<(), LinkError> {
+        let note = &self.markdown[path];
         if let Some(id) = frag.strip_prefix('^') {
             if note.block_ids.iter().any(|b| b.id == id) {
                 return Ok(());
@@ -327,13 +289,6 @@ mod tests {
         let n = i.markdown[path].clone();
         let l = n.links[0].clone();
         (n, l)
-    }
-
-    #[test]
-    fn an_unreadable_note_is_named_as_unreadable() {
-        let i = build(vec!["views/bad.md".to_string()], |_| Ok(vec![0xff]));
-        let e = i.note("views/bad").unwrap_err();
-        assert_eq!(e, ConceptLookup::Unreadable("views/bad.md".into(), "it is not valid UTF-8".into()));
     }
 
     #[test]

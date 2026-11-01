@@ -1,5 +1,6 @@
 //! The vault model (m0 §3): discovery, file kinds and the working-tree walk.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -201,8 +202,9 @@ impl Vault {
                 ));
             }
         }
-        // loci never reads or writes through a symlink (m0 §3). Checked here, once, so
-        // that no command has to: a vault holding one is refused before anything is read.
+        // loci never reads or writes through a symlink, and reads every file it lists
+        // (m0 §3). Checked here, once, so that no command has to: a vault breaking either
+        // is refused before any command runs.
         let listing = walk(&root)?;
         let invalid = |m: String| Refusal::refused("config.invalid", m);
         let text = std::fs::read_to_string(root.join(config::FILE)).map_err(|e| invalid(e.to_string()))?;
@@ -226,9 +228,8 @@ impl Vault {
 pub struct Walk {
     /// Vault-relative `/` paths, sorted by bytes.
     pub files: Vec<String>,
-    /// Paths that could not be listed or have a non-UTF-8 name, with the reason (`.`
-    /// for the root).
-    pub unreadable: Vec<(String, String)>,
+    /// The text of every `.md` file in `files`, by path.
+    pub markdown: BTreeMap<String, String>,
 }
 
 /// The first symlink on the way to the listed path `raw` (a folder above it, or the
@@ -272,6 +273,15 @@ pub fn path_problem(path: &str) -> Option<(&'static str, String)> {
     }
 }
 
+/// Why `path`, which is not a concept path, cannot hold a concept: `new` and `mv` refuse
+/// with it (`new.no-area`, `mv.no-area`).
+pub fn why_not_concept(path: &str) -> &'static str {
+    match kind_of(path) {
+        Some(Kind::Area) => "would be the area file, not a concept",
+        _ => "is not inside an area",
+    }
+}
+
 /// Whether core reads vault path `rel` (it has a [`kind_of`]).
 pub fn is_core_path(rel: &str) -> bool {
     kind_of(rel).is_some()
@@ -283,15 +293,20 @@ pub fn is_regular_file(root: &Path, rel: &str) -> bool {
 }
 
 /// The files git sees (tracked, or untracked and not ignored: m0 §3) that exist on disk
-/// and that core reads. Git decides membership, as it does for every other command.
-/// Refuses a vault in which any listed path is, or lies under, a symlink
-/// (`file.symlink`), and a failed listing (`git`): loci never runs on a guess.
+/// and that core reads, with the text of each `.md` file. Git decides membership, as it
+/// does for every other command. Refuses a failed listing (`git`), a vault in which any
+/// listed path is, or lies under, a symlink (`file.symlink`), and one in which any file
+/// core reads cannot be listed, read, or decoded as UTF-8, name included
+/// (`file.unreadable`): loci never runs on a guess.
 fn walk(root: &Path) -> Result<Walk, Refusal> {
+    use std::os::unix::ffi::OsStrExt;
     let (paths, warnings) = crate::git::ls_files(root, None).map_err(Refusal::git)?;
     let mut out = Walk::default();
+    let mut unreadable = vec![];
     // Git skips what it cannot read (a directory without permission) with a warning.
+    // Wherever the folder is, `plugins/` included, loci cannot tell what it missed.
     if !warnings.is_empty() {
-        out.unreadable.push((".".to_string(), warnings));
+        unreadable.push(format!("git could not list everything ({})", warnings.trim()));
     }
     let mut symlinks = vec![];
     for raw in paths {
@@ -300,23 +315,40 @@ fn walk(root: &Path) -> Result<Walk, Refusal> {
             symlinks.push(link);
             continue;
         }
-        let Ok(rel) = String::from_utf8(raw.clone()) else {
-            // Reported only if core would read it and it is on disk, like any listed path.
-            // The prefixes `is_core_path` tests are ASCII, so the lossy form decides it.
-            let lossy = String::from_utf8_lossy(&raw).into_owned();
-            let on_disk = {
-                use std::os::unix::ffi::OsStrExt;
-                std::fs::symlink_metadata(root.join(std::ffi::OsStr::from_bytes(&raw))).is_ok()
-            };
-            if is_core_path(&lossy) && on_disk {
-                out.unreadable.push((lossy, "file name is not UTF-8".to_string()));
+        // The prefixes `is_core_path` tests are ASCII, so a lossy name decides it.
+        let name = String::from_utf8_lossy(&raw).into_owned();
+        if !is_core_path(&name) {
+            continue;
+        }
+        let meta = match std::fs::symlink_metadata(root.join(std::ffi::OsStr::from_bytes(&raw))) {
+            Ok(m) => m,
+            // A tracked file gone from disk, or whose folder became a file.
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => continue,
+            Err(e) => {
+                unreadable.push(format!("`{name}` cannot be read: {e}"));
+                continue;
             }
+        };
+        if !meta.is_file() {
+            continue; // A submodule.
+        }
+        let Ok(rel) = String::from_utf8(raw) else {
+            unreadable.push(format!("`{name}` has a name that is not UTF-8"));
             continue;
         };
-        if is_core_path(&rel) && is_regular_file(root, &rel) {
-            out.files.push(rel);
+        if rel.ends_with(".md") {
+            match std::fs::read(root.join(&rel)).map(String::from_utf8) {
+                Ok(Ok(text)) => {
+                    out.markdown.insert(rel.clone(), text);
+                }
+                Ok(Err(_)) => unreadable.push(format!("`{rel}` is not valid UTF-8")),
+                Err(e) => unreadable.push(format!("`{rel}` cannot be read: {e}")),
+            }
+        } else if let Err(e) = std::fs::File::open(root.join(&rel)) {
+            // Opened, not read: git could not hash it either, and would call it changed.
+            unreadable.push(format!("`{rel}` cannot be read: {e}"));
         }
-        // Otherwise a path core never reads, a tracked file gone from disk, or a submodule.
+        out.files.push(rel);
     }
     if !symlinks.is_empty() {
         symlinks.sort();
@@ -330,10 +362,20 @@ fn walk(root: &Path) -> Result<Walk, Refusal> {
             ),
         ));
     }
+    if !unreadable.is_empty() {
+        unreadable.sort();
+        unreadable.dedup();
+        return Err(Refusal::refused(
+            "file.unreadable",
+            format!(
+                "every file loci reads, and every folder git lists, must be readable; fix each of these: {}",
+                unreadable.join("; ")
+            ),
+        ));
+    }
     out.files.sort();
     // An unmerged file is listed once per conflict stage.
     out.files.dedup();
-    out.unreadable.sort();
     Ok(out)
 }
 

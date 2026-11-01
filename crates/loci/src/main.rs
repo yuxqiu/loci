@@ -59,6 +59,8 @@ enum Cmd {
         query: String,
         #[arg(short, default_value_t = 10)]
         k: usize,
+        /// Kinds to search, replacing the default (concept, area, view, journal);
+        /// repeatable.
         #[arg(long = "kind", value_enum)]
         kinds: Vec<commands::find::KindArg>,
     },

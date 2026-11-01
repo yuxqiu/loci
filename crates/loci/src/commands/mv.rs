@@ -20,8 +20,7 @@ pub fn run(ctx: &Ctx, from: &str, to: &str) -> Result<Report, Refusal> {
     let exists = |p: &str| vault.abs(p).symlink_metadata().is_ok();
     let ignored = |p: &str| git::is_ignored(&vault.root, p).map_err(Refusal::git);
     let plan = mv::plan(&index, &from, &to, ignored, exists)?;
-    // A folder moves whole: refuse to leave behind what loci does not move (a file with
-    // a non-UTF-8 name, a folder git cannot open).
+    // A folder moves whole: refuse to leave behind what loci does not move (a submodule).
     let left = if plan.moves.contains_key(&from) { vec![] } else { left_behind(&vault, &from, &plan)? };
     if !left.is_empty() {
         return Err(Refusal::refused(
@@ -48,18 +47,14 @@ pub fn run(ctx: &Ctx, from: &str, to: &str) -> Result<Report, Refusal> {
 
 /// The paths under folder `from` that git lists but `plan` does not move.
 fn left_behind(vault: &Vault, from: &str, plan: &Change) -> Result<Vec<String>, Refusal> {
-    let (listed, warnings) = git::ls_files(&vault.root, Some(from)).map_err(Refusal::git)?;
-    if !warnings.is_empty() {
-        return Err(Refusal::refused("mv.from", format!("git could not list every file under `{from}`: {warnings}")));
-    }
+    let (listed, _) = git::ls_files(&vault.root, Some(from)).map_err(Refusal::git)?;
     let left = listed
         .iter()
-        .filter(|raw| {
-            // Checked on the raw name: a non-UTF-8 name has no exact `String` form.
-            let on_disk = vault.root.join(std::ffi::OsStr::from_bytes(raw)).symlink_metadata().is_ok();
-            on_disk && !plan.moves.contains_key(String::from_utf8_lossy(raw).as_ref())
-        })
+        // On the raw name: a submodule or a tracked path gone from disk may have a
+        // non-UTF-8 name, which the vault check skips.
+        .filter(|raw| vault.root.join(std::ffi::OsStr::from_bytes(raw)).symlink_metadata().is_ok())
         .map(|raw| String::from_utf8_lossy(raw).into_owned())
+        .filter(|p| !plan.moves.contains_key(p))
         .collect();
     Ok(left)
 }

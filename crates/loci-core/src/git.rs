@@ -212,8 +212,8 @@ pub fn status(root: &Path) -> Result<Changes, String> {
 }
 
 /// The NUL-separated records of `out` that are valid UTF-8. A non-UTF-8 path is not a
-/// vault file (the walk reports it as `file.unreadable`), so it is skipped rather than
-/// mangled into a path that does not exist.
+/// vault file (under the folders core reads, the vault is refused as `file.unreadable`),
+/// so it is skipped rather than mangled into a path that does not exist.
 fn utf8_paths(out: &[u8]) -> impl Iterator<Item = &str> {
     out.split(|b| *b == 0).filter(|r| !r.is_empty()).filter_map(|r| std::str::from_utf8(r).ok())
 }

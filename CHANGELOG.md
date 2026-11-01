@@ -46,6 +46,9 @@ them under its version.
   where it came from is not recorded. Lint
   reports a source that differs from its committed version (`sources.changed`).
 - Concepts cite evidence with links in their text, next to the claim.
+- `loci find` searches the formed notes (concepts, areas, views, journal) by default;
+  sources, inbox drafts, rule files and markdown outside the known folders only with
+  `--kind` (`source`, `inbox`, `rules`, `unknown`).
 - `loci done` reports a failure to delete old records as `done.prune`.
 - A source's extension is lowercase letters and digits with at least one letter;
   `loci mv` keeps a source's extension and refuses to move a source you have edited
@@ -61,8 +64,15 @@ them under its version.
   source, to move the whole folder when it is the source's own, and otherwise to use
   the existing spelling.
 - Clearer refusals: `mv` names a destination that would become an area's
-  `AREA.md`, refuses a note losing its `.md` extension, and an unreadable note
-  argument says why it cannot be read instead of "no note named".
+  `AREA.md`, and refuses a note losing its `.md` extension or another file gaining
+  one.
+- Every file loci reads must be readable: a vault holding a `.md` file that is not
+  valid UTF-8, a file or folder loci cannot read, or a file whose name is not UTF-8
+  is refused by every command with `file.unreadable`, naming each, like a symlink.
+  Before, each command skipped such a file and could mistake it for a missing one
+  (a duplicate slug through `loci new`, links left unrewritten by `loci mv`).
+  A folder git cannot list refuses the vault wherever it is, `plugins/` included; a
+  tracked file gone from disk does not.
 - When git cannot list the vault (for example a corrupt index), every command,
   `loci status` included, stops with `git` (exit 3) instead of running on an empty
   file list.
@@ -81,6 +91,8 @@ them under its version.
 ### Removed
 
 - The home-manager module, and the skill checks in `loci status`.
+- Lint's `file.encoding`, and `file.unreadable` as a lint rule: a file loci cannot
+  read now refuses the vault (`file.unreadable`).
 - `purpose`, `grader`, `verdicts` and `item` from `loci learn log` input and
   review-log lines: a line is now the card or concept, the grade and the time.
 - `loci fetch`, and with it loci's only network access (the `ureq` dependency).

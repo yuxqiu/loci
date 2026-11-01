@@ -56,7 +56,7 @@ impl From<&Note> for SearchDoc {
 
 /// The search documents for every note core reads.
 pub fn docs(index: &VaultIndex) -> Vec<SearchDoc> {
-    index.markdown.values().map(SearchDoc::from).collect()
+    index.notes().map(SearchDoc::from).collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -71,11 +71,16 @@ pub struct Hit {
     pub snippet: Option<String>,
 }
 
-/// Returns the top `k` of `docs` for `query`. An empty `kinds` keeps every kind.
+/// The kinds searched by default: the formed notes. Sources, inbox drafts and rule
+/// files are searched only when asked for by kind (m0 §9.3).
+pub const NOTE_KINDS: [Kind; 4] = [Kind::Concept, Kind::Area, Kind::View, Kind::Journal];
+
+/// Returns the top `k` of `docs` for `query`, among `kinds` ([`NOTE_KINDS`] when empty).
 /// A tantivy failure is `search.index` (exit 3).
 pub fn search(docs: &[SearchDoc], query: &str, k: usize, kinds: &[Kind]) -> Result<Vec<Hit>, Refusal> {
     let failed = |e: tantivy::TantivyError| Refusal::internal("search.index", e.to_string());
-    let docs: Vec<&SearchDoc> = docs.iter().filter(|d| kinds.is_empty() || kinds.contains(&d.kind)).collect();
+    let kinds = if kinds.is_empty() { &NOTE_KINDS[..] } else { kinds };
+    let docs: Vec<&SearchDoc> = docs.iter().filter(|d| kinds.contains(&d.kind)).collect();
 
     let mut sb = Schema::builder();
     let text = TextOptions::default().set_indexing_options(
@@ -237,6 +242,12 @@ mod tests {
         let kinds = [Kind::Journal, Kind::Inbox];
         let out = search(&docs, "graph", 10, &kinds).unwrap();
         assert_eq!(paths(&out), ["inbox/g.md", "journal/g.md"]);
+        let stray = [doc("misc/g.md", Kind::Unknown, "Graph", "")];
+        assert_eq!(paths(&search(&stray, "graph", 10, &[Kind::Unknown]).unwrap()), ["misc/g.md"]);
+        assert!(search(&stray, "graph", 10, &[]).unwrap().is_empty(), "not by default");
+        // By default only formed notes: not the inbox draft.
+        let out = search(&docs, "graph", 10, &[]).unwrap();
+        assert_eq!(paths(&out), ["concepts/g.md", "journal/g.md"]);
     }
 
     #[test]

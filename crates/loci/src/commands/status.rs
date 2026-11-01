@@ -3,7 +3,7 @@
 use loci_core::digest;
 use loci_core::envelope::{Diagnostic, Outcome, Refusal, Report};
 use loci_core::git;
-use loci_core::index::{FileIssue, Index};
+use loci_core::index::Index;
 use serde_json::json;
 
 use super::{Ctx, plugins};
@@ -103,19 +103,14 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     let mut rules = serde_json::Map::new();
     for name in ["RULES.md", "STYLE.md"] {
         human.push('\n');
-        match index.markdown.get(name) {
+        match index.parsed(name) {
             Some(note) => {
                 human.push_str(&note.text);
                 rules.insert(name.to_string(), json!(note.text));
             }
             None => {
-                let why = match index.issues.get(name) {
-                    Some(FileIssue::NotUtf8) => "is not valid UTF-8".to_string(),
-                    Some(FileIssue::Unreadable(reason)) => format!("cannot be read: {reason}"),
-                    None => "is missing".to_string(),
-                };
-                human.push_str(&format!("`{name}` {why}\n"));
-                diags.push(Diagnostic::warning("status.rules", format!("`{name}` {why}")).at_path(name));
+                human.push_str(&format!("`{name}` is missing\n"));
+                diags.push(Diagnostic::warning("status.rules", format!("`{name}` is missing")).at_path(name));
                 rules.insert(name.to_string(), serde_json::Value::Null);
             }
         }

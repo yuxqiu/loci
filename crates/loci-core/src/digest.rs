@@ -76,16 +76,16 @@ pub fn areas(index: &Index) -> Vec<Area> {
 
 pub fn area(index: &Index, name: &str) -> Area {
     let area_md = format!("concepts/{name}/AREA.md");
-    let parts = index.markdown.get(&area_md).and_then(area_parts);
-    let heading_title = index.markdown.get(&area_md).and_then(|n| n.h1()).map(str::to_string);
+    let parts = index.parsed(&area_md).and_then(area_parts);
+    let heading_title = index.parsed(&area_md).and_then(|n| n.h1()).map(str::to_string);
     let title = parts.as_ref().map(|(t, _)| t.clone()).or(heading_title).unwrap_or_else(|| name.to_string());
     let prefix = format!("concepts/{name}/");
     let mut groups: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
-    for note in index.concepts() {
-        let Some(rest) = note.path.strip_prefix(&prefix) else { continue };
+    for n in index.concepts() {
+        let Some(rest) = n.path.strip_prefix(&prefix) else { continue };
         let dir = rest.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
-        let slug = vault::stem(&note.path).to_string();
-        groups.entry(dir).or_default().push(Entry { slug, path: note.path.clone(), digest: valid_digest(note) });
+        let slug = vault::stem(&n.path).to_string();
+        groups.entry(dir).or_default().push(Entry { slug, path: n.path.clone(), digest: valid_digest(n) });
     }
     let mut groups: Vec<_> = groups.into_iter().collect();
     groups.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));

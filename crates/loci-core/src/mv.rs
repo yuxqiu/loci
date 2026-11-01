@@ -49,20 +49,22 @@ pub fn plan(
             format!("`{new}` is not a `sources/<type>/<slug>.<ext>` file with the same extension"),
         ));
     }
-    // A note keeps its `.md`: without it, it would no longer be read as a note.
-    if let Some((_, new)) = map.iter().find(|(old, new)| old.ends_with(".md") && !new.ends_with(".md")) {
-        return Err(Refusal::refused("mv.to", format!("`{new}`: a note keeps the `.md` extension")));
+    // A file stays what it is: a note keeps its `.md`, and another file does not gain
+    // one (it would be read as a note that is not one).
+    if let Some((old, new)) = map.iter().find(|(old, new)| old.ends_with(".md") != new.ends_with(".md")) {
+        let what = if old.ends_with(".md") {
+            "a note keeps the `.md` extension"
+        } else {
+            "only a note has the `.md` extension"
+        };
+        return Err(Refusal::refused("mv.to", format!("`{new}`: {what}")));
     }
     // A concept stays a concept (as `new` checks before the path rules).
     if let Some((_, new)) = map
         .iter()
         .find(|(old, new)| vault::kind_of(old) == Some(Kind::Concept) && vault::kind_of(new) != Some(Kind::Concept))
     {
-        let why = match vault::kind_of(new) {
-            Some(Kind::Area) => "would become the area file, not a concept",
-            _ => "is not inside an area",
-        };
-        return Err(Refusal::refused("mv.no-area", format!("`{new}` {why}")));
+        return Err(Refusal::refused("mv.no-area", format!("`{new}` {}", vault::why_not_concept(new))));
     }
     // Every destination follows the path rules lint checks (`vault::path_problem`),
     // first, so the case advice below never leads to a name lint rejects.
@@ -203,13 +205,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_concept_moves_unchanged() {
-        let i = crate::index::build(vec!["concepts/a/bad.md".to_string()], |_| Ok(vec![0xff]));
-        let p = plan(&i, "concepts/a/bad.md", "concepts/a/good.md", |_| Ok(false), |_| false).unwrap();
-        assert!(p.writes.is_empty());
-    }
-
-    #[test]
     fn collisions_and_refusals() {
         let i = from_texts(&[
             ("concepts/a/x.md", C),
@@ -250,10 +245,14 @@ mod tests {
         assert_eq!(e("concepts/a/x.md", "concepts/x.md"), "mv.no-area", "the `concepts/` root is no area");
         // Messages say what is wrong with the destination.
         let message = |f: &str, t: &str| plan(&i, f, t, |_| Ok(false), |_| false).unwrap_err().error.message;
-        assert!(
-            message("concepts/a/x.md", "concepts/a/AREA.md").ends_with("would become the area file, not a concept")
-        );
+        assert!(message("concepts/a/x.md", "concepts/a/AREA.md").ends_with("would be the area file, not a concept"));
         assert_eq!(e("views/v.md", "views/w"), "mv.to");
+        let pic = from_texts(&[("views/fig.png", ""), ("views/v.md", "[[views/fig.png]]\n")]);
+        let pe = plan(&pic, "views/fig.png", "views/fig.md", |_| Ok(false), |_| false).unwrap_err();
+        assert_eq!(
+            (pe.code(), pe.error.message.as_str()),
+            ("mv.to", "`views/fig.md`: only a note has the `.md` extension")
+        );
         assert!(message("views/v.md", "views/w").ends_with("a note keeps the `.md` extension"));
         let folder = from_texts(&[("views/D/x.md", "# X\n"), ("views/D/y.md", "# Y\n")]);
         let m = plan(&folder, "views/D/x.md", "views/d/x.md", |_| Ok(false), |_| false).unwrap_err().error.message;

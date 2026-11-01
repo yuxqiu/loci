@@ -190,7 +190,7 @@ fn note_links<'a>(index: &Index, note: &'a Note, range: &Range<usize>) -> Vec<(&
 
 pub fn export(index: &Index, root: &str, depth: usize) -> Export {
     // 1. Collect: each note once, at its first appearance, breadth-first up to `depth`.
-    let mut units = vec![Unit::root(&index.markdown[root])];
+    let mut units = vec![Unit::root(index.parsed(root).expect("the command resolved `root` to a readable note"))];
     let mut unit_of: BTreeMap<&str, usize> = BTreeMap::from([(root, 0)]);
     let mut queue = VecDeque::from([(0usize, 0usize)]);
     while let Some((i, d)) = queue.pop_front() {
@@ -201,12 +201,13 @@ pub fn export(index: &Index, root: &str, depth: usize) -> Export {
         let mut children = vec![];
         for (link, resolved) in note_links(index, parent.note, &parent.range) {
             let Resolved::Note(p) = resolved else { continue };
-            let Some((path, note)) = index.markdown.get_key_value(&p) else { continue };
-            if unit_of.contains_key(path.as_str()) || children.iter().any(|(q, _): &(&str, Unit)| *q == path) {
+            let note = index.parsed(&p).expect("a resolved note");
+            let path = note.path.as_str();
+            if unit_of.contains_key(path) || children.iter().any(|(q, _): &(&str, Unit)| *q == path) {
                 continue;
             }
             let level = (parent.level_at(link.range.start) + 1).min(6);
-            children.push((path.as_str(), Unit::child(note, &Part::of(link), level)));
+            children.push((path, Unit::child(note, &Part::of(link), level)));
         }
         for (path, unit) in children {
             unit_of.insert(path, units.len());
@@ -242,14 +243,9 @@ pub fn export(index: &Index, root: &str, depth: usize) -> Export {
                 }
                 Resolved::File(_) => label.unwrap_or_else(|| link.target.clone()),
                 Resolved::Note(p) => {
-                    let target = index.markdown.get(&p);
+                    let target = index.parsed(&p).expect("a resolved note");
                     let heading = link.fragment.as_deref().filter(|f| !f.starts_with('^'));
-                    let default = match (heading, target) {
-                        (Some(f), _) => f.to_string(),
-                        (None, Some(t)) => t.title().to_string(),
-                        (None, None) => link.target.clone(),
-                    };
-                    let text = label.unwrap_or(default);
+                    let text = label.unwrap_or_else(|| heading.unwrap_or(target.title()).to_string());
                     match unit_of.get(p.as_str()) {
                         Some(&j) => {
                             let a = &anchors[j];
@@ -259,7 +255,7 @@ pub fn export(index: &Index, root: &str, depth: usize) -> Export {
                             }
                         }
                         None => {
-                            if target.and_then(valid_digest).is_some() && !out.glossary.contains(&p) {
+                            if valid_digest(target).is_some() && !out.glossary.contains(&p) {
                                 out.glossary.push(p.clone());
                             }
                             text
@@ -284,7 +280,7 @@ pub fn export(index: &Index, root: &str, depth: usize) -> Export {
     if !out.glossary.is_empty() {
         doc.push_str(if doc.ends_with('\n') { "\n## Glossary\n\n" } else { "\n\n## Glossary\n\n" });
         for p in &out.glossary {
-            let n = &index.markdown[p];
+            let n = index.parsed(p).expect("the glossary holds notes");
             let digest = valid_digest(n).expect("only notes with a valid digest are in the glossary");
             doc.push_str(&format!("**{}**: {digest}\n\n", n.title()));
         }

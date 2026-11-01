@@ -473,9 +473,10 @@ Implementation:
 
 ## 8. Search
 
-- **Agent:** `loci digest` (two levels: root and area), `loci find` (BM25 over the vault's
-  markdown) and grep. Sources such as PDFs are not searched; the notes written from
-  them are. Skills depend only on `loci find --json`, so the
+- **Agent:** `loci digest` (two levels: root and area), `loci find` (BM25 over the formed
+  notes: concepts, areas, views, journal entries) and grep. Sources and inbox drafts
+  are searched only when asked for by kind; the notes written from them are what
+  `find` returns. Skills depend only on `loci find --json`, so the
   engine can be replaced without changing them.
 - **User:** hister indexes the vault directly through its `indexer.directories`
   setting. loci reads nothing from hister.

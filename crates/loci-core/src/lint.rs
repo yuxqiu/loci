@@ -9,7 +9,7 @@ use crate::config::Budgets;
 use crate::digest;
 use crate::envelope::{Diagnostic, sort_diagnostics};
 use crate::git;
-use crate::index::{FileIssue, Index, LinkError};
+use crate::index::{Index, LinkError};
 use crate::parse::{FmError, FmValue, Note, TopBlock, prereq_item};
 use crate::vault::{self, Kind};
 
@@ -27,7 +27,7 @@ impl Lint<'_> {
     pub fn run(&self) -> Vec<Diagnostic> {
         let mut out = vec![];
         self.files(&mut out);
-        for note in self.index.markdown.values() {
+        for note in self.index.notes() {
             self.note(note, &mut out);
         }
         self.vault_rules(&mut out);
@@ -56,15 +56,6 @@ impl Lint<'_> {
                         .at_path(path),
                     );
                 }
-            }
-        }
-        for (path, issue) in &self.index.issues {
-            match issue {
-                FileIssue::NotUtf8 => {
-                    out.push(Diagnostic::error("file.encoding", "file is not valid UTF-8").at_path(path))
-                }
-                FileIssue::Unreadable(reason) => out
-                    .push(Diagnostic::error("file.unreadable", format!("file cannot be read: {reason}")).at_path(path)),
             }
         }
     }
@@ -266,7 +257,7 @@ impl Lint<'_> {
         // Areas.
         for a in index.areas() {
             let p = format!("concepts/{a}/AREA.md");
-            if !index.markdown.contains_key(&p) {
+            if index.parsed(&p).is_none() {
                 out.push(Diagnostic::error("area.missing", format!("area `{a}` has no AREA.md")).at_path(p));
             }
         }
@@ -435,7 +426,7 @@ fn sources_changed(changes: &git::Changes, out: &mut Vec<Diagnostic>) {
 fn check_material(index: &Index, root: &Path, changes: &git::Changes, out: &mut Vec<Diagnostic>) -> Result<(), String> {
     const CATEGORIES: [&str; 3] = ["math spans", "images", "fenced code blocks"];
     let of = |c: &crate::parse::Counts| [c.math, c.images, c.code];
-    // A vault path that is not UTF-8 holds no parsed material (lint reports it).
+    // A `HEAD` blob that is not UTF-8 holds no parsed material.
     let head = |p: &str| {
         git::show(root, "HEAD", p).map(|b| match String::from_utf8(b) {
             Ok(text) => of(&crate::parse::parse(p, vault::kind_of(p).expect("a vault path"), text).counts),
@@ -462,8 +453,7 @@ fn check_material(index: &Index, root: &Path, changes: &git::Changes, out: &mut 
     let changed = changes.modified.iter().map(|p| (p, true)).chain(new_files);
     let listed = |p: &str| index.files.binary_search_by(|f| f.as_str().cmp(p)).is_ok();
     for (p, in_head) in changed.filter(|(p, _)| p.ends_with(".md") && listed(p)) {
-        // An unreadable or non-UTF-8 note is not in `markdown` (lint reports it): it holds none.
-        let now = index.markdown.get(p).map_or([0; 3], |n| of(&n.counts));
+        let now = of(&index.parsed(p).expect("a listed `.md` file is parsed").counts);
         let before = if in_head { head(p)? } else { [0; 3] };
         for i in 0..3 {
             added[i] += now[i].saturating_sub(before[i]);
@@ -506,7 +496,7 @@ mod tests {
             let d = lint(&files);
             assert!(d.contains(&("concepts/a/y.md".into(), "fm.field-type".into())), "{bad}: {d:?}");
             let index = crate::index::from_texts(&files);
-            assert!(index.markdown["concepts/a/y.md"].links.is_empty(), "{bad} is not a link");
+            assert!(index.parsed("concepts/a/y.md").unwrap().links.is_empty(), "{bad} is not a link");
         }
     }
 
@@ -518,7 +508,7 @@ mod tests {
         let x = |code: &str| d.iter().filter(|(p, c)| p == "concepts/a/x.md" && c == code).count();
         assert_eq!(x("fm.field-type"), 1, "{d:?}");
         let index = crate::index::from_texts(&files);
-        assert!(index.markdown["concepts/a/x.md"].links.is_empty(), "no link from an escaped scalar");
+        assert!(index.parsed("concepts/a/x.md").unwrap().links.is_empty(), "no link from an escaped scalar");
     }
 
     const OK: &str =

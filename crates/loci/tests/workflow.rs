@@ -179,6 +179,10 @@ fn new_refusals() {
         assert_eq!((exit, error_code(&env)), (1, code), "new {path}: {env:#}");
     }
     assert_eq!(v.tree(), before);
+    // Said as `mv` says it: an area file is in an area, but not a concept.
+    let (_, env) = v.run(&["new", "concepts/a/AREA"]);
+    assert_eq!(error_code(&env), "new.no-area");
+    assert!(env["error"]["message"].as_str().unwrap().ends_with("would be the area file, not a concept"), "{env:#}");
     v.write(".gitignore", "concepts/a/secret.md\n");
     v.commit_all("ignore");
     let (exit, env) = v.run(&["new", "concepts/a/secret"]);

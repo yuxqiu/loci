@@ -22,7 +22,7 @@ pub fn plan(index: &Index, from: &str, into: &str) -> Result<Merge, Refusal> {
     let mut edits = relink::link_edits(index, &targets, &[from.clone()].into());
 
     // A prereq of `into` that named `from` would now name `into` itself: remove it.
-    let into_note = &index.markdown[&into];
+    let into_note = index.parsed(&into).expect("`concept` resolved `into` to a readable note");
     let self_prereqs = self_prereqs(index, into_note, &from);
     let mut into_edits = edits.remove(&into).unwrap_or_default();
     into_edits.retain(|e| !self_prereqs.iter().any(|(_, r)| r.contains(&e.range.start)));

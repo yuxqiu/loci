@@ -18,6 +18,8 @@ pub enum KindArg {
     Source,
     Inbox,
     Rules,
+    /// Markdown outside every known folder (`kind.unknown`).
+    Unknown,
 }
 
 impl From<KindArg> for Kind {
@@ -30,6 +32,7 @@ impl From<KindArg> for Kind {
             KindArg::Source => Kind::Source,
             KindArg::Inbox => Kind::Inbox,
             KindArg::Rules => Kind::Rules,
+            KindArg::Unknown => Kind::Unknown,
         }
     }
 }

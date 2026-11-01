@@ -37,7 +37,7 @@ pub fn closure(index: &Index, root: &str, max_depth: Option<usize>) -> Closure {
         if max_depth.is_some_and(|m| d >= m) {
             continue;
         }
-        let (ok, bad) = index.prereqs(&index.markdown[&p]);
+        let (ok, bad) = index.prereqs(index.parsed(&p).expect("closure members are notes"));
         out.unresolved.extend(bad.into_iter().map(|t| (p.clone(), t)));
         for q in &ok {
             if seen.insert(q.clone()) {
@@ -77,12 +77,7 @@ pub fn closure(index: &Index, root: &str, max_depth: Option<usize>) -> Closure {
     }
     out.members = order
         .into_iter()
-        .map(|p| Member {
-            slug: slug(&p),
-            depth: depth[&p],
-            digest: index.markdown.get(&p).and_then(valid_digest),
-            path: p,
-        })
+        .map(|p| Member { slug: slug(&p), depth: depth[&p], digest: index.parsed(&p).and_then(valid_digest), path: p })
         .collect();
     if edges.values().flatten().any(|p| p == root) {
         out.cyclic = true;

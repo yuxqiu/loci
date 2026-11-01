@@ -82,6 +82,8 @@ This vault is a loci knowledge base. These rules apply to every agent working in
 ## Finding things
 
 - `loci digest` prints the index; `loci digest --area <area>` one area.
-- `loci find <query>` searches every note; then read the files you need.
+- `loci find <query>` searches the notes (concepts, areas, views, journal entries);
+  add `--kind source`, `inbox`, `rules` or `unknown` to search those instead. Then
+  read the files you need.
 - `loci skill show` lists the procedures for larger tasks; read one before starting
   such a task.

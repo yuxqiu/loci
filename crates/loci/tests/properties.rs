@@ -166,8 +166,8 @@ proptest! {
         let after = build(&after_files);
         let map: BTreeMap<&str, &str> = plan.moves.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
         let mapped = |p: &str| map.get(p).map_or(p.to_string(), |n| n.to_string());
-        for note in before.markdown.values() {
-            let new_note = &after.markdown[&mapped(&note.path)];
+        for note in before.notes() {
+            let new_note = after.parsed(&mapped(&note.path)).expect("every note survives a move");
             prop_assert_eq!(note.links.len(), new_note.links.len(), "{}", note.path);
             for (old, new) in note.links.iter().zip(&new_note.links) {
                 let Ok(r) = before.resolve(note, old) else { continue };
