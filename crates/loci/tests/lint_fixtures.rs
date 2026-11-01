@@ -24,7 +24,7 @@ fn assert_codes(env: &serde_json::Value, path: &str, expected: &[&str]) {
 /// The diagnostics on `path` with `code` and the source text each one covers.
 fn covered_by(v: &TestVault, env: &serde_json::Value, code: &str, path: &str) -> Vec<String> {
     let text = v.read(path);
-    with_code(env, code).into_iter().filter(|d| d["path"] == path).map(|d| covered(&text, d).to_string()).collect()
+    with_code(env, code).into_iter().filter(|d| path_of(d) == path).map(|d| covered(&text, d).to_string()).collect()
 }
 
 // ---------------------------------------------------------------- names
@@ -43,7 +43,7 @@ fn names() {
     // A view sharing a concept's stem is not a slug duplicate; two concepts are.
     let dups = with_code(&env, "slug.duplicate");
     assert_eq!(dups.len(), 1, "{}", diag_lines(&env));
-    assert_eq!(dups[0]["path"], "concepts/algo/dup.md");
+    assert_eq!(path_of(dups[0]), "concepts/algo/dup.md");
     assert!(dups[0]["message"].as_str().unwrap().contains("concepts/other/dup.md"));
     assert!(on_path(&env, "views/learn/bfs.md").is_empty());
     assert_eq!(env["data"]["errors"], 7);
@@ -67,8 +67,8 @@ fn diagnostics_are_sorted_by_path_offset_code() {
             .iter()
             .map(|d| {
                 (
-                    d["path"].as_str().unwrap_or("").as_bytes().to_vec(),
-                    d["byte_start"].as_i64().unwrap_or(-1),
+                    path_of(d).as_str().unwrap_or("").as_bytes().to_vec(),
+                    span_of(d)["byte_start"].as_i64().unwrap_or(-1),
                     d["code"].as_str().unwrap().to_string(),
                 )
             })
@@ -85,10 +85,10 @@ fn positions_are_exact() {
     let (v, _, env) = lint("cjk");
     let d = with_code(&env, "link.dangling-heading")[0];
     let text = v.read("views/linker.md");
-    let start = d["byte_start"].as_u64().unwrap() as usize;
+    let start = span_of(d)["byte_start"].as_u64().unwrap() as usize;
     let line_start = text[..start].rfind('\n').map_or(0, |i| i + 1);
-    assert_eq!(d["line"], text[..start].matches('\n').count() + 1);
-    assert_eq!(d["col"], text[line_start..start].chars().count() + 1);
+    assert_eq!(span_of(d)["line"], text[..start].matches('\n').count() + 1);
+    assert_eq!(span_of(d)["col"], text[line_start..start].chars().count() + 1);
     // The target range runs from after `[[` to the first `|` or `]]` (§5.1).
     assert_eq!(covered(&text, d), "views/zh#不存在");
 }
@@ -155,7 +155,7 @@ fn block_ids_resolve_and_duplicate() {
     assert_codes(&env, "concepts/a/lists.md", &[]);
     let dup = with_code(&env, "block.id-duplicate");
     assert_eq!(dup.len(), 1, "{}", diag_lines(&env));
-    assert_eq!(dup[0]["path"], "concepts/a/dups.md");
+    assert_eq!(path_of(dup[0]), "concepts/a/dups.md");
     assert_eq!(covered(&v.read("concepts/a/dups.md"), dup[0]).trim(), "^same");
 }
 
@@ -244,7 +244,7 @@ fn cjk_lint() {
     // just over it.
     let size = with_code(&env, "size.note");
     assert_eq!(size.len(), 1, "{}", diag_lines(&env));
-    assert_eq!(size[0]["path"], "concepts/algo/更长.md");
+    assert_eq!(path_of(size[0]), "concepts/algo/更长.md");
     assert_eq!(size[0]["severity"], "warning");
     let msg = size[0]["message"].as_str().unwrap();
     let n: usize = regex::Regex::new(r"is (\d+) characters").unwrap().captures(msg).unwrap()[1].parse().unwrap();
@@ -315,7 +315,7 @@ fn kinds() {
     assert_codes(&env, "inbox/journal/r/entry.md", &[]);
     assert!(with_code(&env, "inbox.root-file").iter().all(|d| d["severity"] == "warning"));
     for d in diags(&env) {
-        let p = d["path"].as_str().unwrap_or("");
+        let p = path_of(d).as_str().unwrap_or("");
         assert!(!p.starts_with("plugins/") && !p.starts_with("secret/") && !p.starts_with(".loci/"), "{d}");
     }
     assert_snapshot!(diag_lines(&env));
@@ -385,6 +385,7 @@ fn area_digest_root_output() {
         "# Index\n\
          \n## Algorithms (concepts/algorithms, 5 concepts)\n\
          \nTechniques for searching, sorting and traversing data.\n\
+         \nSub-folders: graphs (2)\n\
          \n## Broken Area (concepts/broken, 1 concepts)\n\
          \n## missing (concepts/missing, 1 concepts)\n"
     );
@@ -459,7 +460,7 @@ fn sources_changed_after_edit() {
     let (_, env) = v.run(&["lint"]);
     let changed = with_code(&env, "sources.changed");
     assert_eq!(changed.len(), 1, "{}", diag_lines(&env));
-    assert_eq!(changed[0]["path"], "sources/papers/heaps.pdf");
+    assert_eq!(path_of(changed[0]), "sources/papers/heaps.pdf");
     // A stray file under `sources/` is not a source: only `sources.layout` applies.
     v.write("sources/stray.md", "# Stray, edited\n");
     let (_, env) = v.run(&["lint"]);
@@ -552,8 +553,8 @@ fn a_vault_with_a_symlink_is_refused() {
         let (code, env) = v.run(args);
         assert_eq!((code, error_code(&env)), (1, "file.symlink"), "{args:?}: {env:#}");
         let message = env["error"]["message"].as_str().unwrap();
-        for link in ["views/leak.md", "views/synced", "plugins/learn/reviews.jsonl", "views/odd"] {
-            assert!(message.contains(link), "{link}: {message}");
+        for link in ["`views/leak.md`", "`views/synced`", "`plugins/learn/reviews.jsonl`", "`views/odd"] {
+            assert!(message.lines().any(|l| l.trim_start().starts_with(link)), "{link}: {message}");
         }
     }
     std::fs::remove_file(v.root.join("views/leak.md")).unwrap();
@@ -667,10 +668,13 @@ fn an_unreadable_file_refuses_the_vault() {
             "`sources/papers/p.pdf` cannot be read",
             "`views/closed/inner.md` cannot be read",
             "`views/odd\u{fffd}.png` has a name that is not UTF-8",
-            "inbox/shut",
+            "git: warning: could not open directory 'inbox/shut/'",
         ] {
             assert!(message.contains(part), "{part}: {message}");
         }
+        // One problem per line, under the header.
+        assert_eq!(message.lines().count(), 8, "{message}");
+        assert!(message.lines().skip(1).all(|l| l.starts_with("  ")), "{message}");
     }
     assert!(!v.exists("concepts/a/fresh.md"), "nothing written");
 }

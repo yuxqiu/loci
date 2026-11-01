@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use loci_core::envelope::{Outcome, Refusal, Report};
+use loci_core::envelope::{Refusal, Report};
 use loci_core::index::Index;
 use loci_core::search;
 use loci_core::vault::{self, Kind};
@@ -172,7 +172,7 @@ pub fn run(ctx: &Ctx, agent: Option<&str>, k: usize) -> Result<Report, Refusal> 
         "agent": agent_json,
         "results": results,
     });
-    Ok(Report::new(Outcome::ok(data), human))
+    Ok(Report::ok(data, human))
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 //! `loci links` (m1-m4 §5): the links of a note and the links pointing at it.
 
-use loci_core::envelope::{Outcome, Refusal, Report, line_col};
+use loci_core::envelope::{Refusal, Report, line_col};
 use loci_core::index::Index;
 use loci_core::vault;
 use serde_json::json;
@@ -36,5 +36,5 @@ pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
         incoming.push(json!({"path": note.path, "line": line, "form": link.form, "raw": link.raw}));
     }
     let data = json!({"note": path, "outgoing": outgoing, "incoming": incoming});
-    Ok(Report::new(Outcome::ok(data), human))
+    Ok(Report::ok(data, human))
 }

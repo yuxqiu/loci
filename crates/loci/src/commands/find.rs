@@ -1,6 +1,6 @@
 //! `loci find` (m0 §9.3).
 
-use loci_core::envelope::{Outcome, Refusal, Report};
+use loci_core::envelope::{Refusal, Report};
 use loci_core::index::Index;
 use loci_core::search;
 use loci_core::vault::Kind;
@@ -48,5 +48,5 @@ pub fn run(ctx: &Ctx, q: &str, k: usize, kinds: &[Kind]) -> Result<Report, Refus
             _ => format!("{}\n", h.path),
         })
         .collect();
-    Ok(Report::new(Outcome::ok(json!({"query": q, "hits": hits})), human))
+    Ok(Report::ok(json!({"query": q, "hits": hits}), human))
 }

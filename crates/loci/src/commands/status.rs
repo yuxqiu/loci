@@ -1,7 +1,7 @@
 //! `loci status` (m0 §9.6).
 
 use loci_core::digest;
-use loci_core::envelope::{Diagnostic, Outcome, Refusal, Report};
+use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::git;
 use loci_core::index::Index;
 use serde_json::json;
@@ -129,5 +129,5 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         "digest": digest_text,
         "rules": rules,
     });
-    Ok(Report::new(Outcome::ok(data).with_diagnostics(diags), human))
+    Ok(Report::ok(data, human).with_diagnostics(diags))
 }

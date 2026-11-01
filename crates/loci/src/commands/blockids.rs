@@ -1,7 +1,7 @@
 //! `loci block-ids` (m0 §9.9).
 
 use loci_core::blockids;
-use loci_core::envelope::{Outcome, Refusal, Report};
+use loci_core::envelope::{Refusal, Report};
 use loci_core::index::Index;
 use loci_core::vault::{self, write_atomic};
 use serde_json::json;
@@ -31,5 +31,5 @@ pub fn run(ctx: &Ctx, note: &str, section: &str) -> Result<Report, Refusal> {
         "section": section,
         "assigned": assigned.iter().map(|a| json!({"line": a.line, "id": a.id})).collect::<Vec<_>>(),
     });
-    Ok(Report::new(Outcome::ok(data), format!("assigned {} id(s) in {path}\n", assigned.len())))
+    Ok(Report::ok(data, format!("assigned {} id(s) in {path}\n", assigned.len())))
 }

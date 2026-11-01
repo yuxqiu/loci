@@ -12,80 +12,103 @@ expression: v.redact(&env)
   },
   "diagnostics": [
     {
-      "byte_end": 155,
-      "byte_start": 151,
       "code": "link.dangling",
-      "col": 31,
       "hint": "link non-concepts by path",
-      "line": 9,
+      "location": {
+        "path": "concepts/algo/dfs.md",
+        "span": {
+          "byte_end": 155,
+          "byte_start": 151,
+          "col": 31,
+          "line": 9
+        }
+      },
       "message": "`plan` does not resolve",
-      "path": "concepts/algo/dfs.md",
       "severity": "error"
     },
     {
-      "byte_end": 169,
-      "byte_start": 161,
       "code": "link.dangling",
-      "col": 41,
       "hint": "link non-concepts by path",
-      "line": 9,
+      "location": {
+        "path": "concepts/algo/dfs.md",
+        "span": {
+          "byte_end": 169,
+          "byte_start": 161,
+          "col": 41,
+          "line": 9
+        }
+      },
       "message": "`25-03-14` does not resolve",
-      "path": "concepts/algo/dfs.md",
       "severity": "error"
     },
     {
-      "byte_end": 186,
-      "byte_start": 175,
       "code": "link.dangling",
-      "col": 55,
       "hint": "link non-concepts by path",
-      "line": 9,
+      "location": {
+        "path": "concepts/algo/dfs.md",
+        "span": {
+          "byte_end": 186,
+          "byte_start": 175,
+          "col": 55,
+          "line": 9
+        }
+      },
       "message": "`diagram.png` does not resolve",
-      "path": "concepts/algo/dfs.md",
       "severity": "error"
     },
     {
-      "byte_end": 300,
-      "byte_start": 294,
       "code": "link.path-form",
-      "col": 14,
       "hint": null,
-      "line": 13,
+      "location": {
+        "path": "concepts/algo/dfs.md",
+        "span": {
+          "byte_end": 300,
+          "byte_start": 294,
+          "col": 14,
+          "line": 13
+        }
+      },
       "message": "`..` or a leading `/` is not allowed in a link",
-      "path": "concepts/algo/dfs.md",
       "severity": "error"
     },
     {
-      "byte_end": 313,
-      "byte_start": 309,
       "code": "link.path-form",
-      "col": 29,
       "hint": null,
-      "line": 13,
+      "location": {
+        "path": "concepts/algo/dfs.md",
+        "span": {
+          "byte_end": 313,
+          "byte_start": 309,
+          "col": 29,
+          "line": 13
+        }
+      },
       "message": "`..` or a leading `/` is not allowed in a link",
-      "path": "concepts/algo/dfs.md",
       "severity": "error"
     },
     {
-      "byte_end": 343,
-      "byte_start": 330,
       "code": "link.dangling",
-      "col": 13,
       "hint": "link non-concepts by path",
-      "line": 15,
+      "location": {
+        "path": "concepts/algo/dfs.md",
+        "span": {
+          "byte_end": 343,
+          "byte_start": 330,
+          "col": 13,
+          "line": 15
+        }
+      },
       "message": "`breadth-first` does not resolve",
-      "path": "concepts/algo/dfs.md",
       "severity": "error"
     },
     {
-      "byte_end": null,
-      "byte_start": null,
       "code": "slug.duplicate",
-      "col": null,
       "hint": null,
-      "line": null,
+      "location": {
+        "path": "concepts/algo/dup.md",
+        "span": null
+      },
       "message": "slug `dup` is used by concepts/other/dup.md",
-      "path": "concepts/algo/dup.md",
       "severity": "error"
     }
   ],

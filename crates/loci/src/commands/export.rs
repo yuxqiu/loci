@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use loci_core::envelope::{Outcome, Refusal, Report};
+use loci_core::envelope::{Refusal, Report};
 use loci_core::export;
 use loci_core::index::Index;
 use loci_core::vault::{self, Kind};
@@ -74,5 +74,5 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
         "glossary": e.glossary,
         "assets": e.assets.iter().map(|(_, n)| format!("assets/{n}")).collect::<Vec<_>>(),
     });
-    Ok(Report::new(Outcome::ok(data), format!("{}\n", out_path.display())))
+    Ok(Report::ok(data, format!("{}\n", out_path.display())))
 }

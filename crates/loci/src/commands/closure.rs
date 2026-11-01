@@ -2,7 +2,7 @@
 
 use loci_core::closure;
 use loci_core::digest;
-use loci_core::envelope::{Diagnostic, Outcome, Refusal, Report};
+use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::index::Index;
 use loci_core::vault;
 use serde_json::json;
@@ -30,5 +30,5 @@ pub fn run(ctx: &Ctx, slug: &str, depth: Option<usize>) -> Result<Report, Refusa
         })).collect::<Vec<_>>(),
         "unresolved": c.unresolved.iter().map(|(f, t)| json!({"from": f, "target": t})).collect::<Vec<_>>(),
     });
-    Ok(Report::new(Outcome::ok(data).with_diagnostics(diags), human))
+    Ok(Report::ok(data, human).with_diagnostics(diags))
 }

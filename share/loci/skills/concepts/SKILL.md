@@ -40,9 +40,22 @@ claim it supports ([[sources/papers/<key>.pdf#p3]]).
 
 ## Areas
 
-Every area folder has `AREA.md`: an H1 (the area title) and exactly one paragraph
-saying what belongs there. Restructure areas with `loci mv` when an area grows too
-mixed; links are rewritten for you.
+Every area folder has `AREA.md`: an H1 (the area title) and exactly one paragraph,
+a scope note:
+
+- what kinds of concept the area holds;
+- where a neighbouring area could be mistaken for it, which topics go there
+  instead, linked as `[[concepts/<other>/AREA]]`; add the reverse note to the other
+  area's `AREA.md`;
+- optionally, in a few words, key topics that have no sub-folder.
+
+Do not list sub-folders (`loci digest` outlines them), summarise concepts or record
+history there.
+
+Group related concepts in sub-folders of an area (`concepts/<area>/<group>/`),
+usually one level deep. Sub-folders have no `AREA.md`; if one needs its own scope
+note, make it an area. Restructure with `loci mv` when an area grows too mixed;
+links are rewritten for you.
 
 ## Views
 

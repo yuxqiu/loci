@@ -1,7 +1,7 @@
 //! `loci init` (m0 §9.1).
 
 use loci_core::config::{self, Config};
-use loci_core::envelope::{Outcome, Refusal, Report};
+use loci_core::envelope::{Refusal, Report};
 use loci_core::git;
 use serde_json::json;
 
@@ -75,5 +75,5 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         created.push(".gitignore".to_string());
     }
     let human = format!("created: {}\nskipped: {}\n", created.join(", "), skipped.join(", "));
-    Ok(Report::new(Outcome::ok(json!({"created": created, "skipped": skipped})), human))
+    Ok(Report::ok(json!({"created": created, "skipped": skipped}), human))
 }

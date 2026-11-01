@@ -25,7 +25,7 @@ fn status_change_counts_and_inbox() {
     assert_eq!(env["data"]["inbox"]["uncommitted"], json!(["inbox/drafts/new.md"]));
     let unc = with_code(&env, "inbox.uncommitted");
     assert_eq!(unc.len(), 1);
-    assert_eq!(unc[0]["path"], "inbox/drafts/new.md");
+    assert_eq!(path_of(unc[0]), "inbox/drafts/new.md");
     assert_eq!(unc[0]["severity"], "warning");
     // A modified committed draft is uncommitted too.
     v.write("inbox/drafts/draft.md", v.read("inbox/drafts/draft.md") + "\nEdit.\n");
@@ -196,7 +196,7 @@ fn material_dropped_reports_on_the_deleted_path() {
     let (_, env) = v.run(&["lint"]);
     let d = with_code(&env, "material-dropped");
     assert!(!d.is_empty());
-    assert!(d.iter().all(|d| d["path"] == "inbox/drafts/draft.md"), "{}", diag_lines(&env));
+    assert!(d.iter().all(|d| path_of(d) == "inbox/drafts/draft.md"), "{}", diag_lines(&env));
 }
 
 // ---------------------------------------------------------------- done

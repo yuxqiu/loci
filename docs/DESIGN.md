@@ -91,8 +91,8 @@ inbox/
   drafts/                         the user's writing, to be dissolved into concepts
   journal/<stream>/               journal entries, to be filed
   sources/                        PDFs and clippings (the web clipper saves here)
-concepts/<area>/[<sub-area>/]
-  AREA.md                         (top-level areas only) one paragraph on what the area holds
+concepts/<area>/[<sub-folders>/]  sub-folders at any depth; the digest outlines them
+  AREA.md                         (top-level areas only) a scope note: what the area holds, what goes elsewhere
   <slug>.md                       concept notes
   attachments/                    images used by notes in this folder
 sources/<type>/<slug>.<ext>       one original file; type: any slug (e.g. papers, docs, clippings)

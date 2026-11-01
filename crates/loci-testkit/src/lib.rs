@@ -291,8 +291,8 @@ pub fn check_envelope(env: &Value, code: i32) {
     assert_eq!(env["ok"], code == 0, "ok iff exit 0: {env:#}");
     assert!(env["diagnostics"].is_array(), "{env:#}");
     if env["error"].is_null() {
-        let linting = matches!(env["command"].as_str(), Some("lint" | "done" | "learn lint"));
-        assert!(code == 0 || linting, "a failing command other than a lint sets error: {env:#}");
+        let errors = diags(env).iter().any(|d| d["severity"] == "error");
+        assert_eq!(code != 0, errors, "without an error, exit 1 iff a diagnostic is an error: {env:#}");
     } else {
         assert!(env["data"].is_null(), "data is null with an error: {env:#}");
         assert!(env["error"]["code"].is_string() && env["error"]["message"].is_string());
@@ -303,11 +303,21 @@ pub fn diags(env: &Value) -> &Vec<Value> {
     env["diagnostics"].as_array().unwrap()
 }
 
+/// A diagnostic's path (`null` when it has none).
+pub fn path_of(d: &Value) -> &Value {
+    &d["location"]["path"]
+}
+
+/// A diagnostic's position (`null` when it has none).
+pub fn span_of(d: &Value) -> &Value {
+    &d["location"]["span"]
+}
+
 /// (code, path) pairs of the diagnostics.
 pub fn codes(env: &Value) -> Vec<(String, String)> {
     diags(env)
         .iter()
-        .map(|d| (d["code"].as_str().unwrap().to_string(), d["path"].as_str().unwrap_or("").to_string()))
+        .map(|d| (d["code"].as_str().unwrap().to_string(), path_of(d).as_str().unwrap_or("").to_string()))
         .collect()
 }
 
@@ -318,7 +328,7 @@ pub fn with_code<'a>(env: &'a Value, code: &str) -> Vec<&'a Value> {
 
 /// The diagnostics on a given path.
 pub fn on_path<'a>(env: &'a Value, path: &str) -> Vec<&'a Value> {
-    diags(env).iter().filter(|d| d["path"] == path).collect()
+    diags(env).iter().filter(|d| path_of(d) == path).collect()
 }
 
 /// The codes of the diagnostics on a given path, sorted, deduplicated.
@@ -330,7 +340,7 @@ pub fn codes_on(env: &Value, path: &str) -> Vec<String> {
 }
 
 pub fn has(env: &Value, code: &str, path: &str) -> bool {
-    diags(env).iter().any(|d| d["code"] == code && d["path"] == path)
+    diags(env).iter().any(|d| d["code"] == code && path_of(d) == path)
 }
 
 pub fn error_code(env: &Value) -> &str {
@@ -339,8 +349,8 @@ pub fn error_code(env: &Value) -> &str {
 
 /// The source text a diagnostic's byte range covers.
 pub fn covered<'a>(text: &'a str, d: &Value) -> &'a str {
-    let s = d["byte_start"].as_u64().unwrap() as usize;
-    let e = d["byte_end"].as_u64().unwrap() as usize;
+    let s = span_of(d)["byte_start"].as_u64().unwrap() as usize;
+    let e = span_of(d)["byte_end"].as_u64().unwrap() as usize;
     &text[s..e]
 }
 
@@ -364,8 +374,8 @@ pub fn envelope_json(command: &str, data: Value, diagnostics: Value, error: Valu
 
 pub fn stub_diag(code: &str, path: &str) -> Value {
     serde_json::json!({
-        "code": code, "severity": "warning", "path": path, "line": null, "col": null,
-        "byte_start": null, "byte_end": null, "message": "from the stub", "hint": null,
+        "code": code, "severity": "warning", "location": {"path": path, "span": null},
+        "message": "from the stub", "hint": null,
     })
 }
 
@@ -417,13 +427,13 @@ impl Stub {
 pub fn diag_lines(env: &Value) -> String {
     let mut out = String::new();
     for d in diags(env) {
-        let pos = match (d["line"].as_u64(), d["col"].as_u64()) {
+        let pos = match (span_of(d)["line"].as_u64(), span_of(d)["col"].as_u64()) {
             (Some(l), Some(c)) => format!(":{l}:{c}"),
             _ => String::new(),
         };
         out.push_str(&format!(
             "{}{pos} {} {}: {}",
-            d["path"].as_str().unwrap_or("-"),
+            path_of(d).as_str().unwrap_or("-"),
             d["severity"].as_str().unwrap(),
             d["code"].as_str().unwrap(),
             redact_ulids(d["message"].as_str().unwrap()),

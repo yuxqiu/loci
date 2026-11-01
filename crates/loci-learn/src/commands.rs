@@ -5,7 +5,7 @@ use std::io::{BufRead, Read, Write};
 use std::sync::{Arc, Mutex};
 
 use jiff::Timestamp;
-use loci_core::envelope::{Diagnostic, Outcome, Refusal, Report};
+use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::index::Index;
 use loci_core::plugin::Skill;
 use loci_core::vault::Vault;
@@ -21,7 +21,7 @@ const SKILL_FILES: &[(&str, &str)] = &[("learn-session", include_str!("../skills
 pub fn skills() -> Result<Report, Refusal> {
     let skills: Vec<Skill> = SKILL_FILES.iter().map(|(n, b)| Skill::from_markdown(n, b)).collect();
     let human: String = skills.iter().map(|s| format!("{}: {}\n", s.name, s.description)).collect();
-    Ok(Report::new(Outcome::ok(json!({ "skills": skills })), human))
+    Ok(Report::ok(json!({ "skills": skills }), human))
 }
 
 pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
@@ -65,7 +65,7 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
         );
     }
     let errors = diags.len();
-    Ok(Report::new(Outcome::lint(serde_json::Value::Null, diags), format!("{} cards, {errors} errors\n", all.len())))
+    Ok(Report::ok(serde_json::Value::Null, format!("{} cards, {errors} errors\n", all.len())).with_diagnostics(diags))
 }
 
 /// Validates a line against the working tree: its card or concept must exist.
@@ -92,7 +92,7 @@ pub fn log(vault: &Vault, mut stdin: impl Read) -> Result<Report, Refusal> {
     check_exists(&line, &all, &index)?;
     let before = reviewlog::append(&vault.root, &line).map_err(Refusal::io)?;
     match reviewlog::commit(&vault.root, "log") {
-        Ok(sha) => Ok(Report::new(Outcome::ok(json!({"line": line, "commit": sha})), format!("logged {sha}\n"))),
+        Ok(sha) => Ok(Report::ok(json!({"line": line, "commit": sha}), format!("logged {sha}\n"))),
         Err(e) => Err(match reviewlog::truncate(&vault.root, before) {
             Ok(()) => Refusal::git(e),
             Err(t) => Refusal::git(format!("{e}; removing the uncommitted line also failed: {t}")),
@@ -122,7 +122,7 @@ pub fn state(vault: &Vault, slug: &str) -> Result<Report, Refusal> {
         Estimate::Item { grade, age_days } => format!("{slug}: last quiz {} {age_days:.1} days ago\n", grade.outcome()),
         Estimate::Unknown => format!("{slug}: unknown\n"),
     };
-    Ok(Report::new(Outcome::ok(json!({"concept": concept, "estimate": est_json, "lines": used})), human))
+    Ok(Report::ok(json!({"concept": concept, "estimate": est_json, "lines": used}), human))
 }
 
 pub fn review(vault: &Vault) -> Result<Report, Refusal> {
@@ -184,7 +184,7 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
     }
     let due_left = session.len() - reviewed;
     let data = json!({"reviewed": reviewed, "new": new_count, "due_left": due_left, "commit": commit});
-    Ok(Report::new(Outcome::ok(data), format!("reviewed {reviewed}, {due_left} left\n")))
+    Ok(Report::ok(data, format!("reviewed {reviewed}, {due_left} left\n")))
 }
 
 /// Shows one card and reads the user's grade. `None` when the user stops (`q` or end

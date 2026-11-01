@@ -19,6 +19,18 @@ them under its version.
 
 ### Changed
 
+- The `--json` diagnostics nest their location: `"location": {"path", "span":
+  {"line", "col", "byte_start", "byte_end"}}`, or `null`, instead of five flat
+  fields that could be partly `null`.
+- The framework rules say when to link: search before writing a concept, link the
+  first mention of every concept that has a note, and link a new concept from the
+  notes that mention it.
+- The root digest outlines each area's sub-folders with their concept counts
+  (`Sub-folders: graphs (6), strings (3)`; JSON `subfolders`). `AREA.md`'s paragraph
+  is a scope note: what the area holds and which look-alike topics go to a
+  neighbouring area. Concept sub-folders may nest at any depth.
+- Every command exits 1 when it reports an error diagnostic, not only `lint`:
+  `loci skill` now exits 1 when a plugin's `skills` hook fails.
 - Source types and journal streams are any slug you choose; nothing is declared
   in `loci.toml`.
 - Journal entries may use any folders and file names inside `journal/<stream>/`.

@@ -484,7 +484,7 @@ mod tests {
         Lint { index: &index, budgets: &budgets }
             .run()
             .into_iter()
-            .map(|d| (d.path.unwrap_or_default(), d.code))
+            .map(|d| (d.path().unwrap_or_default().to_string(), d.code))
             .collect()
     }
 

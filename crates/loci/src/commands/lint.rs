@@ -1,6 +1,6 @@
 //! `loci lint` (m0 §9.2).
 
-use loci_core::envelope::{Diagnostic, Outcome, Refusal, Report, sort_diagnostics};
+use loci_core::envelope::{Diagnostic, Refusal, Report, sort_diagnostics};
 use loci_core::index::Index;
 use loci_core::lint::{self, Lint};
 use loci_core::plugin;
@@ -55,5 +55,5 @@ pub fn lint_vault(vault: &Vault) -> Linted {
 pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     let linted = lint_vault(&ctx.vault()?);
     let (data, human) = (linted.data(), linted.summary());
-    Ok(Report::new(Outcome::lint(data, linted.diagnostics), human))
+    Ok(Report::ok(data, human).with_diagnostics(linted.diagnostics))
 }

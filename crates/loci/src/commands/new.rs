@@ -1,6 +1,6 @@
 //! `loci new` (m0 §9.7).
 
-use loci_core::envelope::{Outcome, Refusal, Report};
+use loci_core::envelope::{Refusal, Report};
 use loci_core::git;
 use loci_core::index::Index;
 use loci_core::vault::{self, Kind};
@@ -49,5 +49,5 @@ pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal
         return Err(Refusal::io(e));
     }
     std::fs::write(&abs, text).map_err(Refusal::io)?;
-    Ok(Report::new(Outcome::ok(json!({"path": path, "id": id})), format!("{path} {id}\n")))
+    Ok(Report::ok(json!({"path": path, "id": id}), format!("{path} {id}\n")))
 }

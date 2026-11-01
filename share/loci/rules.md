@@ -5,7 +5,9 @@ This vault is a loci knowledge base. These rules apply to every agent working in
 ## The vault
 
 - `concepts/<area>/<slug>.md`: one note per concept: the canonical knowledge. Each
-  area has an `AREA.md` (an H1 and one paragraph).
+  area has an `AREA.md` (an H1 and one paragraph). Sub-folders inside an area group
+  related concepts, at any depth; they have no `AREA.md`. Keep them shallow: one
+  level is the norm.
 - `sources/<type>/<slug>.<ext>`: external material, one file each, grouped by a type
   the user names (`papers`, `docs`, `clippings`, or any other slug). Never modify a
   source.
@@ -47,6 +49,11 @@ This vault is a loci knowledge base. These rules apply to every agent working in
 - Link concepts by bare slug (`[[slug]]`), everything else by vault path
   (`[[views/x]]`, `![[concepts/a/attachments/x.png]]`). Never use markdown links for
   vault files.
+- Before writing a concept, search for it and its neighbours (`loci find <term>`):
+  link the related concepts, and if it already exists, revise that note instead.
+- In a note, link the first mention of every concept that has a note.
+- After creating a concept, find the notes that mention it (`loci find <term>`) and
+  link it from them, so the new note is not reachable only from itself.
 - Move or rename with `loci mv`, which rewrites links.
 - **Filing a source.** A source is one file `sources/<type>/<slug>.<ext>`. Use a type
   the vault already has (`ls sources/`) when one fits, such as `papers` (slug: the

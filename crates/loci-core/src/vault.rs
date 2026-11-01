@@ -305,14 +305,12 @@ fn walk(root: &Path) -> Result<Walk, Refusal> {
     let mut unreadable = vec![];
     // Git skips what it cannot read (a directory without permission) with a warning.
     // Wherever the folder is, `plugins/` included, loci cannot tell what it missed.
-    if !warnings.is_empty() {
-        unreadable.push(format!("git could not list everything ({})", warnings.trim()));
-    }
+    unreadable.extend(warnings.lines().filter(|l| !l.trim().is_empty()).map(|l| format!("git: {}", l.trim())));
     let mut symlinks = vec![];
     for raw in paths {
         // Every listed path, `plugins/`, `loci.toml` and non-UTF-8 names included.
         if let Some(link) = symlink_on_path(root, &raw) {
-            symlinks.push(link);
+            symlinks.push(format!("`{link}`"));
             continue;
         }
         // The prefixes `is_core_path` tests are ASCII, so a lossy name decides it.
@@ -354,29 +352,26 @@ fn walk(root: &Path) -> Result<Walk, Refusal> {
         symlinks.sort();
         // Every file listed under a symlinked folder names the same link.
         symlinks.dedup();
-        return Err(Refusal::refused(
-            "file.symlink",
-            format!(
-                "loci does not follow symlinks; replace each with the file or folder itself: {}",
-                symlinks.join(", ")
-            ),
-        ));
+        let message = listed("loci does not follow symlinks; replace each with the file or folder itself", &symlinks);
+        return Err(Refusal::refused("file.symlink", message));
     }
     if !unreadable.is_empty() {
         unreadable.sort();
         unreadable.dedup();
-        return Err(Refusal::refused(
-            "file.unreadable",
-            format!(
-                "every file loci reads, and every folder git lists, must be readable; fix each of these: {}",
-                unreadable.join("; ")
-            ),
-        ));
+        let message =
+            listed("every file loci reads, and every folder git lists, must be readable; fix each", &unreadable);
+        return Err(Refusal::refused("file.unreadable", message));
     }
     out.files.sort();
     // An unmerged file is listed once per conflict stage.
     out.files.dedup();
     Ok(out)
+}
+
+/// A refusal message listing `items`, one per line under `header`.
+fn listed(header: &str, items: &[String]) -> String {
+    let lines: Vec<String> = items.iter().map(|i| format!("\n  {i}")).collect();
+    format!("{header}:{}", lines.concat())
 }
 
 /// Writes a file via a temporary sibling and a rename, so readers never see a partial file.

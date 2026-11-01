@@ -77,7 +77,7 @@ fn lint_merges_and_counts_plugin_diagnostics() {
     assert_eq!(env["data"]["plugins"], json!(["stub"]));
     let stub = with_code(&env, "stub.note");
     assert_eq!(stub.len(), 1);
-    assert_eq!(stub[0]["path"], "concepts/a/x.md");
+    assert_eq!(path_of(stub[0]), "concepts/a/x.md");
     let total = diags(&env).len();
     assert_eq!(
         env["data"]["warnings"].as_u64().unwrap() as usize + env["data"]["errors"].as_u64().unwrap() as usize,
@@ -213,14 +213,13 @@ fn skills_plugin_failures_drop_the_output() {
     for (what, stub) in cases {
         let v = vault_with(stub);
         let (code, env) = v.run(&["skill", "show"]);
-        assert_eq!(code, 0, "{what}: {env:#}");
+        assert_eq!(code, 1, "{what}: an error diagnostic fails the command: {env:#}");
         let failed = plugin_failed(&env);
         assert_eq!(failed.len(), 1, "{what}: {}", diag_lines(&env));
         assert!(failed[0].contains("stub") && failed[0].contains("skills"), "{what}: {failed:?}");
-        assert!(
-            env["data"]["skills"].as_array().unwrap().iter().all(|s| s["plugin"].is_null()),
-            "{what}: plugin skills not dropped"
-        );
+        let skills = env["data"]["skills"].as_array().unwrap();
+        assert!(skills.iter().all(|s| s["plugin"].is_null()), "{what}: plugin skills not dropped");
+        assert!(!skills.is_empty(), "{what}: core skills still listed");
     }
 }
 

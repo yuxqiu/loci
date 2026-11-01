@@ -1,6 +1,6 @@
 //! `loci skill show` (m0 §9.8).
 
-use loci_core::envelope::{Diagnostic, Outcome, Refusal, Report};
+use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::plugin::{self, Skill};
 use serde_json::json;
 
@@ -30,18 +30,18 @@ pub fn run(ctx: &Ctx, name: Option<&str>) -> Result<Report, Refusal> {
             let data = json!({"skills": skills.iter().map(|(s, p)| json!({
                 "name": s.name, "description": s.description, "plugin": p,
             })).collect::<Vec<_>>()});
-            Ok(Report::new(Outcome::ok(data).with_diagnostics(diags), human))
+            Ok(Report::ok(data, human).with_diagnostics(diags))
         }
         Some(name) => match skills.iter().find(|(s, _)| s.name == name) {
             Some((s, p)) => {
                 let data = json!({"name": s.name, "description": s.description, "body": s.body, "plugin": p});
-                Ok(Report::new(Outcome::ok(data).with_diagnostics(diags), s.body.clone()))
+                Ok(Report::ok(data, s.body.clone()).with_diagnostics(diags))
             }
             None => {
                 let names: Vec<&str> = skills.iter().map(|(s, _)| s.name.as_str()).collect();
                 let msg = format!("no skill `{name}`; skills: {}", names.join(", "));
                 // A report, not a bare refusal, so the diagnostics are kept.
-                Ok(Report::new(Outcome::from(Refusal::refused("skill.unknown", msg)).with_diagnostics(diags), ""))
+                Ok(Report::from(Refusal::refused("skill.unknown", msg)).with_diagnostics(diags))
             }
         },
     }

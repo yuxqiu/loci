@@ -67,6 +67,17 @@ impl Area {
     pub fn count(&self) -> usize {
         self.groups.iter().map(|(_, c)| c.len()).sum()
     }
+
+    /// The area's top-level sub-folders with the concepts under each at any depth,
+    /// sorted by name bytes: the outline the root digest shows (m0 §10).
+    pub fn outline(&self) -> Vec<(&str, usize)> {
+        let mut out: BTreeMap<&str, usize> = BTreeMap::new();
+        for (dir, concepts) in self.groups.iter().filter(|(d, _)| !d.is_empty()) {
+            let top = dir.split('/').next().expect("a split has a first part");
+            *out.entry(top).or_default() += concepts.len();
+        }
+        out.into_iter().collect()
+    }
 }
 
 /// All areas of the vault, sorted by folder name bytes.
@@ -124,6 +135,10 @@ pub fn render_root(areas: &[Area]) -> String {
         if let Some(p) = &a.paragraph {
             out.push_str(&format!("\n{p}\n"));
         }
+        let outline: Vec<String> = a.outline().iter().map(|(d, n)| format!("{d} ({n})")).collect();
+        if !outline.is_empty() {
+            out.push_str(&format!("\nSub-folders: {}\n", outline.join(", ")));
+        }
     }
     out
 }
@@ -132,6 +147,7 @@ pub fn root_json(areas: &[Area]) -> Value {
     json!({
         "areas": areas.iter().map(|a| json!({
             "area": a.name, "title": a.title, "paragraph": a.paragraph, "concepts": a.count(),
+            "subfolders": a.outline().iter().map(|(d, n)| json!({"dir": d, "concepts": n})).collect::<Vec<_>>(),
         })).collect::<Vec<_>>()
     })
 }
@@ -153,6 +169,27 @@ pub fn area_json(a: &Area) -> Value {
 mod tests {
     use super::*;
     use crate::index::from_texts;
+
+    #[test]
+    fn the_root_outlines_each_area_by_top_level_sub_folder() {
+        let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ndigest: d\n---\n# C\n";
+        let i = from_texts(&[
+            ("concepts/math/AREA.md", "# Mathematics\n\nNumbers and structures.\n"),
+            ("concepts/math/proof.md", c),
+            ("concepts/math/algebra/group.md", c),
+            ("concepts/math/algebra/linear/matrix.md", c),
+            ("concepts/math/algebra/linear/vector.md", c),
+            ("concepts/math/algebra-history/noether.md", c),
+            ("concepts/plain/x.md", c),
+        ]);
+        let all = areas(&i);
+        assert_eq!(all[0].outline(), [("algebra", 3), ("algebra-history", 1)], "a sibling sorting between two groups");
+        assert!(all[1].outline().is_empty());
+        let root = render_root(&all);
+        assert!(root.contains("Numbers and structures.\n\nSub-folders: algebra (3), algebra-history (1)\n"), "{root}");
+        assert!(!root.contains("Sub-folders: \n"), "{root}");
+        assert_eq!(root_json(&all)["areas"][0]["subfolders"][0], json!({"dir": "algebra", "concepts": 3}));
+    }
 
     #[test]
     fn areas_hold_a_concept_or_area_md() {
@@ -177,7 +214,7 @@ mod tests {
         let areas = areas(&i);
         assert_eq!(
             render_root(&areas),
-            "# Index\n\n## Algorithms (concepts/algorithms, 3 concepts)\n\nTechniques for searching.\n\n## zeta (concepts/zeta, 1 concepts)\n"
+            "# Index\n\n## Algorithms (concepts/algorithms, 3 concepts)\n\nTechniques for searching.\n\nSub-folders: graphs (1)\n\n## zeta (concepts/zeta, 1 concepts)\n"
         );
         assert_eq!(
             render_area(&areas[0]),

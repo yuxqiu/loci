@@ -10,18 +10,26 @@ expression: env
         "area": "algorithms",
         "concepts": 5,
         "paragraph": "Techniques for searching, sorting and traversing data.",
+        "subfolders": [
+          {
+            "concepts": 2,
+            "dir": "graphs"
+          }
+        ],
         "title": "Algorithms"
       },
       {
         "area": "broken",
         "concepts": 1,
         "paragraph": null,
+        "subfolders": [],
         "title": "Broken Area"
       },
       {
         "area": "missing",
         "concepts": 1,
         "paragraph": null,
+        "subfolders": [],
         "title": "missing"
       }
     ]

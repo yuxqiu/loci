@@ -1,6 +1,6 @@
 //! `loci mv` (m0 §9.5).
 
-use loci_core::envelope::{Outcome, Refusal, Report};
+use loci_core::envelope::{Refusal, Report};
 use loci_core::index::Index;
 use std::os::unix::ffi::OsStrExt;
 
@@ -42,7 +42,7 @@ pub fn run(ctx: &Ctx, from: &str, to: &str) -> Result<Report, Refusal> {
         "edited": plan.edit_counts.iter().map(|(p, n)| json!({"path": p, "edits": n})).collect::<Vec<_>>(),
     });
     let human = format!("moved {} file(s), edited {} file(s)\n", plan.moves.len(), plan.edit_counts.len());
-    Ok(Report::new(Outcome::ok(data), human))
+    Ok(Report::ok(data, human))
 }
 
 /// The paths under folder `from` that git lists but `plan` does not move.

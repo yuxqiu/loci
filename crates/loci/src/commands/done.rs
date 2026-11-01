@@ -3,7 +3,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use loci_core::envelope::{Diagnostic, Outcome, Refusal, Report, sort_diagnostics};
+use loci_core::envelope::{Diagnostic, Refusal, Report, sort_diagnostics};
 use loci_core::git;
 
 use super::Ctx;
@@ -30,5 +30,5 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         Some(r) => format!("{}recorded {r}\n", linted.summary()),
         None => format!("{}nothing recorded\n", linted.summary()),
     };
-    Ok(Report::new(Outcome::lint(data, linted.diagnostics), human))
+    Ok(Report::ok(data, human).with_diagnostics(linted.diagnostics))
 }
