@@ -101,7 +101,7 @@ views/<name>.md                   a curated view: concept links in a chosen orde
 views/learn/<concept>.md          a learning plan
 plugins/<name>/                   data owned by a plugin (e.g. plugins/learn/reviews.jsonl); core ignores it
 bench/retrieval.jsonl             retrieval benchmark cases
-.loci/                            gitignored caches (including extracted PDF text) and exports
+.loci/                            gitignored output (exports)
 ```
 
 All top-level folders are fixed. Source types and journal streams are not declared
@@ -196,9 +196,8 @@ downloading a URL straight into place; the framework rules say how to choose the
 type and slug, and lint checks the layout (`sources.layout`). Clippings arrive
 through `inbox/sources/`. Sources never change: git holds the original, and lint
 reports a source that differs from its committed version (`sources.changed`, an
-error). PDFs are committed. Their
-extracted text (equations as LaTeX, from marker or MinerU packaged with Nix) is a
-cache in `.loci/`, tagged with the tool and version.
+error). PDFs are committed. They are evidence, read by the agent during intake, not
+searched: `loci find` searches the notes written from them.
 
 ### 4.6 Views
 
@@ -474,8 +473,9 @@ Implementation:
 
 ## 8. Search
 
-- **Agent:** `loci digest` (two levels: root and area), `loci find` (BM25 over notes
-  and extracted PDF text) and grep. Skills depend only on `loci find --json`, so the
+- **Agent:** `loci digest` (two levels: root and area), `loci find` (BM25 over the vault's
+  markdown) and grep. Sources such as PDFs are not searched; the notes written from
+  them are. Skills depend only on `loci find --json`, so the
   engine can be replaced without changing them.
 - **User:** hister indexes the vault directly through its `indexer.directories`
   setting. loci reads nothing from hister.

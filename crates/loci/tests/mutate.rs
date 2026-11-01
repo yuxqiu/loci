@@ -111,7 +111,7 @@ fn mv_ignored_paths_are_refused() {
     v.git(&["init", "-q", "-b", "main"]);
     v.commit_all("fixture");
     mv_refused(&v, "ignored/x.md", "views/x.md", "mv.from");
-    mv_refused(&v, "views/linker.md", ".loci/linker.md", "mv.to");
+    mv_refused(&v, "views/linker.md", ".loci/linker.md", "path.ignored");
 }
 
 #[test]
@@ -292,9 +292,10 @@ fn an_inbox_file_is_filed_as_a_source_with_mv() {
     // The source layout holds: a type and a slug, both slugs, and an extension.
     v.write("inbox/drafts/again.md", "# Again\n");
     v.commit_all("more");
-    for to in ["sources/Clips/again.md", "sources/docs/Bad_Slug.md", "sources/docs/again", "sources/again.md"] {
+    for to in ["sources/Clips/again.md", "sources/docs/Bad_Slug.md", "sources/again.md"] {
         mv_refused(&v, "inbox/drafts/again.md", to, "sources.layout");
     }
+    mv_refused(&v, "inbox/drafts/again.md", "sources/docs/again", "mv.to");
 }
 
 // ---------------------------------------------------------------- init
@@ -403,7 +404,7 @@ fn mv_never_overwrites_reserved_or_unindexed_files() {
         let before = std::fs::read(v.root.join(to)).unwrap();
         let (exit, env) = v.run(&["mv", "views/x.png", to]);
         assert_eq!(exit, 1, "{to}: {env:#}");
-        assert!(["mv.to", "mv.exists"].contains(&error_code(&env)), "{to}: {env:#}");
+        assert!(["mv.to", "mv.exists", "path.ignored"].contains(&error_code(&env)), "{to}: {env:#}");
         assert_eq!(std::fs::read(v.root.join(to)).unwrap(), before, "{to} was overwritten");
     }
 }

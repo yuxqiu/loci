@@ -174,8 +174,7 @@ pub fn commit(vault: &Path, command: &str) -> Result<String, String> {
     git::run(vault, &["add", "--", LOG, ATTRS])?;
     let msg = format!("loci: learn {command}");
     git::run(vault, &["commit", "-q", "-m", &msg, "--", LOG, ATTRS])?;
-    let sha = git::run(vault, &["rev-parse", "HEAD"])?;
-    Ok(String::from_utf8_lossy(&sha).trim().to_string())
+    git::head(vault)
 }
 
 #[cfg(test)]

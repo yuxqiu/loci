@@ -162,7 +162,7 @@ pub struct Vault {
     pub root: PathBuf,
     pub config: Config,
     /// The vault's files, listed once when it is opened.
-    files: Walk,
+    listing: Walk,
 }
 
 impl Vault {
@@ -203,11 +203,11 @@ impl Vault {
         }
         // loci never reads or writes through a symlink (m0 §3). Checked here, once, so
         // that no command has to: a vault holding one is refused before anything is read.
-        let files = walk(&root)?;
+        let listing = walk(&root)?;
         let invalid = |m: String| Refusal::refused("config.invalid", m);
         let text = std::fs::read_to_string(root.join(config::FILE)).map_err(|e| invalid(e.to_string()))?;
         let config = Config::parse(&text).map_err(invalid)?;
-        Ok(Self { root, config, files })
+        Ok(Self { root, config, listing })
     }
 
     pub fn abs(&self, rel: &str) -> PathBuf {
@@ -216,8 +216,8 @@ impl Vault {
 
     /// Every file core reads (m0 §3): the files git sees (tracked, or untracked and not
     /// ignored), minus `plugins/` and paths core never reads, as listed at open.
-    pub fn walk(&self) -> Walk {
-        self.files.clone()
+    pub fn listing(&self) -> &Walk {
+        &self.listing
     }
 }
 

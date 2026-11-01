@@ -54,10 +54,15 @@ them under its version.
   under `sources/` is reported only by `sources.layout`.
 - The vault's files are the ones git sees: a tracked file is read even if
   `.gitignore` matches it, and your global excludes file is respected.
-- `loci mv` refuses a destination that, or a folder on whose path, differs from an
-  existing name only in letter case (`mv.case-only`): it cannot complete one safely on
-  macOS, and elsewhere it would make twin folders. For a case-only rename of the
-  source it says to use `git mv -f`; otherwise, to use the existing spelling.
+- `loci mv` and `loci new` refuse a destination that, or a folder on whose path,
+  differs from an existing name only in letter case (`path.case-twin`), and one git
+  ignores (`path.ignored`): a case twin cannot be handled safely on macOS and makes
+  twin folders elsewhere. `mv` says to use `git mv -f` for a case-only rename of the
+  source, to move the whole folder when it is the source's own, and otherwise to use
+  the existing spelling.
+- Clearer refusals: `mv` names a destination that would become an area's
+  `AREA.md`, refuses a note losing its `.md` extension, and an unreadable note
+  argument says why it cannot be read instead of "no note named".
 - When git cannot list the vault (for example a corrupt index), every command,
   `loci status` included, stops with `git` (exit 3) instead of running on an empty
   file list.

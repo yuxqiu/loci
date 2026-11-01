@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::index::Index;
 use crate::parse::{Note, TopBlock};
-use crate::vault::{self, Kind};
+use crate::vault;
 
 /// An AREA.md that has exactly an H1 and one paragraph (m0 §6.3): (title, paragraph).
 pub fn area_parts(note: &Note) -> Option<(String, String)> {
@@ -81,7 +81,7 @@ pub fn area(index: &Index, name: &str) -> Area {
     let title = parts.as_ref().map(|(t, _)| t.clone()).or(heading_title).unwrap_or_else(|| name.to_string());
     let prefix = format!("concepts/{name}/");
     let mut groups: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
-    for note in index.markdown.values().filter(|n| n.kind == Kind::Concept) {
+    for note in index.concepts() {
         let Some(rest) = note.path.strip_prefix(&prefix) else { continue };
         let dir = rest.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
         let slug = vault::stem(&note.path).to_string();

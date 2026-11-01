@@ -28,6 +28,8 @@ pub enum ConceptLookup {
     Ambiguous(Vec<String>),
     /// The argument names a note that is not a concept: its path.
     NotConcept(String),
+    /// The argument names a markdown file that cannot be read: its path and the reason.
+    Unreadable(String, String),
 }
 
 impl ConceptLookup {
@@ -37,6 +39,9 @@ impl ConceptLookup {
         match self {
             ConceptLookup::Unknown => Refusal::refused(unknown_code, format!("no note named `{arg}`")),
             ConceptLookup::NotConcept(path) => Refusal::refused(unknown_code, format!("`{path}` is not a concept")),
+            ConceptLookup::Unreadable(path, why) => {
+                Refusal::refused(unknown_code, format!("`{path}` cannot be read: {why}"))
+            }
             ConceptLookup::Ambiguous(paths) => Refusal::refused(
                 "concept.ambiguous",
                 format!("`{arg}` names several concepts ({}); name one by path", paths.join(", ")),
@@ -134,10 +139,10 @@ pub fn build(files: Vec<String>, read: impl Fn(&str) -> std::io::Result<Vec<u8>>
 impl Index {
     pub fn open(vault: &vault::Vault) -> Self {
         let root = vault.root.clone();
-        let walk = vault.walk();
-        let mut index = build(walk.files, |p| std::fs::read(root.join(p)));
-        for (path, reason) in walk.unreadable {
-            index.issues.insert(path, FileIssue::Unreadable(reason));
+        let listing = vault.listing();
+        let mut index = build(listing.files.clone(), |p| std::fs::read(root.join(p)));
+        for (path, reason) in &listing.unreadable {
+            index.issues.insert(path.clone(), FileIssue::Unreadable(reason.clone()));
         }
         index
     }
@@ -146,8 +151,16 @@ impl Index {
     /// optional), else a concept slug (case-insensitive). A slug shared by several
     /// concepts is ambiguous. `arg` is a [`vault::path_arg`] result.
     pub fn note(&self, arg: &str) -> Result<&Note, ConceptLookup> {
-        if let Some(n) = self.markdown.get(&note_path(arg)) {
+        let path = note_path(arg);
+        if let Some(n) = self.markdown.get(&path) {
             return Ok(n);
+        }
+        if let Some(issue) = self.issues.get(&path) {
+            let why = match issue {
+                FileIssue::NotUtf8 => "it is not valid UTF-8".to_string(),
+                FileIssue::Unreadable(reason) => reason.clone(),
+            };
+            return Err(ConceptLookup::Unreadable(path, why));
         }
         match self.slugs.get(&arg.to_lowercase()).map(Vec::as_slice) {
             None | Some([]) => Err(ConceptLookup::Unknown),
@@ -196,6 +209,27 @@ impl Index {
     pub fn has_entry(&self, path: &str) -> bool {
         let below = format!("{path}/");
         self.files.iter().any(|f| f == path || f.starts_with(&below))
+    }
+
+    /// The first folder or file on the way to `path` whose name differs from an existing
+    /// one only in letter case, as (existing, asked) (m0 §9.5). A name that exists
+    /// exactly is no twin. On a case-insensitive file system (macOS) such a path is the
+    /// existing one, and git with `core.ignorecase` keeps the existing spelling; elsewhere
+    /// it makes a twin. `new` and `mv` refuse it (`path.case-twin`).
+    pub fn case_twin(&self, path: &str) -> Option<(String, String)> {
+        let parts: Vec<&str> = path.split('/').collect();
+        (1..=parts.len()).find_map(|k| {
+            let asked = parts[..k].join("/");
+            if self.has_entry(&asked) {
+                return None;
+            }
+            self.files.iter().find_map(|f| {
+                let head: Vec<&str> = f.split('/').take(k).collect();
+                let existing = head.join("/");
+                (head.len() == k && existing != asked && existing.to_lowercase() == asked.to_lowercase())
+                    .then(|| (existing, asked.clone()))
+            })
+        })
     }
 
     /// Every link that points at `path`, as (linking note, link), in note path order.
@@ -293,6 +327,13 @@ mod tests {
         let n = i.markdown[path].clone();
         let l = n.links[0].clone();
         (n, l)
+    }
+
+    #[test]
+    fn an_unreadable_note_is_named_as_unreadable() {
+        let i = build(vec!["views/bad.md".to_string()], |_| Ok(vec![0xff]));
+        let e = i.note("views/bad").unwrap_err();
+        assert_eq!(e, ConceptLookup::Unreadable("views/bad.md".into(), "it is not valid UTF-8".into()));
     }
 
     #[test]

@@ -20,8 +20,11 @@ pub fn plan(
     if !vault::is_core_path(from) {
         return Err(Refusal::refused("mv.from", format!("`{from}` cannot be moved")));
     }
-    if !vault::is_core_path(to) || ignored(to)? {
+    if !vault::is_core_path(to) {
         return Err(Refusal::refused("mv.to", format!("`{to}` is not a valid destination")));
+    }
+    if ignored(to)? {
+        return Err(Refusal::refused("path.ignored", format!("`{to}` is ignored by git")));
     }
     let is_file = index.files.binary_search(&from.to_string()).is_ok();
     let prefix = format!("{from}/");
@@ -46,12 +49,20 @@ pub fn plan(
             format!("`{new}` is not a `sources/<type>/<slug>.<ext>` file with the same extension"),
         ));
     }
+    // A note keeps its `.md`: without it, it would no longer be read as a note.
+    if let Some((_, new)) = map.iter().find(|(old, new)| old.ends_with(".md") && !new.ends_with(".md")) {
+        return Err(Refusal::refused("mv.to", format!("`{new}`: a note keeps the `.md` extension")));
+    }
     // A concept stays a concept (as `new` checks before the path rules).
     if let Some((_, new)) = map
         .iter()
         .find(|(old, new)| vault::kind_of(old) == Some(Kind::Concept) && vault::kind_of(new) != Some(Kind::Concept))
     {
-        return Err(Refusal::refused("mv.no-area", format!("`{new}` is not inside an area")));
+        let why = match vault::kind_of(new) {
+            Some(Kind::Area) => "would become the area file, not a concept",
+            _ => "is not inside an area",
+        };
+        return Err(Refusal::refused("mv.no-area", format!("`{new}` {why}")));
     }
     // Every destination follows the path rules lint checks (`vault::path_problem`),
     // first, so the case advice below never leads to a name lint rejects.
@@ -63,16 +74,19 @@ pub fn plan(
     // system (macOS) it is the existing file or folder, and git with `core.ignorecase`
     // keeps the existing spelling, so rewritten links would dangle; on other systems it
     // makes twin folders.
-    if let Some((existing, asked)) = case_twin(index, to) {
+    if let Some((existing, asked)) = index.case_twin(to) {
         // `git mv -f` fits only a case-only rename of the source itself; for anyone
         // else's name it would make the twin, or on macOS overwrite the other file.
         let what_to_do = if existing == from {
             "rename it with `git mv -f`".to_string()
+        } else if from.starts_with(&format!("{existing}/")) {
+            // The source's own folder: renaming one file would leave the rest behind.
+            format!("move the whole folder `{existing}` instead")
         } else {
             format!("use the existing spelling `{existing}` or another name")
         };
         return Err(Refusal::refused(
-            "mv.case-only",
+            "path.case-twin",
             format!("`{asked}` differs only in letter case from the existing `{existing}`; {what_to_do}"),
         ));
     }
@@ -83,7 +97,7 @@ pub fn plan(
     // would become an untracked, ignored one.
     for new in map.values() {
         if ignored(new)? {
-            return Err(Refusal::refused("mv.to", format!("`{new}` would be ignored")));
+            return Err(Refusal::refused("path.ignored", format!("`{new}` would be ignored by git")));
         }
     }
     // A destination that exists on disk (a file the index does not hold) is never
@@ -106,25 +120,6 @@ pub fn plan(
     relink::add_writes(index, &mut change, edits)?;
     relink::verify(index, &map, &change, "mv.verify")?;
     Ok(change)
-}
-
-/// The first folder or file on the path to `to` that has an existing indexed name
-/// differing from it only in letter case, as (existing, asked).
-fn case_twin(index: &Index, to: &str) -> Option<(String, String)> {
-    let parts: Vec<&str> = to.split('/').collect();
-    (1..=parts.len()).find_map(|k| {
-        let asked = parts[..k].join("/");
-        // A name that exists exactly is no twin: it is `mv.exists`, or a folder to use.
-        if index.has_entry(&asked) {
-            return None;
-        }
-        index.files.iter().find_map(|f| {
-            let head: Vec<&str> = f.split('/').take(k).collect();
-            let existing = head.join("/");
-            (head.len() == k && existing != asked && existing.to_lowercase() == asked.to_lowercase())
-                .then(|| (existing, asked.clone()))
-        })
-    })
 }
 
 /// The stored spelling of `from`: itself when a file or folder has that name, else the
@@ -189,7 +184,7 @@ mod tests {
             from_texts(&[("views/d/fig.png", ""), ("views/d/x.md", "# X\n"), ("views/p.md", "[[views/d/fig.png]]\n")]);
         let png_ignored = |p: &str| Ok(p.ends_with(".png"));
         let e = plan(&i, "views/d", "views/e", png_ignored, |_| false).unwrap_err();
-        assert_eq!(e.code(), "mv.to");
+        assert_eq!(e.code(), "path.ignored");
     }
 
     #[test]
@@ -226,7 +221,7 @@ mod tests {
         ]);
         let e = |f: &str, t: &str| plan(&i, f, t, |_| Ok(false), |_| false).unwrap_err().code().to_string();
         assert_eq!(e("concepts/a/x.md", "concepts/a/y.md"), "mv.exists");
-        assert_eq!(e("views/v.md", "views/V.md"), "mv.case-only");
+        assert_eq!(e("views/v.md", "views/V.md"), "path.case-twin");
         // A case-only rename to a name lint rejects is refused for the name, not the case.
         assert_eq!(e("concepts/a/x.md", "concepts/a/X.md"), "slug.format");
         // Every path rule lint checks applies to a destination, the journal one included.
@@ -241,17 +236,28 @@ mod tests {
         assert_eq!(e2.code(), "mv.exists");
         let message = |f: &str, t: &str| plan(&i, f, t, |_| Ok(false), |_| false).unwrap_err().error.message;
         assert!(message("views/v.md", "views/V.md").ends_with("rename it with `git mv -f`"));
+        assert!(message("concepts/a/x.md", "concepts/A/z.md").ends_with("move the whole folder `concepts/a` instead"));
         assert!(
-            message("concepts/a/x.md", "concepts/A/z.md")
+            message("views/v.md", "concepts/A/z.md")
                 .ends_with("use the existing spelling `concepts/a` or another name")
         );
-        assert_eq!(e("concepts/a", "concepts/A"), "mv.case-only", "a folder too");
+        assert_eq!(e("concepts/a", "concepts/A"), "path.case-twin", "a folder too");
         // A twin that breaks a path rule is refused for the rule (`Views/` is no known folder).
         assert_eq!(e("views", "Views"), "kind.unknown");
-        assert_eq!(e("concepts/a/x.md", "concepts/A/z.md"), "mv.case-only", "a folder on the way");
+        assert_eq!(e("concepts/a/x.md", "concepts/A/z.md"), "path.case-twin", "a folder on the way");
         assert_eq!(e("concepts/a/x.md", "concepts/b/y.md"), "mv.collision");
         assert_eq!(e("concepts/a/x.md", "views/x.md"), "mv.no-area");
         assert_eq!(e("concepts/a/x.md", "concepts/x.md"), "mv.no-area", "the `concepts/` root is no area");
+        // Messages say what is wrong with the destination.
+        let message = |f: &str, t: &str| plan(&i, f, t, |_| Ok(false), |_| false).unwrap_err().error.message;
+        assert!(
+            message("concepts/a/x.md", "concepts/a/AREA.md").ends_with("would become the area file, not a concept")
+        );
+        assert_eq!(e("views/v.md", "views/w"), "mv.to");
+        assert!(message("views/v.md", "views/w").ends_with("a note keeps the `.md` extension"));
+        let folder = from_texts(&[("views/D/x.md", "# X\n"), ("views/D/y.md", "# Y\n")]);
+        let m = plan(&folder, "views/D/x.md", "views/d/x.md", |_| Ok(false), |_| false).unwrap_err().error.message;
+        assert!(m.ends_with("move the whole folder `views/D` instead"), "{m}");
         assert_eq!(e("sources/papers/p.pdf", "sources/papers/p/q.pdf"), "mv.source-file");
         assert_eq!(e("sources/papers/p.pdf", "views/p.pdf"), "mv.source-file");
         assert_eq!(e("sources/papers/p.pdf", "sources/papers/p.md"), "mv.source-file", "a source keeps its extension");

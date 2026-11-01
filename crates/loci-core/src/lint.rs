@@ -31,13 +31,16 @@ impl Lint<'_> {
             self.note(note, &mut out);
         }
         self.vault_rules(&mut out);
-        self.path_rules(&mut out);
         sort_diagnostics(&mut out);
         out
     }
 
     fn files(&self, out: &mut Vec<Diagnostic>) {
         for path in &self.index.files {
+            // Path rules (§3, §6.2, §6.4, §6.6), shared with `new` and `mv`.
+            if let Some((code, message)) = vault::path_problem(path) {
+                out.push(Diagnostic::error(code, message).at_path(path.as_str()));
+            }
             if !is_nfc(path) {
                 out.push(Diagnostic::error("path.not-nfc", "file name is not in Unicode NFC").at_path(path));
             }
@@ -289,15 +292,6 @@ impl Lint<'_> {
                     )
                     .at_path(format!("concepts/{}/AREA.md", a.name)),
                 );
-            }
-        }
-    }
-
-    /// Path rules (§6.2, §6.4, §6.6): [`vault::path_problem`] for every file.
-    fn path_rules(&self, out: &mut Vec<Diagnostic>) {
-        for f in &self.index.files {
-            if let Some((code, message)) = vault::path_problem(f) {
-                out.push(Diagnostic::error(code, message).at_path(f.as_str()));
             }
         }
     }

@@ -4,7 +4,6 @@ use std::ops::Range;
 
 use loci_core::index::Index;
 use loci_core::parse::{BlockKind, Note, TopBlock, strip_list_marker};
-use loci_core::vault::Kind;
 
 pub const SECTION: &str = "Cards";
 
@@ -32,7 +31,7 @@ pub struct FormatIssue {
 pub fn all(index: &Index) -> (Vec<Card>, Vec<FormatIssue>) {
     let mut cards = vec![];
     let mut issues = vec![];
-    for note in index.markdown.values().filter(|n| n.kind == Kind::Concept) {
+    for note in index.concepts() {
         let (c, i) = of_note(note);
         cards.extend(c);
         issues.extend(i);
@@ -112,6 +111,7 @@ fn split(raw: &str) -> Option<(String, String)> {
 mod tests {
     use super::*;
     use loci_core::parse::parse;
+    use loci_core::vault::Kind;
 
     fn cards(body: &str) -> (Vec<Card>, Vec<FormatIssue>) {
         let text = format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ndigest: d\n---\n# T\n\n{body}");

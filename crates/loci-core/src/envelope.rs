@@ -132,7 +132,7 @@ pub struct Envelope {
 pub enum Exit {
     Ok = 0,
     Refused = 1,
-    Usage = 2,
+    // 2 (usage) is clap's own exit for bad arguments; loci never returns it.
     Internal = 3,
 }
 
@@ -180,21 +180,21 @@ impl Refusal {
 /// separately so that warnings accompany both.
 #[derive(Debug)]
 pub struct Outcome {
-    pub data: Result<serde_json::Value, Refusal>,
+    pub result: Result<serde_json::Value, Refusal>,
     pub diagnostics: Vec<Diagnostic>,
-    /// Exit code when `data` is `Ok` (1 for a lint with errors).
+    /// Exit code when `result` is `Ok` (1 for a lint with errors).
     exit_ok: Exit,
 }
 
 impl Outcome {
     pub fn ok(data: serde_json::Value) -> Self {
-        Self { data: Ok(data), diagnostics: vec![], exit_ok: Exit::Ok }
+        Self { result: Ok(data), diagnostics: vec![], exit_ok: Exit::Ok }
     }
 
     /// A lint result (m0 §8): exit 1 when any diagnostic is an error.
     pub fn lint(data: serde_json::Value, diagnostics: Vec<Diagnostic>) -> Self {
         let exit_ok = if diagnostics.iter().any(Diagnostic::is_error) { Exit::Refused } else { Exit::Ok };
-        Self { data: Ok(data), diagnostics, exit_ok }
+        Self { result: Ok(data), diagnostics, exit_ok }
     }
 
     pub fn with_diagnostics(mut self, diags: Vec<Diagnostic>) -> Self {
@@ -203,7 +203,7 @@ impl Outcome {
     }
 
     pub fn exit(&self) -> Exit {
-        match &self.data {
+        match &self.result {
             Ok(_) => self.exit_ok,
             Err(r) => r.exit,
         }
@@ -211,7 +211,7 @@ impl Outcome {
 
     pub fn envelope(&self, version: &str, command: &str) -> Envelope {
         let exit = self.exit();
-        let (data, error) = match &self.data {
+        let (data, error) = match &self.result {
             Ok(d) => (d.clone(), None),
             Err(r) => (serde_json::Value::Null, Some(r.error.clone())),
         };
@@ -229,7 +229,7 @@ impl Outcome {
 
 impl From<Refusal> for Outcome {
     fn from(r: Refusal) -> Self {
-        Self { data: Err(r), diagnostics: vec![], exit_ok: Exit::Ok }
+        Self { result: Err(r), diagnostics: vec![], exit_ok: Exit::Ok }
     }
 }
 
@@ -267,7 +267,7 @@ impl Report {
             for d in &outcome.diagnostics {
                 eprintln!("{}", d.human());
             }
-            if let Err(r) = &outcome.data {
+            if let Err(r) = &outcome.result {
                 eprintln!("error[{}]: {}", r.error.code, r.error.message);
             }
         }

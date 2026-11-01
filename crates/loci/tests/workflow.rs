@@ -172,11 +172,17 @@ fn new_refusals() {
         ("views/x", "new.no-area"),
         ("concepts/top", "new.no-area"),
         ("journal/r/2025/01/25-01-01", "new.no-area"),
+        // The destination checks `mv` makes too.
+        ("concepts/A/y", "path.case-twin"),
     ] {
         let (exit, env) = v.run(&["new", path]);
         assert_eq!((exit, error_code(&env)), (1, code), "new {path}: {env:#}");
     }
     assert_eq!(v.tree(), before);
+    v.write(".gitignore", "concepts/a/secret.md\n");
+    v.commit_all("ignore");
+    let (exit, env) = v.run(&["new", "concepts/a/secret"]);
+    assert_eq!((exit, error_code(&env)), (1, "path.ignored"), "{env:#}");
 }
 
 #[test]

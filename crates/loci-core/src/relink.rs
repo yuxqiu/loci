@@ -81,7 +81,7 @@ pub fn add_writes(index: &Index, change: &mut Change, edits: BTreeMap<String, Ve
         let note = &index.markdown[&path];
         let count = file_edits.len();
         let text =
-            splice::apply(&note.text, file_edits).map_err(|e| Refusal::internal("change.overlap", e.to_string()))?;
+            splice::apply(&note.text, file_edits).map_err(|e| Refusal::internal("change.edit", e.to_string()))?;
         let dest = change.final_path(&path);
         change.edit_counts.insert(dest.clone(), count);
         change.writes.insert(dest, text);

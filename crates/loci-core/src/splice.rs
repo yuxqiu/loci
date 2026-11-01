@@ -19,25 +19,31 @@ impl Edit {
     }
 }
 
+/// Why a set of edits cannot be applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OverlapError {
-    pub first: Range<usize>,
-    pub second: Range<usize>,
+pub enum EditError {
+    /// An edit outside the text, reversed, or off a char boundary.
+    Invalid(Range<usize>),
+    /// Two edits overlap.
+    Overlap(Range<usize>, Range<usize>),
 }
 
-impl std::fmt::Display for OverlapError {
+impl std::fmt::Display for EditError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "edits {:?} and {:?} overlap", self.first, self.second)
+        match self {
+            EditError::Invalid(r) => write!(f, "edit {r:?} is outside the text or off a character boundary"),
+            EditError::Overlap(a, b) => write!(f, "edits {a:?} and {b:?} overlap"),
+        }
     }
 }
 
-impl std::error::Error for OverlapError {}
+impl std::error::Error for EditError {}
 
 /// Applies `edits` to `original`. Edits are sorted by start, an insert before a
 /// replacement starting at the same offset; inserts at the same offset keep their input
 /// order. Overlapping edits, or edits outside the text or off a char boundary, are an
 /// error.
-pub fn apply(original: &str, mut edits: Vec<Edit>) -> Result<String, OverlapError> {
+pub fn apply(original: &str, mut edits: Vec<Edit>) -> Result<String, EditError> {
     // Stable sort keeps the input order of inserts at the same offset.
     edits.sort_by_key(|e| (e.range.start, e.range.end));
     let mut out = String::with_capacity(original.len());
@@ -50,12 +56,12 @@ pub fn apply(original: &str, mut edits: Vec<Edit>) -> Result<String, OverlapErro
             || !original.is_char_boundary(r.start)
             || !original.is_char_boundary(r.end);
         if bad {
-            return Err(OverlapError { first: r.clone(), second: r });
+            return Err(EditError::Invalid(r));
         }
         if let Some(p) = &prev {
             // Inserts at the end of a previous edit are fine; anything starting inside it is not.
             if r.start < p.end {
-                return Err(OverlapError { first: p.clone(), second: r });
+                return Err(EditError::Overlap(p.clone(), r));
             }
         }
         out.push_str(&original[cursor..r.start]);

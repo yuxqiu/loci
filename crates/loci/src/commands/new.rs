@@ -1,6 +1,7 @@
 //! `loci new` (m0 §9.7).
 
 use loci_core::envelope::{Outcome, Refusal, Report};
+use loci_core::git;
 use loci_core::index::Index;
 use loci_core::vault::{self, Kind};
 use serde_json::json;
@@ -24,7 +25,19 @@ pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal
     if abs.symlink_metadata().is_ok() {
         return Err(Refusal::refused("new.exists", format!("`{path}` already exists")));
     }
+    // The destination checks `mv` makes too (m0 §9.5).
     let index = Index::open(&vault);
+    if let Some((existing, asked)) = index.case_twin(&path) {
+        return Err(Refusal::refused(
+            "path.case-twin",
+            format!(
+                "`{asked}` differs only in letter case from the existing `{existing}`; use the existing spelling or another name"
+            ),
+        ));
+    }
+    if git::is_ignored(&vault.root, &path).map_err(Refusal::git)? {
+        return Err(Refusal::refused("path.ignored", format!("`{path}` is ignored by git")));
+    }
     if index.name_taken(&slug, |_| false) {
         return Err(Refusal::refused("new.collision", format!("`{slug}` is already a concept's slug")));
     }

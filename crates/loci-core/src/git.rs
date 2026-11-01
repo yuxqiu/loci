@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
 
 fn git(root: &Path) -> Command {
     let mut c = Command::new("git");
@@ -10,15 +10,21 @@ fn git(root: &Path) -> Command {
     c
 }
 
-/// Runs a prepared git command and returns stdout, or an error message naming `what`
-/// and including stderr.
+/// Runs a prepared git command without stdin. Failing to start it is an error naming
+/// `what`.
+fn spawn(cmd: &mut Command, what: &str) -> Result<Output, String> {
+    cmd.stdin(Stdio::null()).output().map_err(|e| format!("git {what}: {e}"))
+}
+
+/// The error for a git command that ran and failed: `what` and git's stderr.
+fn failure(what: &str, out: &Output) -> String {
+    format!("git {what}: {}", String::from_utf8_lossy(&out.stderr).trim())
+}
+
+/// Runs a prepared git command and returns stdout, or an error naming `what`.
 fn exec(cmd: &mut Command, what: &str) -> Result<Vec<u8>, String> {
-    let out = cmd.stdin(Stdio::null()).output().map_err(|e| format!("git {what}: {e}"))?;
-    if out.status.success() {
-        Ok(out.stdout)
-    } else {
-        Err(format!("git {what}: {}", String::from_utf8_lossy(&out.stderr).trim()))
-    }
+    let out = spawn(cmd, what)?;
+    if out.status.success() { Ok(out.stdout) } else { Err(failure(what, &out)) }
 }
 
 /// Runs git and returns stdout, or an error message including stderr.
@@ -34,6 +40,11 @@ fn trimmed(out: Vec<u8>) -> String {
     String::from_utf8_lossy(&out).trim().to_string()
 }
 
+/// The id of the commit `HEAD` names.
+pub fn head(root: &Path) -> Result<String, String> {
+    run(root, &["rev-parse", "HEAD"]).map(trimmed)
+}
+
 /// Records the working tree as a commit whose parent is HEAD, under
 /// `refs/loci/agent/<HEAD id>` (replacing an earlier record for the same HEAD),
 /// without touching the index or any branch. `now` (Unix seconds) dates the record.
@@ -42,7 +53,7 @@ pub fn record_agent_tree(root: &Path, now: u64) -> Result<Option<String>, String
     if !has_head(root)? {
         return Ok(None);
     }
-    let head = trimmed(run(root, &["rev-parse", "HEAD"])?);
+    let head = head(root)?;
     let git_dir = trimmed(run(root, &["rev-parse", "--absolute-git-dir"])?);
     // A private index, so the user's staging is untouched.
     let index = Path::new(&git_dir).join(format!("loci-agent-index-{}", std::process::id()));
@@ -110,17 +121,15 @@ pub fn is_ignored(root: &Path, path: &str) -> Result<bool, String> {
 /// a directory it could not open).
 pub fn ls_files(root: &Path, pathspec: Option<&str>) -> Result<(Vec<Vec<u8>>, String), String> {
     let what = "ls-files";
-    let out = git(root)
-        .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"])
+    let mut cmd = git(root);
+    cmd.args(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"])
         // A vault path, never a pattern: `*` or `?` in a folder name is literal.
-        .args(pathspec.map(|p| format!(":(literal){p}")))
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("git {what}: {e}"))?;
-    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        .args(pathspec.map(|p| format!(":(literal){p}")));
+    let out = spawn(&mut cmd, what)?;
     if !out.status.success() {
-        return Err(format!("git {what}: {stderr}"));
+        return Err(failure(what, &out));
     }
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
     let paths = out.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()).map(<[u8]>::to_vec).collect();
     Ok((paths, stderr))
 }
@@ -133,11 +142,11 @@ pub fn has_head(root: &Path) -> Result<bool, String> {
 /// Runs a git query that exits 0 for yes and 1 for no; any other exit is an error.
 fn answer(root: &Path, args: &[&str]) -> Result<bool, String> {
     let what = args.join(" ");
-    let out = git(root).args(args).stdin(Stdio::null()).output().map_err(|e| format!("git {what}: {e}"))?;
+    let out = spawn(git(root).args(args), &what)?;
     match out.status.code() {
         Some(0) => Ok(true),
         Some(1) => Ok(false),
-        _ => Err(format!("git {what}: {}", String::from_utf8_lossy(&out.stderr).trim())),
+        _ => Err(failure(&what, &out)),
     }
 }
 

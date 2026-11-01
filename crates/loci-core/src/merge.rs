@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use crate::envelope::Refusal;
-use crate::index::{Index, Resolved};
+use crate::index::Index;
 use crate::parse::{FmValue, LinkForm, Note};
 use crate::relink::{self, Change};
 use crate::splice::Edit;
@@ -69,7 +69,7 @@ fn self_prereqs(index: &Index, into: &Note, from: &str) -> Vec<(usize, std::ops:
         .iter()
         .enumerate()
         .filter(|(_, l)| l.form == LinkForm::Prereq)
-        .filter(|(_, l)| matches!(index.resolve(into, l), Ok(Resolved::Note(p)) if p == from))
+        .filter(|(_, l)| index.link_target(into, l).as_deref() == Some(from))
         .map(|(i, l)| (i, l.range.clone()))
         .collect()
 }
