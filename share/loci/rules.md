@@ -37,7 +37,8 @@ This vault is a loci knowledge base. These rules apply to every agent working in
 ## Writing concept notes
 
 - Create notes with `loci new concepts/<area>/<slug>.md`; never invent ids.
-- Frontmatter holds only `id`, `aliases`, `prereqs`, `sources`, `digest`.
+- Frontmatter holds only `id`, `prereqs`, `sources`, `digest`. Other names for a
+  concept go in its H1, digest or text.
 - `sources` cites evidence only: `sources/<type>/<slug>[#p<N>|#<heading>]` or
   `journal/...`. Never cite another concept as evidence, and never a draft: a
   dissolved draft stays in git history.

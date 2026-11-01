@@ -53,8 +53,8 @@ Follow the `intake` skill, with these additions:
 
 - Rewrite the old link syntax as vault links. A link to a note that is not migrated
   yet becomes plain text; list it in the summary. Never link into the old notes.
-- Do not carry tags over: a tag becomes the area a concept lives in, an alias, or a
-  link to the concept it names.
+- Do not carry tags over: a tag becomes the area a concept lives in, a
+  name in the concept's text, or a link to the concept it names.
 - Keep dated findings dated: they go to a journal entry, not into a concept.
 
 ## 5. Review and continue

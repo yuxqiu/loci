@@ -137,6 +137,9 @@ fn lint_plugin_failures_drop_the_output() {
         let failed = plugin_failed(&env);
         assert_eq!(failed.len(), 1, "{what}: {}", diag_lines(&env));
         assert!(failed[0].contains("stub") && failed[0].contains("lint"), "{what}: {failed:?}");
+        if matches!(what, "exit code 2" | "invalid envelope") {
+            assert!(failed[0].contains(STUB_LINT_STDERR), "{what}: the plugin's stderr is reported: {failed:?}");
+        }
         assert!(with_code(&env, "stub.note").is_empty(), "{what}: output not dropped");
         assert!(with_code(&env, "other.code").is_empty(), "{what}: output not dropped");
     }

@@ -1,5 +1,6 @@
 //! Git helpers. loci calls the `git` CLI.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -140,50 +141,55 @@ pub struct Changes {
 }
 
 /// The working tree's changes relative to HEAD (`git status --porcelain=v2 -z
-/// --untracked-files=all`). Renames are reported as a deletion and an addition.
+/// --untracked-files=all --no-renames --ignore-submodules=all`): a rename is a
+/// deletion and an addition, and submodules, whose content loci does not read, are left
+/// out.
+/// A changed path is filed by whether it is in HEAD and on disk, both read directly: a
+/// record's own codes misstate HEAD for intent-to-add files and for conflicts whose
+/// "ours" is not HEAD (`git stash apply`), and its worktree mode is copied from the
+/// index for skip-worktree and assume-unchanged files.
 pub fn status(root: &Path) -> Result<Changes, String> {
-    let out = run(root, &["status", "--porcelain=v2", "-z", "--untracked-files=all"])?;
-    Ok(parse_status(&out))
-}
-
-fn parse_status(out: &[u8]) -> Changes {
-    let mut ch = Changes::default();
-    let mut fields = out.split(|b| *b == 0).map(|f| String::from_utf8_lossy(f).into_owned());
-    while let Some(rec) = fields.next() {
-        if rec.is_empty() {
-            continue;
-        }
-        let kind = rec.as_bytes()[0];
-        match kind {
-            b'1' => {
-                // 1 XY sub mH mI mW hH hI path
-                let parts: Vec<&str> = rec.splitn(9, ' ').collect();
-                let xy = parts[1];
-                let path = parts[8].to_string();
-                if xy.starts_with('A') || xy == ".A" {
-                    // Not in HEAD; added then deleted (`AD`) is no change.
-                    if !xy.ends_with('D') {
-                        ch.added.push(path);
-                    }
-                } else if xy.contains('D') {
-                    ch.deleted.push(path);
-                } else {
-                    ch.modified.push(path);
-                }
-            }
-            b'2' => {
-                // 2 XY sub mH mI mW hH hI Xscore path \0 origPath
-                let parts: Vec<&str> = rec.splitn(10, ' ').collect();
-                let path = parts[9].to_string();
-                let orig = fields.next().expect("a rename record is followed by its original path");
-                ch.deleted.push(orig);
-                ch.added.push(path);
-            }
-            b'?' => ch.untracked.push(rec[2..].to_string()),
-            _ => {}
+    let out = run(
+        root,
+        &["status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=all"],
+    )?;
+    let (changed, untracked) = parse_status(&out);
+    let head: BTreeSet<String> = if has_head(root)? {
+        let out = run(root, &["ls-tree", "-r", "--name-only", "-z", "HEAD"])?;
+        out.split(|b| *b == 0).filter(|p| !p.is_empty()).map(|p| String::from_utf8_lossy(p).into_owned()).collect()
+    } else {
+        BTreeSet::new()
+    };
+    let mut ch = Changes { untracked, ..Changes::default() };
+    for path in changed {
+        match (head.contains(&path), root.join(&path).is_file()) {
+            (true, true) => ch.modified.push(path),
+            (false, true) => ch.added.push(path),
+            (true, false) => ch.deleted.push(path),
+            (false, false) => {}
         }
     }
-    ch
+    Ok(ch)
+}
+
+/// The changed paths (ordinary and conflict records) and the untracked paths.
+fn parse_status(out: &[u8]) -> (Vec<String>, Vec<String>) {
+    let (mut changed, mut untracked) = (vec![], vec![]);
+    for rec in out.split(|b| *b == 0).map(String::from_utf8_lossy) {
+        // 1 XY sub mH mI mW hH hI path; u XY sub m1 m2 m3 mW h1 h2 h3 path.
+        let fields = match rec.as_bytes().first() {
+            Some(b'1') => 9,
+            Some(b'u') => 11,
+            Some(b'?') => {
+                untracked.push(rec[2..].to_string());
+                continue;
+            }
+            // Empty fields, headers (`#`) and ignored files (`!`): none requested.
+            _ => continue,
+        };
+        changed.push(rec.splitn(fields, ' ').last().expect("a record has fields").to_string());
+    }
+    (changed, untracked)
 }
 
 #[cfg(test)]
@@ -192,24 +198,114 @@ mod tests {
 
     #[test]
     fn status_records() {
-        let h =
-            "100644 100644 100644 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
         let out = [
-            format!("1 .M N... {h} m.md"),
-            format!("1 D. N... {h} d.md"),
-            format!("1 .D N... {h} wd.md"),
-            format!("1 A. N... {h} a.md"),
-            format!("1 .A N... {h} n.md"),
-            format!("1 AD N... {h} gone.md"),
-            format!("2 R. N... {h} R100 new name.md"),
-            "old name.md".to_string(),
-            "? u.md".to_string(),
+            "1 .M N... 100644 100644 100644 e69de29 e69de29 m.md",
+            "1 .D N... 100644 100644 000000 e69de29 e69de29 wd.md",
+            "u UU N... 100644 100644 100644 100644 7898192 f2ad6c7 6178079 c d.md",
+            "u DD N... 100644 000000 000000 000000 7898192 0000000 0000000 dd.md",
+            "? u.md",
+            "# branch.oid abc",
         ]
         .join("\0");
-        let ch = parse_status(out.as_bytes());
-        assert_eq!(ch.modified, ["m.md"]);
-        assert_eq!(ch.deleted, ["d.md", "wd.md", "old name.md"]);
-        assert_eq!(ch.added, ["a.md", "n.md", "new name.md"]);
-        assert_eq!(ch.untracked, ["u.md"]);
+        let (changed, untracked) = parse_status(out.as_bytes());
+        assert_eq!(changed, ["m.md", "wd.md", "c d.md", "dd.md"]);
+        assert_eq!(untracked, ["u.md"]);
+    }
+
+    /// An empty repository whose settings override the user's own: no signing prompts,
+    /// no hooks.
+    fn test_repo() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        test_repo_at(tmp.path());
+        tmp
+    }
+
+    fn test_repo_at(dir: &Path) {
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "t@t"],
+            &["config", "user.name", "t"],
+            &["config", "commit.gpgsign", "false"],
+            &["config", "core.hooksPath", "/dev/null"],
+        ] {
+            run(dir, args).unwrap();
+        }
+    }
+
+    /// A submodule (a gitlink, a directory on disk) with changes is not reported.
+    #[test]
+    fn status_ignores_submodules() {
+        let tmp = test_repo();
+        let root = tmp.path();
+        let git = |args: &[&str]| run(root, args).unwrap();
+        std::fs::write(root.join("a.md"), "a\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "base"]);
+        let base = trimmed(git(&["rev-parse", "HEAD"]));
+        git(&["update-index", "--add", "--cacheinfo", &format!("160000,{base},sub")]);
+        git(&["commit", "-qm", "sub"]);
+        // A checked-out submodule at a different commit, with an uncommitted file.
+        let sub = root.join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        test_repo_at(&sub);
+        std::fs::write(sub.join("x.md"), "x\n").unwrap();
+        run(&sub, &["add", "."]).unwrap();
+        run(&sub, &["commit", "-qm", "x"]).unwrap();
+        std::fs::write(sub.join("y.md"), "y\n").unwrap();
+        assert_eq!(status(root).unwrap(), Changes::default());
+    }
+
+    /// Cases where git's own records mislead: a stash conflict whose "ours" is not HEAD,
+    /// a rename whose new file is gone, and a copy under `status.renames=copies`.
+    #[test]
+    fn status_against_git() {
+        let tmp = test_repo();
+        let root = tmp.path();
+        let git = |args: &[&str]| run(root, args).unwrap();
+        let write = |p: &str, t: &str| std::fs::write(root.join(p), t).unwrap();
+        git(&["config", "status.renames", "copies"]);
+        write("a.md", "a\n");
+        write("r.md", "r\n");
+        git(&["add", "."]);
+        git(&["commit", "-qm", "base"]);
+
+        git(&["mv", "r.md", "gone.md"]);
+        std::fs::remove_file(root.join("gone.md")).unwrap();
+        // Intent-to-add, then deleted: no change. Re-added as intent-to-add after
+        // `rm --cached` (`DA`): modified.
+        write("n.md", "n\n");
+        git(&["add", "-N", "n.md"]);
+        std::fs::remove_file(root.join("n.md")).unwrap();
+        git(&["rm", "-q", "--cached", "a.md"]);
+        git(&["add", "-N", "a.md"]);
+        let ch = status(root).unwrap();
+        assert_eq!(ch.modified, ["a.md"]);
+        assert_eq!((ch.deleted, ch.added), (vec!["r.md".to_string()], vec![]));
+        git(&["add", "a.md"]);
+        git(&["rm", "-q", "--cached", "n.md"]);
+
+        // A staged change to a skip-worktree file that is gone from disk: deleted.
+        write("a.md", "a2\n");
+        git(&["add", "a.md"]);
+        git(&["update-index", "--skip-worktree", "a.md"]);
+        std::fs::remove_file(root.join("a.md")).unwrap();
+        assert_eq!(status(root).unwrap().deleted, ["a.md", "r.md"]);
+        git(&["update-index", "--no-skip-worktree", "a.md"]);
+        git(&["checkout", "-q", "HEAD", "--", "a.md"]);
+
+        std::fs::copy(root.join("a.md"), root.join("copy.md")).unwrap();
+        git(&["add", "copy.md"]);
+        write("y.md", "one\n");
+        git(&["add", "y.md"]);
+        git(&["stash", "-q"]);
+        write("y.md", "two\n");
+        git(&["add", "y.md"]);
+        assert!(run(root, &["stash", "apply", "-q"]).is_err(), "the stash conflicts on y.md");
+
+        // The stash also restores `gone.md`.
+        let ch = status(root).unwrap();
+        assert_eq!(ch.modified, Vec::<String>::new());
+        assert_eq!(ch.deleted, ["r.md"]);
+        assert_eq!(ch.added, ["copy.md", "gone.md", "y.md"]);
     }
 }

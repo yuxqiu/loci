@@ -25,13 +25,14 @@ fn mv_refused(v: &TestVault, from: &str, to: &str, code: &str) {
 // ---------------------------------------------------------------- mv-rename
 
 #[test]
-fn mv_rename_flow_aliases() {
+fn mv_rename_rewrites_links() {
     let v = TestVault::committed(BIN, "mv-rename");
+    let before = v.read("concepts/a/flow.md");
     let env = mv(&v, "concepts/a/flow.md", "concepts/a/flow-new.md");
     assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
-    // Old slug appended to a flow list; links by bare slug stay bare; markdown links
-    // are never edited.
-    assert!(v.read("concepts/a/flow-new.md").contains("aliases: [f1, flow]\n"));
+    // The note itself is unchanged; links by bare slug stay bare; markdown links are
+    // never edited.
+    assert_eq!(v.read("concepts/a/flow-new.md"), before);
     let linker = v.read("views/linker.md");
     assert!(linker.contains("- [[flow-new]] and [[flow-new|label]] and [[flow-new]]\n"), "{linker}");
     assert!(linker.contains("[markdown](concepts/a/flow.md)"), "{linker}");
@@ -41,30 +42,22 @@ fn mv_rename_flow_aliases() {
 }
 
 #[test]
-fn mv_rename_block_aliases() {
+fn mv_rename_rewrites_path_links() {
     let v = TestVault::committed(BIN, "mv-rename");
-    let env = mv(&v, "concepts/a/block.md", "concepts/a/block-new.md");
-    assert_eq!(
-        env["data"]["aliases_added"],
-        serde_json::json!([{"path": "concepts/a/block-new.md", "alias": "block"}])
-    );
-    assert!(v.read("concepts/a/block-new.md").contains("aliases:\n  - b1\n  - block\ndigest:"));
+    mv(&v, "concepts/a/block.md", "concepts/a/block-new.md");
     let linker = v.read("views/linker.md");
     assert!(linker.contains("- [[concepts/a/block-new]] and [[concepts/a/block-new#^b]]\n"), "{linker}");
 }
 
 #[test]
-fn mv_rename_absent_and_empty_aliases() {
+fn mv_rename_rewrites_fragments_and_prereqs() {
     let v = TestVault::committed(BIN, "mv-rename");
     mv(&v, "concepts/a/absent.md", "concepts/a/absent-new.md");
-    assert!(
-        v.read("concepts/a/absent-new.md")
-            .starts_with("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0M3\naliases: [absent]\ndigest:")
-    );
     assert!(v.read("views/linker.md").contains("- [[absent-new#Heading]]\n"));
     assert!(v.read("concepts/a/empty-flow.md").contains(r#"prereqs: ["[[flow]]", "[[absent-new]]"]"#));
-    mv(&v, "concepts/a/empty-flow.md", "concepts/a/ef.md");
-    assert!(v.read("concepts/a/ef.md").contains("aliases: [empty-flow]\n"));
+    // Renaming back is a rename like any other.
+    mv(&v, "concepts/a/absent-new.md", "concepts/a/absent.md");
+    assert!(v.read("concepts/a/empty-flow.md").contains(r#"prereqs: ["[[flow]]", "[[absent]]"]"#));
     // The vault still lints the same: no new link errors.
     let (_, env) = v.run(&["lint"]);
     assert_eq!(env["data"]["errors"], 1, "{}", diag_lines(&env)); // the markdown link
@@ -75,8 +68,9 @@ fn mv_refusals() {
     let v = TestVault::committed(BIN, "mv-rename");
     mv_refused(&v, "concepts/a/flow.md", "concepts/a/block.md", "mv.exists");
     mv_refused(&v, "concepts/a/flow.md", "concepts/a/sub/block.md", "mv.collision");
-    mv_refused(&v, "concepts/a/flow.md", "concepts/a/b1.md", "mv.collision");
-    mv_refused(&v, "concepts/a/flow.md", "concepts/a/B1.md", "mv.collision");
+    mv_refused(&v, "concepts/a/flow.md", "concepts/a/sub/Block.md", "mv.collision");
+    mv_refused(&v, "concepts/a/flow.md", "concepts/a/B1.md", "slug.format");
+    mv_refused(&v, "sources", "old/sources", "mv.source-file");
     mv_refused(&v, "concepts/a/flow.md", "views/flow.md", "mv.no-area");
     mv_refused(&v, "concepts/a/nope.md", "concepts/a/x.md", "mv.from");
     mv_refused(&v, "concepts/a/flow.md", "../out.md", "path.outside");
@@ -125,8 +119,7 @@ fn mv_directory() {
 #[test]
 fn mv_area_directory_renames_nothing_but_paths() {
     let v = TestVault::committed(BIN, "mv-rename");
-    let env = mv(&v, "concepts/a", "concepts/b");
-    assert_eq!(env["data"]["aliases_added"], serde_json::json!([]));
+    mv(&v, "concepts/a", "concepts/b");
     let linker = v.read("views/linker.md");
     assert!(linker.contains("[[concepts/b/block]]") && linker.contains("- [[flow]] and"), "{linker}");
     let (_, env) = v.run(&["lint"]);
@@ -151,12 +144,12 @@ fn table_pipe_mv_keeps_escaped_pipe() {
 // ---------------------------------------------------------------- frontmatter-edge
 
 #[test]
-fn frontmatter_edge_crlf_alias_line() {
+fn frontmatter_edge_crlf_note_moves_unchanged() {
     let v = TestVault::committed(BIN, "frontmatter-edge");
     mv(&v, "concepts/a/crlf.md", "concepts/a/crlf-two.md");
     assert_eq!(
         v.read("concepts/a/crlf-two.md"),
-        "---\r\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0J1\r\naliases: [crlf]\r\ndigest: A CRLF note.\r\n---\r\n# CRLF\r\n\r\nBody line.\r\n"
+        "---\r\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0J1\r\ndigest: A CRLF note.\r\n---\r\n# CRLF\r\n\r\nBody line.\r\n"
     );
 }
 
@@ -189,7 +182,7 @@ fn cjk_mv_edits_frontmatter_at_the_right_offset() {
     );
     assert_eq!(
         v.read("concepts/algo/排序算法.md"),
-        "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0G2\naliases: [排序]\ndigest: 排列元素\n---\n# 排序\n"
+        "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0G2\ndigest: 排列元素\n---\n# 排序\n"
     );
     mv(&v, "views/zh.md", "views/中文.md");
     assert_eq!(
@@ -414,16 +407,6 @@ fn path_arguments_outside_the_vault_are_refused() {
     assert_eq!(v.tree(), before);
     assert!(!v.tmp.path().join("escaped.md").exists());
     assert_eq!(std::fs::read_to_string(v.tmp.path().join("outside.md")).unwrap(), "# Outside\n");
-}
-
-#[test]
-fn mv_rename_needs_valid_frontmatter() {
-    let v = TestVault::committed(BIN, "mv-rename");
-    v.write("concepts/a/bare.md", "# Bare\n");
-    v.write("concepts/a/scalar.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0Z1\naliases: one\ndigest: d\n---\n# S\n");
-    v.commit_all("more");
-    mv_refused(&v, "concepts/a/bare.md", "concepts/a/bare2.md", "mv.frontmatter");
-    mv_refused(&v, "concepts/a/scalar.md", "concepts/a/scalar2.md", "mv.frontmatter");
 }
 
 #[test]

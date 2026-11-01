@@ -38,10 +38,7 @@ fn names() {
     let dangling = covered_by(&v, &env, "link.dangling", dfs);
     assert_eq!(dangling, ["plan", "25-03-14", "diagram.png", "breadth-first"]);
     let hints: Vec<_> = with_code(&env, "link.dangling").iter().map(|d| d["hint"].clone()).collect();
-    assert_eq!(
-        hints,
-        ["link non-concepts by path", "link non-concepts by path", "link non-concepts by path", "alias of [[bfs]]"]
-    );
+    assert_eq!(hints, ["link non-concepts by path"; 4]);
     assert_eq!(covered_by(&v, &env, "link.path-form", dfs), ["/RULES", "../x"]);
     // A view sharing a concept's stem is not a slug duplicate; two concepts are.
     let dups = with_code(&env, "slug.duplicate");

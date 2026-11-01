@@ -37,7 +37,7 @@ Notes are plain markdown in a git repository; edit them with any editor.
   | edit text | nothing; `loci lint` flags broken links |
   | create a concept | start with `loci new concepts/<area>/<slug>.md` (it writes the id) |
   | rename or move a note | use `loci mv`, which rewrites every link to it |
-  | combine two notes about the same concept | copy what you want to keep into the note that stays, then run `loci merge <old> <kept>`: it points every link at the kept note, adds the old name to its aliases, and deletes the old note |
+  | combine two notes about the same concept | copy what you want to keep into the note that stays, then run `loci merge <old> <kept>`: it points every link at the kept note and deletes the old note |
   | delete a note | fix the links `loci lint` reports |
   | add review cards | `loci block-ids <note> --section Cards` |
   | write a journal entry | write it in `journal/<stream>/`; ask the agent if you want concepts extracted |

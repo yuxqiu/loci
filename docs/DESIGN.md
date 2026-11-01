@@ -133,7 +133,6 @@ directly in `inbox/`, outside its subfolders, is a lint warning.
 ```markdown
 ---
 id: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV
-aliases: [dijkstras-algorithm]
 prereqs: ["[[priority-queue]]", "[[edge-relaxation]]"]
 sources:
   - "sources/papers/dijkstra-1959#p2"
@@ -151,9 +150,6 @@ Explanation in the user's style, linking related concepts.
 ```
 
 - **`id`:** a ULID, permanent across renames.
-- **`aliases`:** other names for the concept: abbreviations, spellings, notation
-  variants, and the names of sub-ideas folded into the note. They are searched by
-  `loci find` and checked for duplicates; links do not resolve by alias.
 - **`prereqs`:** direct prerequisites only; the closure is computed. Cycles are
   errors.
 - **`sources`:** evidence: paths into `sources/` or `journal/`, optionally with
@@ -162,15 +158,18 @@ Explanation in the user's style, linking related concepts.
   intake commit deletes the draft and writes the concept).
 - **`digest`:** one sentence, shown by `loci digest`.
 - **H1:** the title. Exactly one, directly after the frontmatter.
+- **Other names** (abbreviations, spellings, a translation, the names of sub-ideas
+  folded into the note) go in the H1, the digest or the text, which `loci find`
+  searches. There is no alias field: a rename or merge rewrites every link, and an
+  agent searching by meaning finds a concept without one.
 - **No other fields.** In particular, `tags:` is an error.
 - **Links:** a bare `[[name]]` resolves only to the concept with that slug. Every
   other vault target uses a path from the vault root. Notes and images in the vault
   are linked with wikilinks (`[[…]]`, `![[…]]`); markdown links are for external
-  URLs. A duplicate concept slug or alias is an error.
+  URLs. A duplicate concept slug is an error.
 - **Size:** one note per concept, with sections inside it. An idea gets its own note
   once it has its own definition and other notes need to link to it on its own.
-  Otherwise it is a heading in its parent note, and its name goes into the parent's
-  `aliases`. A note longer than the character budget in `loci.toml` is a warning.
+  Otherwise it is a heading in its parent note. A note longer than the character budget in `loci.toml` is a warning.
 - **Block ids:** a paragraph or list item can end with a block id `^id`, which
   `[[note#^id]]` links to. `loci block-ids <note> --section <heading>` gives a
   fresh ULID (the same format as concept ids) to each top-level block under that
@@ -260,7 +259,7 @@ edit needs:
 | edit the text of a concept, journal entry or view | nothing; `loci lint` (or the editor's link checks) catches broken links |
 | create a concept | `loci new concepts/<area>/<slug>.md` (it writes the `id`), then write it |
 | rename or move a note or folder | `loci mv`, which rewrites every link to it |
-| combine two notes about the same concept | copy what to keep into the note that stays, then `loci merge <old> <kept>` (it points every link at the kept note, adds the old name to its aliases, and deletes the old note) |
+| combine two notes about the same concept | copy what to keep into the note that stays, then `loci merge <old> <kept>` (it points every link at the kept note and deletes the old note) |
 | delete a note | delete it, then fix or remove the links that `loci lint` reports |
 | add cards | write them under `## Cards`, then `loci block-ids <note> --section Cards` |
 | write a rough note to be turned into concepts | put it in `inbox/drafts/` and ask the agent to process the inbox |
@@ -365,7 +364,7 @@ question.
    - **load-bearing:** the material cannot be understood without it;
    - **peripheral:** it gets a one-line definition where it appears.
 2. **Sort.** The agent pre-fills each load-bearing concept as know, shaky or don't
-   know, from the knowledge-base match (slug, alias, `loci find`) and the estimate.
+   know, from the knowledge-base match (slug, `loci find`) and the estimate.
    The user corrects each with one keystroke:
    - **know:** the boundary; stop here.
    - **shaky:** the boundary; the concept goes to the diagnostic.
@@ -418,7 +417,7 @@ and `docs/specs/m1-m4.md`, the learn plugin in `docs/specs/learn-plugin.md`.
 |---|---|
 | setup | `init` |
 | session | `status`, `skill show [<name>]` |
-| structure | `new`, `block-ids --section`, `mv` (links are rewritten, and the old slug becomes an alias), `merge` (M1) |
+| structure | `new`, `block-ids --section`, `mv` (links are rewritten), `merge` (M1) |
 | sources | `fetch` |
 | health | `lint` (also runs each installed plugin's lint), `done` (an agent's last step: lint, then a local record of its work for the `improve` skill) |
 | find | `digest`, `find`, `closure`, `links` (a note's links and the links to it) |

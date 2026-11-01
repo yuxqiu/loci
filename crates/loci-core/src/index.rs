@@ -3,8 +3,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use unicode_normalization::UnicodeNormalization;
-
 use crate::envelope::Refusal;
 use crate::parse::{self, Link, LinkForm, Note};
 use crate::vault::{self, Kind};
@@ -93,10 +91,10 @@ pub struct Index {
     pub issues: BTreeMap<String, FileIssue>,
     /// Lowercased concept slug -> concept paths.
     pub slugs: BTreeMap<String, Vec<String>>,
-    /// Lowercased alias -> concept paths declaring it.
-    pub aliases: BTreeMap<String, Vec<String>>,
     /// Link targets by path: notes without `.md`, other files with their extension.
     pub targets: BTreeSet<String>,
+    /// Every source folder that holds a file, by path.
+    pub sources: BTreeMap<String, SourceFolder>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,9 +136,17 @@ pub fn build(files: Vec<String>, read: impl Fn(&str) -> std::io::Result<Vec<u8>>
         notes: BTreeMap::new(),
         issues: BTreeMap::new(),
         slugs: BTreeMap::new(),
-        aliases: BTreeMap::new(),
         targets: BTreeSet::new(),
+        sources: BTreeMap::new(),
     };
+    for (folder, file) in files.iter().filter_map(|f| vault::source_folder(f)) {
+        index
+            .sources
+            .entry(folder.to_string())
+            .or_insert_with(|| SourceFolder { path: folder.to_string(), files: vec![] })
+            .files
+            .push(file.to_string());
+    }
     for path in files {
         let kind = vault::kind_of(&path).unwrap_or(Kind::Unknown);
         if let Some(stripped) = path.strip_suffix(".md") {
@@ -158,10 +164,6 @@ pub fn build(files: Vec<String>, read: impl Fn(&str) -> std::io::Result<Vec<u8>>
                     if kind == Kind::Concept {
                         let slug = vault::stem(&path).to_lowercase();
                         index.slugs.entry(slug).or_default().push(path.clone());
-                        for alias in note.fm_strings("aliases") {
-                            let a: String = alias.nfc().collect::<String>().to_lowercase();
-                            index.aliases.entry(a).or_default().push(path.clone());
-                        }
                     }
                     index.notes.insert(path, note);
                 }
@@ -248,23 +250,10 @@ impl Index {
     pub fn resolve_source(&self, link: &Link) -> Option<SourceTarget> {
         let target = &link.target;
         if vault::is_source_folder(target) {
-            return self.source_folders().remove(target).map(SourceTarget::Folder);
+            return self.sources.get(target).cloned().map(SourceTarget::Folder);
         }
         let note = format!("{target}.md");
         (target.starts_with("journal/") && self.notes.contains_key(&note)).then_some(SourceTarget::Note(note))
-    }
-
-    /// Every source folder that holds a file, by path.
-    pub fn source_folders(&self) -> BTreeMap<String, SourceFolder> {
-        let mut folders: BTreeMap<String, SourceFolder> = BTreeMap::new();
-        for (folder, file) in self.files.iter().filter_map(|f| vault::source_folder(f)) {
-            folders
-                .entry(folder.to_string())
-                .or_insert_with(|| SourceFolder { path: folder.to_string(), files: vec![] })
-                .files
-                .push(file.to_string());
-        }
-        folders
     }
 
     /// Every link that points at `path`, or at the source folder holding it, as
@@ -282,12 +271,10 @@ impl Index {
         out
     }
 
-    /// Whether `slug` is already a concept's slug (other than paths `moving` accepts,
-    /// which are being renamed) or any concept's alias (§9.5, §9.8).
+    /// Whether `slug` is already a concept's slug, other than paths `moving` accepts,
+    /// which are being renamed (§9.5, §9.8).
     pub fn name_taken(&self, slug: &str, moving: impl Fn(&str) -> bool) -> bool {
-        let key = slug.to_lowercase();
-        let slug_taken = self.slugs.get(&key).is_some_and(|ps| ps.iter().any(|p| !moving(p)));
-        slug_taken || self.aliases.contains_key(&key)
+        self.slugs.get(&slug.to_lowercase()).is_some_and(|ps| ps.iter().any(|p| !moving(p)))
     }
 
     pub fn concepts(&self) -> impl Iterator<Item = &Note> {
@@ -311,11 +298,7 @@ impl Index {
                     return Err(LinkError::Dangling { hint: Some(hint) });
                 }
                 Some([]) | None => {
-                    let hint = match self.aliases.get(&key) {
-                        Some(paths) => Some(format!("alias of [[{}]]", vault::stem(&paths[0]))),
-                        None => Some("link non-concepts by path".to_string()),
-                    };
-                    return Err(LinkError::Dangling { hint });
+                    return Err(LinkError::Dangling { hint: Some("link non-concepts by path".to_string()) });
                 }
             }
         } else {
@@ -368,14 +351,13 @@ mod tests {
     #[test]
     fn bare_names_resolve_to_concepts_only() {
         let i = from_texts(&[
-            ("concepts/a/bfs.md", "---\naliases: [breadth]\n---\n# BFS\n"),
-            ("views/learn/bfs.md", "# Plan\n\n[[bfs]] [[plan]] [[breadth]]\n"),
+            ("concepts/a/bfs.md", "# BFS\n"),
+            ("views/learn/bfs.md", "# Plan\n\n[[bfs]] [[plan]]\n"),
             ("views/plan.md", "# P\n"),
         ]);
         let n = i.notes["views/learn/bfs.md"].clone();
         assert_eq!(i.resolve(&n, &n.links[0]), Ok(Resolved::Note("concepts/a/bfs.md".into())));
         assert!(matches!(i.resolve(&n, &n.links[1]), Err(LinkError::Dangling { .. })));
-        assert_eq!(i.resolve(&n, &n.links[2]), Err(LinkError::Dangling { hint: Some("alias of [[bfs]]".into()) }));
     }
 
     #[test]

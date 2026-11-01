@@ -67,11 +67,11 @@ expression: v.redact(&env)
       "severity": "error"
     },
     {
-      "byte_end": 380,
-      "byte_start": 367,
+      "byte_end": 383,
+      "byte_start": 370,
       "code": "link.dangling",
-      "col": 10,
-      "hint": "alias of [[bfs]]",
+      "col": 13,
+      "hint": "link non-concepts by path",
       "line": 16,
       "message": "`breadth-first` does not resolve",
       "path": "concepts/algo/dfs.md",

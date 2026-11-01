@@ -10,7 +10,6 @@ description: Write, revise, split, merge and organise concept notes and areas. U
 ```markdown
 ---
 id: <assigned by loci new>
-aliases: [other-name]
 prereqs: ["[[prerequisite-slug]]"]
 sources:
   - "sources/papers/<key>#p3"
@@ -26,10 +25,11 @@ Explanation, linking related concepts by bare slug.
 
 - `prereqs` lists direct prerequisites only, each quoted.
 - `digest` is one sentence with no links; it is what `loci digest` shows.
+- Other names (an abbreviation, a spelling, a translation) go in the title, the
+  digest or the text, where `loci find` finds them. There is no alias field.
 - One note per concept. An idea gets its own note once it has its own definition
   and other notes need to link to it on its own (`loci links <note>` lists what
-  links to a note); otherwise it is a heading in its parent, with its name in the
-  parent's `aliases`.
+  links to a note); otherwise it is a heading in its parent.
 
 ## Revising
 

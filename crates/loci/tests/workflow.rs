@@ -141,7 +141,7 @@ fn new_writes_the_skeleton() {
     let id = env["data"]["id"].as_str().unwrap();
     assert!(is_ulid(id), "{id}");
     let text = v.read("concepts/a/sub/fresh.md");
-    assert_eq!(text, format!("---\nid: {id}\naliases: []\nprereqs: []\nsources: []\ndigest: \"\"\n---\n# fresh\n"));
+    assert_eq!(text, format!("---\nid: {id}\nprereqs: []\nsources: []\ndigest: \"\"\n---\n# fresh\n"));
     assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
     // The empty digest is fm.missing-field until filled.
     let (_, env) = v.run(&["lint"]);
@@ -161,7 +161,6 @@ fn new_refusals() {
         ("concepts/a/x.md", "new.exists"),
         ("concepts/a/Bad_Slug", "slug.format"),
         ("concepts/b/x", "new.collision"),
-        ("concepts/b/ex", "new.collision"),
         ("concepts/b/EX", "slug.format"),
         ("views/x", "new.no-area"),
         ("concepts/top", "new.no-area"),

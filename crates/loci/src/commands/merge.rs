@@ -18,7 +18,6 @@ pub fn run(ctx: &Ctx, from: &str, into: &str) -> Result<Report, Refusal> {
         "from": from,
         "into": into,
         "edited": change.edit_counts.iter().map(|(p, n)| json!({"path": p, "edits": n})).collect::<Vec<_>>(),
-        "aliases_added": change.aliases_added.iter().map(|(p, a)| json!({"path": p, "alias": a})).collect::<Vec<_>>(),
     });
     let human = format!("merged {from} into {into}; edited {} file(s)\n", change.edit_counts.len());
     Ok(Report::new(Outcome::ok(data), human))

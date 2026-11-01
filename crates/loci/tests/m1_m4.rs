@@ -21,12 +21,9 @@ fn strs(v: &serde_json::Value) -> Vec<&str> {
 }
 
 #[test]
-fn merge_rewrites_links_and_records_aliases() {
+fn merge_rewrites_links_and_deletes_the_absorbed_note() {
     let v = vault(&[
-        (
-            "concepts/g/bfs.md",
-            concept(IDS[0], "aliases: [breadth-first]\n", "Level order.", "# BFS\n\n## Queue\n\nText.\n"),
-        ),
+        ("concepts/g/bfs.md", concept(IDS[0], "", "Level order.", "# BFS\n\n## Queue\n\nText.\n")),
         (
             "concepts/g/graph-search.md",
             concept(IDS[1], "prereqs: [\"[[bfs]]\"]\n", "Search.", "# Graph search\n\nSee [[bfs]].\n"),
@@ -49,7 +46,7 @@ fn merge_rewrites_links_and_records_aliases() {
         !into.contains("prereqs: [\"[[bfs]]\"]") && !into.contains("[[graph-search]]\"]"),
         "self-prereq removed:\n{into}"
     );
-    assert!(into.contains("bfs") && into.contains("breadth-first"), "slug and alias added:\n{into}");
+    assert!(!into.contains("aliases"), "no aliases are added:\n{into}");
     assert!(into.contains("See [[graph-search]]."));
     let d = v.read("concepts/g/dijkstra.md");
     assert!(d.contains("prereqs: [\"[[graph-search]]\"]"), "{d}");
@@ -59,13 +56,6 @@ fn merge_rewrites_links_and_records_aliases() {
     );
     assert_eq!(env["data"]["from"], "concepts/g/bfs.md");
     assert_eq!(env["data"]["into"], "concepts/g/graph-search.md");
-    assert_eq!(
-        env["data"]["aliases_added"],
-        json!([
-            {"alias": "bfs", "path": "concepts/g/graph-search.md"},
-            {"alias": "breadth-first", "path": "concepts/g/graph-search.md"},
-        ])
-    );
     // The fragment into the deleted note now dangles; lint reports it.
     let (_, env) = v.run(&["lint"]);
     assert!(has(&env, "link.dangling-heading", "concepts/g/dijkstra.md"), "{env}");

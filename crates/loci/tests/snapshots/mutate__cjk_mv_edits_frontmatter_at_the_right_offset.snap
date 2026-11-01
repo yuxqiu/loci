@@ -5,20 +5,10 @@ expression: v.redact(&env)
 {
   "command": "mv",
   "data": {
-    "aliases_added": [
-      {
-        "alias": "排序",
-        "path": "concepts/algo/排序算法.md"
-      }
-    ],
     "edited": [
       {
         "edits": 1,
         "path": "concepts/algo/二分查找.md"
-      },
-      {
-        "edits": 1,
-        "path": "concepts/algo/排序算法.md"
       }
     ],
     "moved": [

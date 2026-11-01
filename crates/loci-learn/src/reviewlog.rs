@@ -196,7 +196,11 @@ pub fn append(vault: &Path, line: &Line) -> std::io::Result<u64> {
     };
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
     let json = serde_json::to_string(line).expect("a line always serialises");
-    writeln!(f, "{json}")?;
+    // One write, undone on failure, so a partial line never stays in the log.
+    if let Err(e) = f.write_all(format!("{json}\n").as_bytes()) {
+        f.set_len(before)?;
+        return Err(e);
+    }
     Ok(before)
 }
 

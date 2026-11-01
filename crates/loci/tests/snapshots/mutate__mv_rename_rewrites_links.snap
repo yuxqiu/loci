@@ -5,20 +5,10 @@ expression: v.redact(&env)
 {
   "command": "mv",
   "data": {
-    "aliases_added": [
-      {
-        "alias": "flow",
-        "path": "concepts/a/flow-new.md"
-      }
-    ],
     "edited": [
       {
         "edits": 1,
         "path": "concepts/a/empty-flow.md"
-      },
-      {
-        "edits": 1,
-        "path": "concepts/a/flow-new.md"
       },
       {
         "edits": 3,

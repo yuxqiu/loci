@@ -11,14 +11,14 @@ use crate::config::Budgets;
 use crate::digest;
 use crate::envelope::{Diagnostic, sort_diagnostics};
 use crate::git;
-use crate::index::{FileIssue, Index, LinkError, SourceFolder, SourceTarget};
+use crate::index::{FileIssue, Index, LinkError, SourceTarget};
 use crate::parse::{FmError, FmValue, LinkForm, Note, TopBlock, prereq_slug, verbatim};
 use crate::sources::{SourceMeta, hex_sha256};
 use crate::vault::{self, Kind};
 
 static PAGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^p[1-9][0-9]*$").unwrap());
 
-const CONCEPT_FIELDS: [&str; 5] = ["id", "aliases", "prereqs", "sources", "digest"];
+const CONCEPT_FIELDS: [&str; 4] = ["id", "prereqs", "sources", "digest"];
 
 /// The rules over the index (§7.3). The rules that read file bytes or git are
 /// [`disk_rules`].
@@ -181,13 +181,7 @@ impl Lint<'_> {
         }
         // The list fields: (key, expected type, hint, whether an item is valid).
         type ItemOk = fn(&FmValue, &str) -> bool;
-        let lists: [(&str, &str, Option<&str>, ItemOk); 3] = [
-            (
-                "aliases",
-                "a list of non-empty strings",
-                None,
-                |i, _| matches!(i, FmValue::Str { value, .. } if !value.trim().is_empty()),
-            ),
+        let lists: [(&str, &str, Option<&str>, ItemOk); 2] = [
             ("prereqs", "a list of `\"[[slug]]\"`", Some("write \"[[slug]]\""), |i, text| {
                 matches!(i, FmValue::Str { value, span, quoted: true }
                     if prereq_slug(value).is_some() && verbatim(text, span, value, true))
@@ -328,23 +322,6 @@ impl Lint<'_> {
                 );
             }
         }
-        for (alias, paths) in &index.aliases {
-            let mut others: Vec<&str> = paths.iter().map(String::as_str).collect();
-            if let Some(slug_paths) = index.slugs.get(alias) {
-                others.extend(slug_paths.iter().map(String::as_str));
-            }
-            others.sort();
-            others.dedup();
-            if paths.len() > 1 || index.slugs.contains_key(alias) {
-                out.push(
-                    Diagnostic::error(
-                        "alias.duplicate",
-                        format!("alias `{alias}` equals a slug or alias of {}", others[1..].join(", ")),
-                    )
-                    .at_path(others[0]),
-                );
-            }
-        }
         // Areas.
         for a in index.areas() {
             let p = format!("concepts/{a}/AREA.md");
@@ -387,7 +364,7 @@ impl Lint<'_> {
                     .at_path(f),
             );
         }
-        for folder in self.index.source_folders().into_values() {
+        for folder in self.index.sources.values() {
             let at =
                 |code: &str, msg: &str| Diagnostic::error(code, msg).at_path(format!("{}/source.yaml", folder.path));
             if folder.original().is_none() {
@@ -508,7 +485,7 @@ pub fn disk_rules(index: &Index, root: &Path) -> Vec<Diagnostic> {
         Diagnostic::error("file.unreadable", format!("file cannot be read: {e}")).at_path(path)
     };
     // Folders without `source.yaml` are `sources.no-provenance` (Lint::run).
-    for folder in index.source_folders().into_values().filter(SourceFolder::has_meta) {
+    for folder in index.sources.values().filter(|f| f.has_meta()) {
         let meta = format!("{}/source.yaml", folder.path);
         let meta_text = match std::fs::read_to_string(root.join(&meta)) {
             Ok(t) => t,

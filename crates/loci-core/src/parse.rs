@@ -162,12 +162,12 @@ pub struct Note {
 }
 
 impl Note {
-    /// Frontmatter field `key`, if it is a string.
     /// The value of frontmatter field `key`.
     pub fn fm(&self, key: &str) -> Option<&FmValue> {
         Some(&self.frontmatter.as_ref()?.get(key)?.value)
     }
 
+    /// Frontmatter field `key`, if it is a string.
     pub fn fm_str(&self, key: &str) -> Option<&str> {
         match self.fm(key)? {
             FmValue::Str { value, .. } => Some(value),

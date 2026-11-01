@@ -13,4 +13,4 @@ By path: [[views/plan]], [[journal/r/2025/03/25-03-14]], ![[concepts/algo/diagra
 
 Bad forms: [[/RULES]] and [[../x]].
 
-Alias: [[breadth-first]].
+Old name: [[breadth-first]].

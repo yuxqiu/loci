@@ -344,7 +344,8 @@ pub fn covered<'a>(text: &'a str, d: &Value) -> &'a str {
     &text[s..e]
 }
 
-/// A stub plugin (a shell script) with fixed replies to its `lint` and `skills` hooks.
+/// A stub plugin (a shell script) with fixed replies to its `lint` and `skills` hooks;
+/// `lint` also prints [`STUB_LINT_STDERR`] on stderr.
 /// Any other first argument prints its arguments and environment and exits 7.
 pub struct Stub {
     pub lint: String,
@@ -367,6 +368,8 @@ pub fn stub_diag(code: &str, path: &str) -> Value {
         "byte_start": null, "byte_end": null, "message": "from the stub", "hint": null,
     })
 }
+
+pub const STUB_LINT_STDERR: &str = "stub lint went wrong";
 
 pub const STUB_SKILL_BODY: &str = "---\nname: stub-hello\ndescription: Say hello from the stub.\n---\n# Stub hello\n";
 
@@ -399,7 +402,7 @@ impl Stub {
         format!(
             "#!/bin/sh\n\
              case \"$1\" in\n\
-             lint) printf '%s\\n' '{}'; exit {};;\n\
+             lint) echo '{STUB_LINT_STDERR}' >&2; printf '%s\\n' '{}'; exit {};;\n\
              skills) printf '%s\\n' '{}'; exit {};;\n\
              *) printf 'args=%s\\n' \"$*\"; printf 'vault=%s\\n' \"$LOCI_VAULT\"; \
                 printf 'version=%s\\n' \"$LOCI_VERSION\"; exit 7;;\n\

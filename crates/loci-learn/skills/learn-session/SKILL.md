@@ -39,7 +39,7 @@ that does not see the first verdict, and log only that one.
    understood without it) or peripheral (it gets a one-line definition where it
    appears).
 2. **Sort.** Pre-fill each load-bearing concept as know, shaky or don't know, from
-   the knowledge base (slug, aliases, `loci find`) and `loci learn state`. The user
+   the knowledge base (slug, `loci find`) and `loci learn state`. The user
    corrects each. Know and shaky are the boundary; don't-know concepts are expanded.
    For a concept already in the knowledge base, offer its `prereqs` as the next level.
 3. **Expand.** For each don't-know concept, find external material that explains it

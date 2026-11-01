@@ -43,7 +43,7 @@ pub fn run(ctx: &Ctx, from: &str, dest: &str) -> Result<Report, Refusal> {
             Err(e) => return Err(Refusal::refused("fetch.from", format!("cannot read `{rel}`: {e}"))),
         }
     };
-    if matches!(file_name.as_str(), "source.yaml" | "." | "..") {
+    if file_name == "source.yaml" {
         return Err(Refusal::refused("fetch.from", format!("a source file cannot be named `{file_name}`")));
     }
     let meta = SourceMeta { sha256: hex_sha256(&bytes), url: url.clone() };

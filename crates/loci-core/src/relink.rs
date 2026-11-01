@@ -1,12 +1,12 @@
 //! Link-preserving changes shared by `mv` and `merge`: rewrite links whose targets move,
-//! edit `aliases`, check the result in memory, and apply it.
+//! check the result in memory, and apply it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::envelope::Refusal;
 use crate::index::{self, Index, Resolved, SourceTarget};
-use crate::parse::{FmValue, Link, LinkForm, Note};
+use crate::parse::{Link, LinkForm, Note};
 use crate::splice::{self, Edit};
 use crate::vault::{self, Kind};
 
@@ -21,8 +21,6 @@ pub struct Change {
     pub writes: BTreeMap<String, String>,
     /// Number of edits per edited file (final path).
     pub edit_counts: BTreeMap<String, usize>,
-    /// (concept's final path, alias added).
-    pub aliases_added: Vec<(String, String)>,
     /// Links removed on purpose, as (original path, index into that note's `links`).
     pub removed_links: BTreeSet<(String, usize)>,
 }
@@ -84,59 +82,22 @@ fn rewrite(index: &Index, note: &Note, link: &Link, targets: &BTreeMap<String, S
 /// The new raw value of a `sources` entry whose journal note or source folder moves.
 fn rewrite_source(index: &Index, link: &Link, targets: &BTreeMap<String, String>) -> Option<String> {
     let suffix = link.fragment.as_ref().map(|f| format!("#{f}")).unwrap_or_default();
-    match index.resolve_source(link)? {
-        SourceTarget::Note(note) => {
-            let new = targets.get(&note)?;
-            Some(format!("{}{suffix}", new.strip_suffix(".md").unwrap_or(new)))
-        }
-        // A folder moves as a whole: its new path is the folder of any moved file.
+    let new = source_destination(&index.resolve_source(link)?, targets)??;
+    Some(format!("{}{suffix}", new.strip_suffix(".md").unwrap_or(&new)))
+}
+
+/// Where a `sources` target goes: `None` if it does not move, `Some(None)` if it moves
+/// somewhere a `sources` entry cannot name. A folder moves as a whole: its new path is
+/// the folder of any moved file.
+fn source_destination(target: &SourceTarget, targets: &BTreeMap<String, String>) -> Option<Option<String>> {
+    match target {
+        SourceTarget::Note(note) => targets.get(note).map(|new| Some(new.clone())),
         SourceTarget::Folder(folder) => {
             let new =
                 targets.iter().find(|(old, _)| vault::source_folder(old).is_some_and(|(f, _)| f == folder.path))?.1;
-            let (new_folder, _) = vault::source_folder(new)?;
-            Some(format!("{new_folder}{suffix}"))
+            Some(vault::source_folder(new).map(|(f, _)| f.to_string()))
         }
     }
-}
-
-/// The frontmatter edit that appends `aliases` to a concept's `aliases` (m0 §9.5 step 3).
-/// Refuses with `code` if the frontmatter is missing or invalid, or `aliases` is not a
-/// list.
-pub fn alias_edit(note: &Note, aliases: &[String], code: &'static str) -> Result<Edit, Refusal> {
-    let text = &note.text;
-    let refuse = |why: &str| Err(Refusal::refused(code, format!("cannot add aliases to `{}`: {why}", note.path)));
-    let Some(fm) = note.frontmatter.as_ref().filter(|_| note.fm_error.is_none()) else {
-        return refuse("it has no valid frontmatter");
-    };
-    Ok(match fm.get("aliases").map(|e| &e.value) {
-        // After the last item, so a trailing comma or a multi-line list stays valid.
-        Some(FmValue::List { items, flow: true, .. }) if !items.is_empty() => {
-            let last = items.last().expect("checked non-empty").span();
-            Edit::insert(last.end, format!(", {}", aliases.join(", ")))
-        }
-        Some(FmValue::List { span, flow: true, .. }) => {
-            // saphyr's flow-sequence span ends before the `]` (m0 §4.4).
-            let close = span.end + text[span.end..].find(']').expect("a parsed flow list closes with `]`");
-            Edit::insert(close, aliases.join(", "))
-        }
-        // A block list is never empty: an empty `aliases:` is null.
-        Some(FmValue::List { items, .. }) => {
-            let last = items.last().expect("checked non-empty").span();
-            let line_start = text[..last.start].rfind('\n').map_or(0, |i| i + 1);
-            let indent = &text[line_start..last.start];
-            let line_end = text[last.end..].find('\n').map_or(text.len(), |i| last.end + i + 1);
-            let eol = line_ending(text, line_end);
-            Edit::insert(line_end, aliases.iter().map(|a| format!("{indent}{a}{eol}")).collect::<String>())
-        }
-        Some(_) => return refuse("`aliases` is not a list"),
-        None => {
-            // No `aliases`: insert a line after `id:` (or at the start of the YAML).
-            let anchor = fm.get("id").map(|e| e.value.span().end).unwrap_or(fm.yaml_range.start);
-            let line_end = text[anchor..].find('\n').map_or(text.len(), |i| anchor + i + 1);
-            let eol = line_ending(text, line_end);
-            Edit::insert(line_end, format!("aliases: [{}]{eol}", aliases.join(", ")))
-        }
-    })
 }
 
 /// The edit that removes one item of a frontmatter list (flow or block form).
@@ -166,11 +127,6 @@ pub fn remove_lines(text: &str, range: std::ops::Range<usize>) -> Edit {
     let line_start = text[..range.start].rfind('\n').map_or(0, |i| i + 1);
     let line_end = text[range.end..].find('\n').map_or(text.len(), |i| range.end + i + 1);
     Edit::replace(line_start..line_end, "")
-}
-
-/// The line ending of the line that ends at `line_end` (exclusive).
-fn line_ending(text: &str, line_end: usize) -> &'static str {
-    if text[..line_end].ends_with("\r\n") { "\r\n" } else { "\n" }
 }
 
 /// Applies per-file edits into `change.writes`.
@@ -236,6 +192,22 @@ pub fn verify(
                 code,
                 format!("{new_path} would have {} links instead of {}", new_links.len(), old_links.len()),
             ));
+        }
+        let old_sources = note.links.iter().filter(|l| l.form == LinkForm::Source);
+        let new_sources: Vec<&Link> = new_note.links.iter().filter(|l| l.form == LinkForm::Source).collect();
+        for (old_link, new_link) in old_sources.zip(new_sources) {
+            let Some(before) = index.resolve_source(old_link) else { continue };
+            let expected = match source_destination(&before, targets) {
+                None => Some(before.into_path()),
+                Some(new) => new,
+            };
+            let after_path = after.resolve_source(new_link).map(SourceTarget::into_path);
+            if expected.is_none() || after_path != expected {
+                return Err(Refusal::refused(
+                    code,
+                    format!("source `{}` in {new_path} would no longer resolve", new_link.raw),
+                ));
+            }
         }
         for (old_link, new_link) in old_links.into_iter().zip(new_links) {
             let Ok(before) = index.resolve(note, old_link) else { continue };

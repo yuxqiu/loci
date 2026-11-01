@@ -69,9 +69,11 @@ fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::R
     // Stdout is drained on its own thread so that an agent printing more than a pipe
     // buffer does not block before it exits.
     let mut stdout = child.stdout.take().expect("stdout is piped");
-    let reader = std::thread::spawn(move || {
+    let (sender, output) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut out = vec![];
-        stdout.read_to_end(&mut out).map(|_| out)
+        // The receiver is gone only after a timeout, when the output is not wanted.
+        let _ = sender.send(stdout.read_to_end(&mut out).map(|_| out));
     });
     // An agent may exit without reading the question.
     match child.stdin.take().expect("stdin is piped").write_all(question.as_bytes()) {
@@ -87,8 +89,12 @@ fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::R
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    let out = reader.join().expect("the stdout reader does not panic")?;
-    Ok(Some(String::from_utf8_lossy(&out).into_owned()))
+    // A process the agent left running may hold stdout open, so the wait is bounded too.
+    match output.recv_timeout(AGENT_TIMEOUT.saturating_sub(start.elapsed())) {
+        Ok(out) => Ok(Some(String::from_utf8_lossy(&out?).into_owned())),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(None),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("the stdout reader always sends"),
+    }
 }
 
 pub fn run(ctx: &Ctx, agent: Option<&str>, k: usize) -> Result<Report, Refusal> {

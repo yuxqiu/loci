@@ -32,7 +32,6 @@ pub struct SearchDoc {
     pub kind: Kind,
     /// H1 raw text, else the file stem.
     pub title: String,
-    pub aliases: Vec<String>,
     pub digest: String,
     /// Body text with frontmatter excluded.
     pub body: String,
@@ -48,7 +47,6 @@ impl From<&Note> for SearchDoc {
             path: note.path.clone(),
             kind: note.kind,
             title: note.title().to_string(),
-            aliases: note.fm_strings("aliases").into_iter().map(str::to_string).collect(),
             digest: note.fm_str("digest").unwrap_or_default().to_string(),
             body: note.text[body_start..].to_string(),
             line_offset: note.text[..body_start].matches('\n').count(),
@@ -85,15 +83,14 @@ pub fn search(docs: &[SearchDoc], query: &str, k: usize, kinds: &[Kind]) -> Resu
             .set_tokenizer(TOKENIZER)
             .set_index_option(IndexRecordOption::WithFreqsAndPositions),
     );
-    let boosted: [(Field, f32); 5] = [
+    let boosted: [(Field, f32); 4] = [
         (sb.add_text_field("title", text.clone()), 3.0),
-        (sb.add_text_field("aliases", text.clone()), 3.0),
         (sb.add_text_field("digest", text.clone()), 2.0),
         // The tokenizer splits on every non-alphanumeric, including `/ - _ .`.
         (sb.add_text_field("path", text.clone()), 1.0),
         (sb.add_text_field("body", text), 1.0),
     ];
-    let [title, aliases, digest, path, body] = boosted.map(|(f, _)| f);
+    let [title, digest, path, body] = boosted.map(|(f, _)| f);
     let id = sb.add_u64_field("id", STORED);
     let index = Index::create_in_ram(sb.build());
     index.tokenizers().register(TOKENIZER, LociTokenizer);
@@ -103,9 +100,6 @@ pub fn search(docs: &[SearchDoc], query: &str, k: usize, kinds: &[Kind]) -> Resu
     for (i, d) in docs.iter().enumerate() {
         let mut doc = TantivyDocument::default();
         doc.add_text(title, &d.title);
-        for a in &d.aliases {
-            doc.add_text(aliases, a);
-        }
         doc.add_text(digest, &d.digest);
         doc.add_text(path, &d.path);
         doc.add_text(body, &d.body);
@@ -189,7 +183,6 @@ mod tests {
             path: path.into(),
             kind,
             title: title.into(),
-            aliases: vec![],
             digest: String::new(),
             body: body.into(),
             line_offset: 0,
@@ -212,12 +205,13 @@ mod tests {
     }
 
     #[test]
-    fn alias_and_path_match() {
-        let mut aliased = doc("concepts/x.md", Kind::Concept, "X", "");
-        aliased.aliases = vec!["Breadth-first search".into()];
-        let docs = [aliased, doc("concepts/breadth-first.md", Kind::Concept, "Y", "")];
+    fn title_and_path_match() {
+        let docs = [
+            doc("concepts/x.md", Kind::Concept, "Breadth-first search (BFS)", ""),
+            doc("concepts/breadth-first.md", Kind::Concept, "Y", ""),
+        ];
         let out = search(&docs, "breadth", 10, &[]).unwrap();
-        // Alias ×3 outranks path ×1.
+        // Title ×3 outranks path ×1.
         assert_eq!(paths(&out), ["concepts/x.md", "concepts/breadth-first.md"]);
     }
 

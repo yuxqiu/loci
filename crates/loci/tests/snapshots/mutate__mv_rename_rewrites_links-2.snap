@@ -10,7 +10,7 @@ Area a.
 == concepts/a/absent.md ==
 ---
 id: [ulid]
-digest: No aliases.
+digest: A linked note.
 ---
 # Absent
 
@@ -19,9 +19,7 @@ digest: No aliases.
 == concepts/a/block.md ==
 ---
 id: [ulid]
-aliases:
-  - b1
-digest: Block aliases.
+digest: A block note.
 ---
 # Block
 
@@ -30,18 +28,16 @@ Text. ^b
 == concepts/a/empty-flow.md ==
 ---
 id: [ulid]
-aliases: []
 prereqs: ["[[flow-new]]", "[[absent]]"]
-digest: Empty flow aliases.
+digest: A note with prerequisites.
 ---
 # Empty flow
 
 == concepts/a/flow-new.md ==
 ---
 id: [ulid]
-aliases: [f1, flow]
 sources: ["sources/papers/p1#p2"]
-digest: Flow aliases.
+digest: A flow note.
 ---
 # Flow
 

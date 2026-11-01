@@ -33,7 +33,8 @@ pub fn plan(
         return Err(Refusal::refused("mv.exists", format!("`{to}` already exists")));
     }
     // Sources move only as whole folders.
-    if from.starts_with("sources/") || to.starts_with("sources/") {
+    let in_sources = |p: &str| p == "sources" || p.starts_with("sources/");
+    if in_sources(from) || in_sources(to) {
         let whole_folder = !is_file && vault::is_source_folder(from) && vault::is_source_folder(to);
         if !whole_folder {
             return Err(Refusal::refused(
@@ -55,38 +56,27 @@ pub fn plan(
     if let Some(new) = map.values().find(|n| exists(n)) {
         return Err(Refusal::refused("mv.exists", format!("`{new}` already exists")));
     }
-    // Moved concepts must stay concepts; new slugs must not collide.
-    let mut renames: Vec<(String, String)> = vec![]; // (old path, old slug)
+    // Moved concepts must stay concepts; every file that ends as a concept needs a valid
+    // slug that does not collide.
     for (old, new) in &map {
-        if vault::kind_of(old) != Some(Kind::Concept) {
+        let was_concept = vault::kind_of(old) == Some(Kind::Concept);
+        if vault::kind_of(new) != Some(Kind::Concept) {
+            if was_concept {
+                return Err(Refusal::refused("mv.no-area", format!("`{new}` is not inside an area")));
+            }
             continue;
         }
-        if vault::kind_of(new) != Some(Kind::Concept) {
-            return Err(Refusal::refused("mv.no-area", format!("`{new}` is not inside an area")));
-        }
-        let (old_slug, new_slug) = (vault::stem(old), vault::stem(new));
+        let new_slug = vault::stem(new);
         if index.name_taken(new_slug, |p| map.contains_key(p)) {
-            return Err(Refusal::refused("mv.collision", format!("slug `{new_slug}` is already a slug or alias")));
+            return Err(Refusal::refused("mv.collision", format!("slug `{new_slug}` is already used")));
         }
-        if old_slug != new_slug {
-            renames.push((old.clone(), old_slug.to_string()));
+        if !vault::is_slug(new_slug) {
+            return Err(Refusal::refused("slug.format", format!("`{new_slug}` is not a valid slug")));
         }
     }
 
     let mut change = Change { moves: map.clone(), ..Change::default() };
-    let mut edits = relink::link_edits(index, &map, &BTreeSet::new());
-    for (old_path, old_slug) in &renames {
-        // An unreadable concept (`file.*`) is not in the notes; its aliases cannot be edited.
-        let Some(note) = index.notes.get(old_path) else {
-            return Err(Refusal::refused(
-                "mv.frontmatter",
-                format!("cannot add aliases to `{old_path}`: it is not readable"),
-            ));
-        };
-        let edit = relink::alias_edit(note, std::slice::from_ref(old_slug), "mv.frontmatter")?;
-        edits.entry(old_path.clone()).or_default().push(edit);
-        change.aliases_added.push((map[old_path].clone(), old_slug.clone()));
-    }
+    let edits = relink::link_edits(index, &map, &BTreeSet::new());
     relink::add_writes(index, &mut change, edits)?;
     relink::verify(index, &map, &change, "mv.verify")?;
     Ok(change)
@@ -100,69 +90,49 @@ mod tests {
     const C: &str = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ndigest: d\n---\n# T\n";
 
     #[test]
-    fn rename_rewrites_bare_and_adds_alias() {
+    fn rename_rewrites_links_and_leaves_the_note() {
         let i =
             from_texts(&[("concepts/a/old.md", C), ("views/v.md", "# V\n\n[[old]] [[old#T|x]] [[concepts/a/old]]\n")]);
         let p = plan(&i, "concepts/a/old.md", "concepts/a/new.md", false, |_| false).unwrap();
         assert_eq!(p.writes["views/v.md"], "# V\n\n[[new]] [[new#T|x]] [[concepts/a/new]]\n");
-        assert!(p.writes["concepts/a/new.md"].contains("aliases: [old]\n"));
-        assert_eq!(p.aliases_added, vec![("concepts/a/new.md".into(), "old".into())]);
+        assert!(!p.writes.contains_key("concepts/a/new.md"), "a rename does not edit the note");
     }
 
     #[test]
-    fn alias_appended_to_flow_and_block_lists() {
-        let flow = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\naliases: [x]\ndigest: d\n---\n# T\n";
-        let i = from_texts(&[("concepts/a/old.md", flow)]);
-        let p = plan(&i, "concepts/a/old.md", "concepts/a/new.md", false, |_| false).unwrap();
-        assert!(p.writes["concepts/a/new.md"].contains("aliases: [x, old]\n"));
-        let block = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\naliases:\n  - x\ndigest: d\n---\n# T\n";
-        let i = from_texts(&[("concepts/a/old.md", block)]);
-        let p = plan(&i, "concepts/a/old.md", "concepts/a/new.md", false, |_| false).unwrap();
-        assert!(p.writes["concepts/a/new.md"].contains("aliases:\n  - x\n  - old\n"));
+    fn rename_back_is_allowed() {
+        let i = from_texts(&[("concepts/a/new.md", C), ("views/v.md", "[[new]]\n")]);
+        let p = plan(&i, "concepts/a/new.md", "concepts/a/old.md", false, |_| false).unwrap();
+        assert_eq!(p.writes["views/v.md"], "[[old]]\n");
     }
 
     #[test]
-    fn alias_after_trailing_comma_and_in_multiline_flow_lists() {
-        let fm =
-            |aliases: &str| format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\naliases: {aliases}\ndigest: d\n---\n# T\n");
-        for (before, after) in [("[x, ]", "[x, old, ]"), ("[x,\n  y\n]", "[x,\n  y, old\n]"), ("[ ]", "[ old]")] {
-            let text = fm(before);
-            let i = from_texts(&[("concepts/a/old.md", &text)]);
-            let p = plan(&i, "concepts/a/old.md", "concepts/a/new.md", false, |_| false).unwrap();
-            assert!(p.writes["concepts/a/new.md"].contains(&format!("aliases: {after}\n")), "{before:?}");
-        }
-    }
-
-    #[test]
-    fn crlf_alias_line() {
-        let crlf = "---\r\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\r\ndigest: d\r\n---\r\n# T\r\n";
-        let i = from_texts(&[("concepts/a/old.md", crlf)]);
-        let p = plan(&i, "concepts/a/old.md", "concepts/a/new.md", false, |_| false).unwrap();
-        assert!(p.writes["concepts/a/new.md"].contains("TV\r\naliases: [old]\r\ndigest"));
-    }
-
-    #[test]
-    fn renaming_an_unreadable_concept_is_refused() {
+    fn an_unreadable_concept_moves_unchanged() {
         let i = crate::index::build(vec!["concepts/a/bad.md".to_string()], |_| Ok(vec![0xff]));
-        let e = plan(&i, "concepts/a/bad.md", "concepts/a/good.md", false, |_| false).err().unwrap();
-        assert_eq!(e.code(), "mv.frontmatter");
+        let p = plan(&i, "concepts/a/bad.md", "concepts/a/good.md", false, |_| false).unwrap();
+        assert!(p.writes.is_empty());
     }
 
     #[test]
     fn collisions_and_refusals() {
-        let with_alias = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\naliases: [taken]\ndigest: d\n---\n# T\n";
         let i = from_texts(&[
             ("concepts/a/x.md", C),
-            ("concepts/a/y.md", with_alias),
+            ("concepts/a/y.md", C),
+            ("concepts/b/AREA.md", "# B\n"),
+            ("views/v.md", "# V\n"),
             ("sources/papers/p/paper.pdf", ""),
             ("sources/papers/p/source.yaml", "sha256: x\n"),
         ]);
         let e = |f: &str, t: &str| plan(&i, f, t, false, |_| false).unwrap_err().code().to_string();
         assert_eq!(e("concepts/a/x.md", "concepts/a/y.md"), "mv.exists");
-        assert_eq!(e("concepts/a/x.md", "concepts/a/taken.md"), "mv.collision");
+        assert_eq!(e("concepts/a/x.md", "concepts/b/y.md"), "mv.collision");
         assert_eq!(e("concepts/a/x.md", "views/x.md"), "mv.no-area");
         assert_eq!(e("sources/papers/p/paper.pdf", "sources/papers/q.pdf"), "mv.source-file");
         assert_eq!(e("plugins/learn", "x"), "mv.from");
+        assert_eq!(e("sources", "old/sources"), "mv.source-file");
+        assert_eq!(e("concepts/a/x.md", "concepts/a/Bad Name.md"), "slug.format");
+        // A file that becomes a concept follows the concept naming rules too.
+        assert_eq!(e("views/v.md", "concepts/b/x.md"), "mv.collision");
+        assert_eq!(e("views/v.md", "concepts/b/Bad.md"), "slug.format");
         assert!(plan(&i, "sources/papers/p", "sources/papers/q", false, |_| false).is_ok());
     }
 

@@ -1,13 +1,12 @@
 //! `loci merge` (m1-m4 §1): fold one concept into another after the agent merged the
-//! content: rewrite links, add aliases, delete the absorbed note.
+//! content: rewrite links and delete the absorbed note.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::envelope::Refusal;
 use crate::index::{Index, Resolved};
 use crate::parse::{FmValue, LinkForm, Note};
 use crate::relink::{self, Change};
-use crate::vault;
 
 /// Plans merging concept `from` into concept `into` (each a concept path or slug).
 pub fn plan(index: &Index, from: &str, into: &str) -> Result<Merge, Refusal> {
@@ -42,17 +41,6 @@ pub fn plan(index: &Index, from: &str, into: &str) -> Result<Merge, Refusal> {
         change.removed_links.extend(self_prereqs.iter().map(|(i, _)| (into.clone(), *i)));
     }
 
-    // `from`'s slug and aliases that `into` lacks become aliases of `into`.
-    let mut have: BTreeSet<String> = aliases(into_note).into_iter().map(|a| a.to_lowercase()).collect();
-    have.insert(vault::stem(&into).to_lowercase());
-    let mut new_aliases = vec![vault::stem(&from).to_string()];
-    new_aliases.extend(aliases(&index.notes[&from]));
-    // Keep the first spelling of each name `into` does not already have.
-    new_aliases.retain(|a| have.insert(a.to_lowercase()));
-    if !new_aliases.is_empty() {
-        into_edits.push(relink::alias_edit(into_note, &new_aliases, "merge.frontmatter")?);
-        change.aliases_added.extend(new_aliases.into_iter().map(|a| (into.clone(), a)));
-    }
     if !into_edits.is_empty() {
         edits.insert(into.clone(), into_edits);
     }
@@ -80,18 +68,14 @@ fn self_prereqs(index: &Index, into: &Note, from: &str) -> Vec<(usize, std::ops:
         .collect()
 }
 
-fn aliases(note: &Note) -> Vec<String> {
-    note.fm_strings("aliases").into_iter().map(str::to_string).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::index::from_texts;
 
     #[test]
-    fn merge_rewrites_links_aliases_and_self_prereq() {
-        let from = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TA\naliases: [sssp]\ndigest: d\n---\n# A\n";
+    fn merge_rewrites_links_and_self_prereq() {
+        let from = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TA\ndigest: d\n---\n# A\n";
         let into = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TB\nprereqs: [\"[[old]]\", \"[[heap]]\"]\ndigest: d\n---\n# B\n";
         let i = from_texts(&[
             ("concepts/a/old.md", from),
@@ -104,7 +88,6 @@ mod tests {
         assert_eq!(c.writes["views/v.md"], "# V\n\n[[dijkstra]] [[concepts/a/dijkstra#A]]\n");
         let d = &c.writes["concepts/a/dijkstra.md"];
         assert!(d.contains("prereqs: [\"[[heap]]\"]"), "{d}");
-        assert!(d.contains("aliases: [old, sssp]"), "{d}");
     }
 
     #[test]
@@ -115,10 +98,7 @@ mod tests {
             ("concepts/a/into.md", into),
         ]);
         let c = plan(&i, "old", "into").unwrap().change;
-        assert_eq!(
-            c.writes["concepts/a/into.md"],
-            "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T2\naliases: [old]\ndigest: d\n---\n# Into\n"
-        );
+        assert_eq!(c.writes["concepts/a/into.md"], "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T2\ndigest: d\n---\n# Into\n");
     }
 
     #[test]
