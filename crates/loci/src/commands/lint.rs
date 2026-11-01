@@ -40,7 +40,7 @@ impl Linted {
 pub fn lint_vault(vault: &Vault) -> Linted {
     let index = Index::open(vault);
     let mut diagnostics = Lint { index: &index, budgets: &vault.config.budgets }.run();
-    diagnostics.extend(lint::disk_rules(&vault.root));
+    diagnostics.extend(lint::disk_rules(&index, &vault.root));
     let installed = plugins();
     for p in &installed {
         match plugin::lint(p, &vault.root, VERSION) {

@@ -187,8 +187,8 @@ concept note.
 
 ### 4.5 Sources
 
-A source is one original file, `sources/<type>/<slug>.<ext>`. Its type comes from
-its extension. Where a downloaded source came from is not recorded: the file itself
+A source is one original file, `sources/<type>/<slug>.<ext>`: the type is a folder
+the user names (`papers`, `docs`), and the format comes from the extension. Where a downloaded source came from is not recorded: the file itself
 is enough to find it again.
 
 The agent files a source by moving an inbox file into place with `loci mv`, or by
@@ -241,12 +241,12 @@ self-contained document, by default under `.loci/export/`:
    view of …"). The inbox holds material that needs processing; the user may also
    edit concepts, journal entries and views directly at any time.
 2. The agent edits the working tree. It stages each file it creates with
-   `git add -N`. It finishes by running `loci lint`.
+   `git add -N`. It finishes by running `loci done`.
 3. The user reviews the changes with `git diff`.
 4. The user either keeps the work with `git commit`, or discards it with
    `git reset --hard`, which also removes the files the agent created.
 
-The ingest skill stops if `inbox/` holds uncommitted files, and `loci status` warns
+The intake skill stops if `inbox/` holds uncommitted files, and `loci status` warns
 about them. Lint never blocks a commit.
 
 **Editing by hand.** Notes are plain markdown files, and the user may change
@@ -463,7 +463,7 @@ Implementation:
 
 - **Markdown parsing:** `pulldown-cmark`, with byte offsets. Edits are spliced, and
   the user's text is never re-serialised.
-- **Frontmatter:** `saphyr` for reading, plus a small fixed writer.
+- **Frontmatter:** `saphyr` for reading; edits are splices of the original bytes.
 - **Git:** the `git` CLI.
 - **Search:** tantivy, with an in-memory index built on each `loci find` call.
   Chinese and Japanese text is segmented with ICU4X's word segmenter; Korean text
@@ -536,6 +536,6 @@ Every bug found on a real vault becomes a fixture with no private content.
 | M0.5 | `status`, `skill show`, `new`, `block-ids`; the lint safety checks; the `AGENTS.md` stub, framework rules and first skills | the commands and skills work on a fixture vault, and lint catches a modified source and dropped material |
 | M1 | draft and journal intake, `merge`, the pilot area, `bench`, the sample vault | the pilot is kept, and the benchmark baseline is recorded |
 | M2 | PDF intake | an annotated paper becomes a source, concepts and a journal entry in one diff |
-| M3 | the `loci-learn` plugin (`init`, `lint`, `log`, `state`, `review`), `closure`, the learn skill | a "learn X" session runs end to end and reviews are scheduled |
+| M3 | the `loci-learn` plugin (`lint`, `skills`, `log`, `state`, `review`), `closure`, the learn skill | a "learn X" session runs end to end and reviews are scheduled |
 | M4 | full migration, `export` | every area is migrated, and views export |
 | later | projects outside the vault; a persistent search index; a phone web UI; the relation registry; exposure signals in the estimate; `learn calibrate`; reading annotations directly from a PDF reader's database | when the benchmark, usage or data justify it |

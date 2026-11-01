@@ -2,7 +2,6 @@
 
 use loci_core::envelope::{Outcome, Refusal, Report};
 use loci_core::index::Index;
-use loci_core::vault::is_slug;
 use loci_core::vault::{self, Kind};
 use serde_json::json;
 
@@ -17,12 +16,12 @@ pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal
     if vault::kind_of(&path) != Some(Kind::Concept) {
         return Err(Refusal::refused("new.no-area", format!("`{path}` is not inside an area")));
     }
-    let slug = vault::stem(&path).to_string();
-    if !is_slug(&slug) {
-        return Err(Refusal::refused("slug.format", format!("slug `{slug}` does not match the slug pattern")));
+    if let Some((code, message)) = vault::path_problem(&path) {
+        return Err(Refusal::refused(code, format!("`{path}`: {message}")));
     }
+    let slug = vault::stem(&path).to_string();
     let abs = vault.abs(&path);
-    if abs.exists() {
+    if abs.symlink_metadata().is_ok() {
         return Err(Refusal::refused("new.exists", format!("`{path}` already exists")));
     }
     let index = Index::open(&vault);

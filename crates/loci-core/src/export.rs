@@ -190,7 +190,7 @@ fn note_links<'a>(index: &Index, note: &'a Note, range: &Range<usize>) -> Vec<(&
 
 pub fn export(index: &Index, root: &str, depth: usize) -> Export {
     // 1. Collect: each note once, at its first appearance, breadth-first up to `depth`.
-    let mut units = vec![Unit::root(&index.notes[root])];
+    let mut units = vec![Unit::root(&index.markdown[root])];
     let mut unit_of: BTreeMap<&str, usize> = BTreeMap::from([(root, 0)]);
     let mut queue = VecDeque::from([(0usize, 0usize)]);
     while let Some((i, d)) = queue.pop_front() {
@@ -201,7 +201,7 @@ pub fn export(index: &Index, root: &str, depth: usize) -> Export {
         let mut children = vec![];
         for (link, resolved) in note_links(index, parent.note, &parent.range) {
             let Resolved::Note(p) = resolved else { continue };
-            let Some((path, note)) = index.notes.get_key_value(&p) else { continue };
+            let Some((path, note)) = index.markdown.get_key_value(&p) else { continue };
             if unit_of.contains_key(path.as_str()) || children.iter().any(|(q, _): &(&str, Unit)| *q == path) {
                 continue;
             }
@@ -242,7 +242,7 @@ pub fn export(index: &Index, root: &str, depth: usize) -> Export {
                 }
                 Resolved::File(_) => label.unwrap_or_else(|| link.target.clone()),
                 Resolved::Note(p) => {
-                    let target = index.notes.get(&p);
+                    let target = index.markdown.get(&p);
                     let heading = link.fragment.as_deref().filter(|f| !f.starts_with('^'));
                     let default = match (heading, target) {
                         (Some(f), _) => f.to_string(),
@@ -284,7 +284,7 @@ pub fn export(index: &Index, root: &str, depth: usize) -> Export {
     if !out.glossary.is_empty() {
         doc.push_str(if doc.ends_with('\n') { "\n## Glossary\n\n" } else { "\n\n## Glossary\n\n" });
         for p in &out.glossary {
-            let n = &index.notes[p];
+            let n = &index.markdown[p];
             let digest = valid_digest(n).expect("only notes with a valid digest are in the glossary");
             doc.push_str(&format!("**{}**: {digest}\n\n", n.title()));
         }

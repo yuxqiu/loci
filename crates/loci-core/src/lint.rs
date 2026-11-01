@@ -27,11 +27,11 @@ impl Lint<'_> {
     pub fn run(&self) -> Vec<Diagnostic> {
         let mut out = vec![];
         self.files(&mut out);
-        for note in self.index.notes.values() {
+        for note in self.index.markdown.values() {
             self.note(note, &mut out);
         }
         self.vault_rules(&mut out);
-        self.source_layout(&mut out);
+        self.path_rules(&mut out);
         sort_diagnostics(&mut out);
         out
     }
@@ -41,11 +41,7 @@ impl Lint<'_> {
             if !is_nfc(path) {
                 out.push(Diagnostic::error("path.not-nfc", "file name is not in Unicode NFC").at_path(path));
             }
-            let kind = vault::kind_of(path);
-            if kind == Some(Kind::Unknown) {
-                out.push(Diagnostic::error("kind.unknown", "file is outside every known folder").at_path(path));
-            }
-            if kind == Some(Kind::Inbox) {
+            if vault::kind_of(path) == Some(Kind::Inbox) {
                 let parts: Vec<&str> = path.split('/').collect();
                 let root_file = parts.len() == 2 || (parts.len() == 3 && parts[1] == "journal");
                 if root_file {
@@ -104,12 +100,6 @@ impl Lint<'_> {
         if note.kind == Kind::Area {
             area_rules(note, self.budgets, out);
         }
-        if note.kind == Kind::Journal && !vault::journal_path_ok(path) {
-            out.push(d(
-                "journal.path",
-                "journal entry is not inside a `journal/<stream>/` folder whose name is a slug".into(),
-            ));
-        }
         self.links(note, out);
         // Block ids unique within the note.
         let mut seen: BTreeSet<&str> = BTreeSet::new();
@@ -126,11 +116,6 @@ impl Lint<'_> {
     fn concept(&self, note: &Note, out: &mut Vec<Diagnostic>) {
         let path = note.path.as_str();
         let text = note.text.as_str();
-        let d = |code: &str, msg: String| Diagnostic::error(code, msg).at_path(path);
-        let slug = vault::stem(path);
-        if !vault::is_slug(slug) {
-            out.push(d("slug.format", format!("slug `{slug}` does not match the slug pattern")));
-        }
         let body_chars = text[note.body_start()..].chars().count();
         if body_chars > self.budgets.note {
             out.push(
@@ -278,7 +263,7 @@ impl Lint<'_> {
         // Areas.
         for a in index.areas() {
             let p = format!("concepts/{a}/AREA.md");
-            if !index.notes.contains_key(&p) {
+            if !index.markdown.contains_key(&p) {
                 out.push(Diagnostic::error("area.missing", format!("area `{a}` has no AREA.md")).at_path(p));
             }
         }
@@ -308,13 +293,12 @@ impl Lint<'_> {
         }
     }
 
-    /// Source layout (§6.4): every file under `sources/` is `sources/<type>/<slug>.<ext>`.
-    fn source_layout(&self, out: &mut Vec<Diagnostic>) {
-        for f in self.index.files.iter().filter(|f| f.starts_with("sources/") && !vault::is_source_file(f)) {
-            out.push(
-                Diagnostic::error("sources.layout", format!("`{f}` is not a `sources/<type>/<slug>.<ext>` file"))
-                    .at_path(f),
-            );
+    /// Path rules (§6.2, §6.4, §6.6): [`vault::path_problem`] for every file.
+    fn path_rules(&self, out: &mut Vec<Diagnostic>) {
+        for f in &self.index.files {
+            if let Some((code, message)) = vault::path_problem(f) {
+                out.push(Diagnostic::error(code, message).at_path(f.as_str()));
+            }
         }
     }
 }
@@ -422,28 +406,27 @@ fn prereq_cycles(index: &Index, out: &mut Vec<Diagnostic>) {
 /// `material-dropped`. Without a HEAD there is nothing to compare; a git failure is
 /// warning `git.failed`, and neither rule is checked. Unsorted; the caller merges them
 /// with [`Lint::run`].
-pub fn disk_rules(root: &Path) -> Vec<Diagnostic> {
+pub fn disk_rules(index: &Index, root: &Path) -> Vec<Diagnostic> {
     let mut out = vec![];
-    let checked = git::has_head(root).and_then(|head| {
-        if !head {
-            return Ok(());
+    let changes = match git::has_head(root).and_then(|head| head.then(|| git::status(root)).transpose()) {
+        Ok(Some(changes)) => changes,
+        Ok(None) => return out,
+        Err(e) => {
+            let msg = format!("git failed, `sources.changed` and `material-dropped` were not checked: {e}");
+            out.push(Diagnostic::warning("git.failed", msg));
+            return out;
         }
-        let changes = git::status(root)?;
-        sources_changed(&changes, &mut out);
-        check_material(root, &changes, &mut out)
-    });
-    if let Err(e) = checked {
-        out.push(Diagnostic::warning(
-            "git.failed",
-            format!("git failed, `sources.changed` and `material-dropped` were not checked: {e}"),
-        ));
+    };
+    sources_changed(&changes, &mut out);
+    if let Err(e) = check_material(index, root, &changes, &mut out) {
+        out.push(Diagnostic::warning("git.failed", format!("git failed, `material-dropped` was not checked: {e}")));
     }
     out
 }
 
 /// `sources.changed` (§6.4): a source's content differs from HEAD at the same path.
 fn sources_changed(changes: &git::Changes, out: &mut Vec<Diagnostic>) {
-    for p in changes.modified.iter().filter(|p| p.starts_with("sources/")) {
+    for p in changes.modified.iter().filter(|p| vault::is_source_file(p)) {
         out.push(
             Diagnostic::error("sources.changed", format!("source `{p}` differs from its committed version"))
                 .at_path(p.as_str())
@@ -452,21 +435,26 @@ fn sources_changed(changes: &git::Changes, out: &mut Vec<Diagnostic>) {
     }
 }
 
-fn check_material(root: &Path, changes: &git::Changes, out: &mut Vec<Diagnostic>) -> Result<(), String> {
+/// Only vault files count (m0 §3): a deleted path that core would read, and a current
+/// file the index lists, whose counts the index already holds. Only reading `HEAD` can
+/// fail.
+fn check_material(index: &Index, root: &Path, changes: &git::Changes, out: &mut Vec<Diagnostic>) -> Result<(), String> {
     const CATEGORIES: [&str; 3] = ["math spans", "images", "fenced code blocks"];
-    let counts = |text: &[u8], path: &str| -> [usize; 3] {
-        // A file that is not UTF-8 holds no parsed material (lint reports it).
-        let Ok(text) = std::str::from_utf8(text) else { return [0; 3] };
-        let c = crate::parse::parse(path, vault::kind_of(path).unwrap_or(Kind::Unknown), text.to_string()).counts;
-        [c.math, c.images, c.code]
+    let of = |c: &crate::parse::Counts| [c.math, c.images, c.code];
+    // A vault path that is not UTF-8 holds no parsed material (lint reports it).
+    let head = |p: &str| {
+        git::show(root, "HEAD", p).map(|b| match String::from_utf8(b) {
+            Ok(text) => of(&crate::parse::parse(p, vault::kind_of(p).expect("a vault path"), text).counts),
+            Err(_) => [0; 3],
+        })
     };
-    let head = |p: &str| git::show(root, "HEAD", p).map(|b| counts(&b, p));
     let mut deleted = [0usize; 3];
     let mut added = [0usize; 3];
     // Per category, the first deleted path that held any (§7.1: vault-level rules
     // report on the first involved path).
     let mut first: [Option<&str>; 3] = [None; 3];
-    let mut deleted_paths: Vec<&String> = changes.deleted.iter().filter(|p| p.ends_with(".md")).collect();
+    let mut deleted_paths: Vec<&String> =
+        changes.deleted.iter().filter(|p| p.ends_with(".md") && vault::is_core_path(p)).collect();
     deleted_paths.sort();
     for p in deleted_paths {
         for (i, n) in head(p)?.into_iter().enumerate() {
@@ -478,9 +466,10 @@ fn check_material(root: &Path, changes: &git::Changes, out: &mut Vec<Diagnostic>
     }
     let new_files = changes.added.iter().chain(&changes.untracked).map(|p| (p, false));
     let changed = changes.modified.iter().map(|p| (p, true)).chain(new_files);
-    for (p, in_head) in changed.filter(|(p, _)| p.ends_with(".md")) {
-        let bytes = std::fs::read(root.join(p)).map_err(|e| format!("reading `{p}`: {e}"))?;
-        let now = counts(&bytes, p);
+    let listed = |p: &str| index.files.binary_search_by(|f| f.as_str().cmp(p)).is_ok();
+    for (p, in_head) in changed.filter(|(p, _)| p.ends_with(".md") && listed(p)) {
+        // An unreadable or non-UTF-8 note is not in `markdown` (lint reports it): it holds none.
+        let now = index.markdown.get(p).map_or([0; 3], |n| of(&n.counts));
         let before = if in_head { head(p)? } else { [0; 3] };
         for i in 0..3 {
             added[i] += now[i].saturating_sub(before[i]);
@@ -523,7 +512,7 @@ mod tests {
             let d = lint(&files);
             assert!(d.contains(&("concepts/a/y.md".into(), "fm.field-type".into())), "{bad}: {d:?}");
             let index = crate::index::from_texts(&files);
-            assert!(index.notes["concepts/a/y.md"].links.is_empty(), "{bad} is not a link");
+            assert!(index.markdown["concepts/a/y.md"].links.is_empty(), "{bad} is not a link");
         }
     }
 
@@ -535,7 +524,7 @@ mod tests {
         let x = |code: &str| d.iter().filter(|(p, c)| p == "concepts/a/x.md" && c == code).count();
         assert_eq!(x("fm.field-type"), 1, "{d:?}");
         let index = crate::index::from_texts(&files);
-        assert!(index.notes["concepts/a/x.md"].links.is_empty(), "no link from an escaped scalar");
+        assert!(index.markdown["concepts/a/x.md"].links.is_empty(), "no link from an escaped scalar");
     }
 
     const OK: &str =

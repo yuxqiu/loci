@@ -8,7 +8,7 @@ expression: v.redact(&env)
     "edited": [
       {
         "edits": 1,
-        "path": "concepts/a/empty-flow.md"
+        "path": "concepts/a/prereq-holder.md"
       },
       {
         "edits": 3,
@@ -17,8 +17,8 @@ expression: v.redact(&env)
     ],
     "moved": [
       [
-        "concepts/a/flow.md",
-        "concepts/a/flow-new.md"
+        "concepts/a/renamed.md",
+        "concepts/a/renamed-new.md"
       ]
     ]
   },

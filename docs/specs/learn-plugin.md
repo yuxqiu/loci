@@ -112,9 +112,8 @@ truncated away (exit 3). `data`: `{"line": <the appended object>, "commit"}`.
 
 ### 2.5 `loci learn state <concept>`
 
-Returns the estimate of a concept (§4.2), named by its path or slug (a slug shared
-by several concepts is `concept.ambiguous`). An unknown one is
-`learn.unknown-concept`. `data`:
+Returns the estimate of a concept (§4.2), given as a note argument (m0 §8). A note
+that is not found or is not a concept is `learn.unknown-concept`. `data`:
 
 ```json
 {"concept": "01JB9XQ7Z3K4M5N6P7Q8R9S0TV",

@@ -56,7 +56,7 @@ impl From<&Note> for SearchDoc {
 
 /// The search documents for every note core reads.
 pub fn docs(index: &VaultIndex) -> Vec<SearchDoc> {
-    index.notes.values().map(SearchDoc::from).collect()
+    index.markdown.values().map(SearchDoc::from).collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

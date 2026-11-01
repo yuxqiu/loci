@@ -7,7 +7,6 @@ repository.workspace = true
 
 [dependencies]
 icu_segmenter = "2.4.0"
-ignore = "0.4.34"
 pulldown-cmark = { version = "0.13", default-features = false }
 regex = "1.13.1"
 saphyr = "0.3"

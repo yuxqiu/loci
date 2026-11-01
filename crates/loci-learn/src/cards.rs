@@ -32,7 +32,7 @@ pub struct FormatIssue {
 pub fn all(index: &Index) -> (Vec<Card>, Vec<FormatIssue>) {
     let mut cards = vec![];
     let mut issues = vec![];
-    for note in index.notes.values().filter(|n| n.kind == Kind::Concept) {
+    for note in index.markdown.values().filter(|n| n.kind == Kind::Concept) {
         let (c, i) = of_note(note);
         cards.extend(c);
         issues.extend(i);

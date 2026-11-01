@@ -104,6 +104,27 @@ pub fn is_ignored(root: &Path, path: &str) -> Result<bool, String> {
     answer(root, &["check-ignore", "-q", "--", path])
 }
 
+/// Every path git sees in the work tree, or under `pathspec` when given: tracked files
+/// and untracked files it does not ignore (`git ls-files -z --cached --others
+/// --exclude-standard`), as raw names, and any warnings git printed (for example about
+/// a directory it could not open).
+pub fn ls_files(root: &Path, pathspec: Option<&str>) -> Result<(Vec<Vec<u8>>, String), String> {
+    let what = "ls-files";
+    let out = git(root)
+        .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"])
+        // A vault path, never a pattern: `*` or `?` in a folder name is literal.
+        .args(pathspec.map(|p| format!(":(literal){p}")))
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("git {what}: {e}"))?;
+    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if !out.status.success() {
+        return Err(format!("git {what}: {stderr}"));
+    }
+    let paths = out.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()).map(<[u8]>::to_vec).collect();
+    Ok((paths, stderr))
+}
+
 /// Whether the repository has a commit.
 pub fn has_head(root: &Path) -> Result<bool, String> {
     answer(root, &["rev-parse", "--verify", "-q", "HEAD"])
@@ -140,10 +161,10 @@ pub struct Changes {
     pub untracked: Vec<String>,
 }
 
-/// The working tree's changes relative to HEAD (`git status --porcelain=v2 -z
-/// --untracked-files=all --no-renames --ignore-submodules=all`): a rename is a
-/// deletion and an addition, and submodules, whose content loci does not read, are left
-/// out.
+/// The working tree's changes relative to HEAD (`git -c core.fileMode=false status
+/// --porcelain=v2 -z --untracked-files=all --no-renames --ignore-submodules=all`): a
+/// rename is a deletion and an addition, a permission-only change is no change, and
+/// submodules, whose content loci does not read, are left out.
 /// A changed path is filed by whether it is in HEAD and on disk, both read directly: a
 /// record's own codes misstate HEAD for intent-to-add files and for conflicts whose
 /// "ours" is not HEAD (`git stash apply`), and its worktree mode is copied from the
@@ -151,18 +172,27 @@ pub struct Changes {
 pub fn status(root: &Path) -> Result<Changes, String> {
     let out = run(
         root,
-        &["status", "--porcelain=v2", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=all"],
+        &[
+            "-c",
+            "core.fileMode=false",
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--untracked-files=all",
+            "--no-renames",
+            "--ignore-submodules=all",
+        ],
     )?;
     let (changed, untracked) = parse_status(&out);
     let head: BTreeSet<String> = if has_head(root)? {
         let out = run(root, &["ls-tree", "-r", "--name-only", "-z", "HEAD"])?;
-        out.split(|b| *b == 0).filter(|p| !p.is_empty()).map(|p| String::from_utf8_lossy(p).into_owned()).collect()
+        utf8_paths(&out).map(str::to_string).collect()
     } else {
         BTreeSet::new()
     };
     let mut ch = Changes { untracked, ..Changes::default() };
     for path in changed {
-        match (head.contains(&path), root.join(&path).is_file()) {
+        match (head.contains(&path), crate::vault::is_regular_file(root, &path)) {
             (true, true) => ch.modified.push(path),
             (false, true) => ch.added.push(path),
             (true, false) => ch.deleted.push(path),
@@ -172,10 +202,17 @@ pub fn status(root: &Path) -> Result<Changes, String> {
     Ok(ch)
 }
 
+/// The NUL-separated records of `out` that are valid UTF-8. A non-UTF-8 path is not a
+/// vault file (the walk reports it as `file.unreadable`), so it is skipped rather than
+/// mangled into a path that does not exist.
+fn utf8_paths(out: &[u8]) -> impl Iterator<Item = &str> {
+    out.split(|b| *b == 0).filter(|r| !r.is_empty()).filter_map(|r| std::str::from_utf8(r).ok())
+}
+
 /// The changed paths (ordinary and conflict records) and the untracked paths.
 fn parse_status(out: &[u8]) -> (Vec<String>, Vec<String>) {
     let (mut changed, mut untracked) = (vec![], vec![]);
-    for rec in out.split(|b| *b == 0).map(String::from_utf8_lossy) {
+    for rec in utf8_paths(out) {
         // 1 XY sub mH mI mW hH hI path; u XY sub m1 m2 m3 mW h1 h2 h3 path.
         let fields = match rec.as_bytes().first() {
             Some(b'1') => 9,
@@ -252,6 +289,20 @@ mod tests {
         run(&sub, &["add", "."]).unwrap();
         run(&sub, &["commit", "-qm", "x"]).unwrap();
         std::fs::write(sub.join("y.md"), "y\n").unwrap();
+        assert_eq!(status(root).unwrap(), Changes::default());
+    }
+
+    /// A permission-only change is not a change to the content.
+    #[cfg(unix)]
+    #[test]
+    fn status_ignores_file_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = test_repo();
+        let root = tmp.path();
+        std::fs::write(root.join("a.md"), "a\n").unwrap();
+        run(root, &["add", "."]).unwrap();
+        run(root, &["commit", "-qm", "base"]).unwrap();
+        std::fs::set_permissions(root.join("a.md"), std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(status(root).unwrap(), Changes::default());
     }
 

@@ -8,19 +8,19 @@ use crate::relink::{self, Change};
 use crate::vault::{self, Kind};
 
 /// Computes the move of `from` to `to` without writing. Both are vault paths
-/// ([`vault::path_arg`]). `to_ignored` tells whether `to` is gitignored and `exists`
-/// whether a vault path exists on disk (including files the index does not hold).
+/// ([`vault::path_arg`]), `from` as stored ([`stored_name`]). `ignored` tells whether a vault path is gitignored, and `exists` whether
+/// it exists on disk (including files the index does not hold).
 pub fn plan(
     index: &Index,
     from: &str,
     to: &str,
-    to_ignored: bool,
+    ignored: impl Fn(&str) -> Result<bool, Refusal>,
     exists: impl Fn(&str) -> bool,
 ) -> Result<Change, Refusal> {
-    if from.starts_with("plugins/") || from == "plugins" {
+    if !vault::is_core_path(from) {
         return Err(Refusal::refused("mv.from", format!("`{from}` cannot be moved")));
     }
-    if to.starts_with("plugins/") || to == "plugins" || vault::is_reserved(to) || to_ignored {
+    if !vault::is_core_path(to) || ignored(to)? {
         return Err(Refusal::refused("mv.to", format!("`{to}` is not a valid destination")));
     }
     let is_file = index.files.binary_search(&from.to_string()).is_ok();
@@ -28,9 +28,6 @@ pub fn plan(
     let dir_files: Vec<&String> = index.files.iter().filter(|f| f.starts_with(&prefix)).collect();
     if !is_file && dir_files.is_empty() {
         return Err(Refusal::refused("mv.from", format!("`{from}` does not exist or is ignored")));
-    }
-    if exists(to) || index.files.iter().any(|f| f == to || f.starts_with(&format!("{to}/"))) {
-        return Err(Refusal::refused("mv.exists", format!("`{to}` already exists")));
     }
     let mut map: BTreeMap<String, String> = BTreeMap::new();
     if is_file {
@@ -40,40 +37,67 @@ pub fn plan(
             map.insert(f.clone(), format!("{to}/{}", &f[prefix.len()..]));
         }
     }
-    // A source can be renamed, keeping its type (extension), but not moved out of
-    // `sources/<type>/<slug>.<ext>`; any other file moved under `sources/` must become
-    // a source. A stray file (`sources.layout`) may move anywhere.
-    let layout_kept = |old: &str, new: &str| match vault::source_ext(old) {
-        Some(ext) => vault::source_ext(new) == Some(ext),
-        None => !new.starts_with("sources/") || vault::is_source_file(new),
-    };
-    if let Some((_, new)) = map.iter().find(|(old, new)| !layout_kept(old, new)) {
+    // A source can be renamed, keeping its extension, but not moved out of `sources/`.
+    if let Some((_, new)) =
+        map.iter().find(|(old, new)| vault::source_ext(old).is_some_and(|ext| vault::source_ext(new) != Some(ext)))
+    {
         return Err(Refusal::refused(
             "mv.source-file",
-            format!("`{new}` is not a `sources/<type>/<slug>.<ext>` file of the same type"),
+            format!("`{new}` is not a `sources/<type>/<slug>.<ext>` file with the same extension"),
         ));
+    }
+    // A concept stays a concept (as `new` checks before the path rules).
+    if let Some((_, new)) = map
+        .iter()
+        .find(|(old, new)| vault::kind_of(old) == Some(Kind::Concept) && vault::kind_of(new) != Some(Kind::Concept))
+    {
+        return Err(Refusal::refused("mv.no-area", format!("`{new}` is not inside an area")));
+    }
+    // Every destination follows the path rules lint checks (`vault::path_problem`),
+    // first, so the case advice below never leads to a name lint rejects.
+    if let Some((new, (code, message))) = map.values().find_map(|n| vault::path_problem(n).map(|p| (n, p))) {
+        return Err(Refusal::refused(code, format!("`{new}`: {message}")));
+    }
+    // A destination that differs from an existing name only in letter case (the source
+    // itself, or a folder on its path) cannot be used safely: on a case-insensitive file
+    // system (macOS) it is the existing file or folder, and git with `core.ignorecase`
+    // keeps the existing spelling, so rewritten links would dangle; on other systems it
+    // makes twin folders.
+    if let Some((existing, asked)) = case_twin(index, to) {
+        // `git mv -f` fits only a case-only rename of the source itself; for anyone
+        // else's name it would make the twin, or on macOS overwrite the other file.
+        let what_to_do = if existing == from {
+            "rename it with `git mv -f`".to_string()
+        } else {
+            format!("use the existing spelling `{existing}` or another name")
+        };
+        return Err(Refusal::refused(
+            "mv.case-only",
+            format!("`{asked}` differs only in letter case from the existing `{existing}`; {what_to_do}"),
+        ));
+    }
+    if exists(to) || index.has_entry(to) {
+        return Err(Refusal::refused("mv.exists", format!("`{to}` already exists")));
+    }
+    // A moved file must stay in the vault: a tracked file matched by an ignore rule
+    // would become an untracked, ignored one.
+    for new in map.values() {
+        if ignored(new)? {
+            return Err(Refusal::refused("mv.to", format!("`{new}` would be ignored")));
+        }
     }
     // A destination that exists on disk (a file the index does not hold) is never
     // overwritten.
     if let Some(new) = map.values().find(|n| exists(n)) {
         return Err(Refusal::refused("mv.exists", format!("`{new}` already exists")));
     }
-    // Moved concepts must stay concepts; every file that ends as a concept needs a valid
-    // slug that does not collide.
-    for (old, new) in &map {
-        let was_concept = vault::kind_of(old) == Some(Kind::Concept);
-        if vault::kind_of(new) != Some(Kind::Concept) {
-            if was_concept {
-                return Err(Refusal::refused("mv.no-area", format!("`{new}` is not inside an area")));
-            }
-            continue;
-        }
+    // Every file that ends as a concept needs a slug that collides neither with a
+    // concept that stays nor with another moved file.
+    let mut new_slugs = BTreeSet::new();
+    for new in map.values().filter(|n| vault::kind_of(n) == Some(Kind::Concept)) {
         let new_slug = vault::stem(new);
-        if index.name_taken(new_slug, |p| map.contains_key(p)) {
+        if index.name_taken(new_slug, |p| map.contains_key(p)) || !new_slugs.insert(new_slug.to_lowercase()) {
             return Err(Refusal::refused("mv.collision", format!("slug `{new_slug}` is already used")));
-        }
-        if !vault::is_slug(new_slug) {
-            return Err(Refusal::refused("slug.format", format!("`{new_slug}` is not a valid slug")));
         }
     }
 
@@ -82,6 +106,50 @@ pub fn plan(
     relink::add_writes(index, &mut change, edits)?;
     relink::verify(index, &map, &change, "mv.verify")?;
     Ok(change)
+}
+
+/// The first folder or file on the path to `to` that has an existing indexed name
+/// differing from it only in letter case, as (existing, asked).
+fn case_twin(index: &Index, to: &str) -> Option<(String, String)> {
+    let parts: Vec<&str> = to.split('/').collect();
+    (1..=parts.len()).find_map(|k| {
+        let asked = parts[..k].join("/");
+        // A name that exists exactly is no twin: it is `mv.exists`, or a folder to use.
+        if index.has_entry(&asked) {
+            return None;
+        }
+        index.files.iter().find_map(|f| {
+            let head: Vec<&str> = f.split('/').take(k).collect();
+            let existing = head.join("/");
+            (head.len() == k && existing != asked && existing.to_lowercase() == asked.to_lowercase())
+                .then(|| (existing, asked.clone()))
+        })
+    })
+}
+
+/// The stored spelling of `from`: itself when a file or folder has that name, else the
+/// one stored file or folder whose name has `from` as its NFC form (`path.not-nfc`), so
+/// that `mv` can fix it. Two stored spellings are ambiguous.
+pub fn stored_name(index: &Index, from: &str) -> Result<String, Refusal> {
+    let prefix = format!("{from}/");
+    if index.has_entry(from) {
+        return Ok(from.to_string());
+    }
+    let depth = from.split('/').count();
+    let spellings: BTreeSet<String> = index
+        .files
+        .iter()
+        .filter(|f| {
+            let n = vault::nfc(f);
+            n == from || n.starts_with(&prefix)
+        })
+        .map(|f| f.split('/').take(depth).collect::<Vec<_>>().join("/"))
+        .collect();
+    match spellings.len() {
+        0 => Ok(from.to_string()),
+        1 => Ok(spellings.into_iter().next().expect("one spelling")),
+        _ => Err(Refusal::refused("mv.from", format!("`{from}` names several stored spellings; rename one with git"))),
+    }
 }
 
 #[cfg(test)]
@@ -95,22 +163,54 @@ mod tests {
     fn rename_rewrites_links_and_leaves_the_note() {
         let i =
             from_texts(&[("concepts/a/old.md", C), ("views/v.md", "# V\n\n[[old]] [[old#T|x]] [[concepts/a/old]]\n")]);
-        let p = plan(&i, "concepts/a/old.md", "concepts/a/new.md", false, |_| false).unwrap();
+        let p = plan(&i, "concepts/a/old.md", "concepts/a/new.md", |_| Ok(false), |_| false).unwrap();
         assert_eq!(p.writes["views/v.md"], "# V\n\n[[new]] [[new#T|x]] [[concepts/a/new]]\n");
         assert!(!p.writes.contains_key("concepts/a/new.md"), "a rename does not edit the note");
     }
 
     #[test]
+    fn a_link_with_a_dangling_fragment_still_follows_its_note() {
+        let i =
+            from_texts(&[("concepts/a/dfs.md", C), ("views/w.md", "[[dfs#Typo]] [[concepts/a/dfs#^nope]] [[dfs]]\n")]);
+        let p = plan(&i, "concepts/a/dfs.md", "concepts/a/depth-first.md", |_| Ok(false), |_| false).unwrap();
+        assert_eq!(p.writes["views/w.md"], "[[depth-first#Typo]] [[concepts/a/depth-first#^nope]] [[depth-first]]\n");
+    }
+
+    #[test]
     fn rename_back_is_allowed() {
         let i = from_texts(&[("concepts/a/new.md", C), ("views/v.md", "[[new]]\n")]);
-        let p = plan(&i, "concepts/a/new.md", "concepts/a/old.md", false, |_| false).unwrap();
+        let p = plan(&i, "concepts/a/new.md", "concepts/a/old.md", |_| Ok(false), |_| false).unwrap();
         assert_eq!(p.writes["views/v.md"], "[[old]]\n");
+    }
+
+    #[test]
+    fn every_moved_file_must_stay_in_the_vault() {
+        let i =
+            from_texts(&[("views/d/fig.png", ""), ("views/d/x.md", "# X\n"), ("views/p.md", "[[views/d/fig.png]]\n")]);
+        let png_ignored = |p: &str| Ok(p.ends_with(".png"));
+        let e = plan(&i, "views/d", "views/e", png_ignored, |_| false).unwrap_err();
+        assert_eq!(e.code(), "mv.to");
+    }
+
+    #[test]
+    fn from_is_found_by_its_nfc_form() {
+        let nfd = "views/cafe\u{301}.md";
+        let i = from_texts(&[(nfd, "# NFD\n"), ("views/de\u{301}/x.md", "# X\n")]);
+        assert_eq!(stored_name(&i, "views/caf\u{e9}.md").unwrap(), nfd);
+        // A folder too.
+        assert_eq!(stored_name(&i, "views/d\u{e9}").unwrap(), "views/de\u{301}");
+        // An exact name wins over another spelling.
+        let both = from_texts(&[(nfd, "# NFD\n"), ("views/caf\u{e9}.md", "# NFC\n")]);
+        assert_eq!(stored_name(&both, "views/caf\u{e9}.md").unwrap(), "views/caf\u{e9}.md");
+        // Two stored spellings of one NFC name are ambiguous.
+        let two = from_texts(&[("views/a\u{323}\u{302}.md", ""), ("views/a\u{302}\u{323}.md", "")]);
+        assert_eq!(stored_name(&two, "views/\u{1ead}.md").unwrap_err().code(), "mv.from");
     }
 
     #[test]
     fn an_unreadable_concept_moves_unchanged() {
         let i = crate::index::build(vec!["concepts/a/bad.md".to_string()], |_| Ok(vec![0xff]));
-        let p = plan(&i, "concepts/a/bad.md", "concepts/a/good.md", false, |_| false).unwrap();
+        let p = plan(&i, "concepts/a/bad.md", "concepts/a/good.md", |_| Ok(false), |_| false).unwrap();
         assert!(p.writes.is_empty());
     }
 
@@ -124,37 +224,70 @@ mod tests {
             ("sources/papers/p.pdf", ""),
             ("sources/stray.md", "# Stray\n"),
         ]);
-        let e = |f: &str, t: &str| plan(&i, f, t, false, |_| false).unwrap_err().code().to_string();
+        let e = |f: &str, t: &str| plan(&i, f, t, |_| Ok(false), |_| false).unwrap_err().code().to_string();
         assert_eq!(e("concepts/a/x.md", "concepts/a/y.md"), "mv.exists");
+        assert_eq!(e("views/v.md", "views/V.md"), "mv.case-only");
+        // A case-only rename to a name lint rejects is refused for the name, not the case.
+        assert_eq!(e("concepts/a/x.md", "concepts/a/X.md"), "slug.format");
+        // Every path rule lint checks applies to a destination, the journal one included.
+        let j = from_texts(&[("journal/research/e.md", "# E\n")]);
+        let je = |f: &str, t: &str| plan(&j, f, t, |_| Ok(false), |_| false).unwrap_err().code().to_string();
+        assert_eq!(je("journal/research", "journal/Research"), "journal.path");
+        assert_eq!(je("journal/research/e.md", "notes.md"), "kind.unknown");
+        assert_eq!(je("journal/research/e.md", "journal/My Stuff/e.md"), "journal.path");
+        // A name that exists exactly is `mv.exists`, never twin advice.
+        let twins = from_texts(&[("views/a.md", "# a\n"), ("views/A.md", "# A\n")]);
+        let e2 = plan(&twins, "views/a.md", "views/A.md", |_| Ok(false), |_| false).unwrap_err();
+        assert_eq!(e2.code(), "mv.exists");
+        let message = |f: &str, t: &str| plan(&i, f, t, |_| Ok(false), |_| false).unwrap_err().error.message;
+        assert!(message("views/v.md", "views/V.md").ends_with("rename it with `git mv -f`"));
+        assert!(
+            message("concepts/a/x.md", "concepts/A/z.md")
+                .ends_with("use the existing spelling `concepts/a` or another name")
+        );
+        assert_eq!(e("concepts/a", "concepts/A"), "mv.case-only", "a folder too");
+        // A twin that breaks a path rule is refused for the rule (`Views/` is no known folder).
+        assert_eq!(e("views", "Views"), "kind.unknown");
+        assert_eq!(e("concepts/a/x.md", "concepts/A/z.md"), "mv.case-only", "a folder on the way");
         assert_eq!(e("concepts/a/x.md", "concepts/b/y.md"), "mv.collision");
         assert_eq!(e("concepts/a/x.md", "views/x.md"), "mv.no-area");
+        assert_eq!(e("concepts/a/x.md", "concepts/x.md"), "mv.no-area", "the `concepts/` root is no area");
         assert_eq!(e("sources/papers/p.pdf", "sources/papers/p/q.pdf"), "mv.source-file");
         assert_eq!(e("sources/papers/p.pdf", "views/p.pdf"), "mv.source-file");
-        assert_eq!(e("sources/papers/p.pdf", "sources/papers/p.md"), "mv.source-file", "a source keeps its type");
+        assert_eq!(e("sources/papers/p.pdf", "sources/papers/p.md"), "mv.source-file", "a source keeps its extension");
         // A stray file under `sources/` may leave, which fixes its `sources.layout`.
-        assert!(plan(&i, "sources/stray.md", "views/stray.md", false, |_| false).is_ok());
+        assert!(plan(&i, "sources/stray.md", "views/stray.md", |_| Ok(false), |_| false).is_ok());
         assert_eq!(e("plugins/learn", "x"), "mv.from");
+        assert_eq!(e("loci.toml", "views/x.toml"), "mv.from", "configuration cannot be moved");
         assert_eq!(e("sources", "old/sources"), "mv.source-file");
         assert_eq!(e("concepts/a/x.md", "concepts/a/Bad Name.md"), "slug.format");
         // A file that becomes a concept follows the concept naming rules too.
         assert_eq!(e("views/v.md", "concepts/b/x.md"), "mv.collision");
         assert_eq!(e("views/v.md", "concepts/b/Bad.md"), "slug.format");
-        assert!(plan(&i, "sources/papers/p.pdf", "sources/papers/q.pdf", false, |_| false).is_ok());
-        assert!(plan(&i, "sources/papers", "sources/articles", false, |_| false).is_ok());
+        // Two moved files may not end with the same concept slug.
+        let drafts = from_texts(&[
+            ("concepts/a/AREA.md", "# A\n"),
+            ("inbox/drafts/x.md", "# X\n"),
+            ("inbox/drafts/sub/x.md", "# X2\n"),
+        ]);
+        let e = plan(&drafts, "inbox/drafts", "concepts/a/new", |_| Ok(false), |_| false).unwrap_err();
+        assert_eq!(e.code(), "mv.collision");
+        assert!(plan(&i, "sources/papers/p.pdf", "sources/papers/q.pdf", |_| Ok(false), |_| false).is_ok());
+        assert!(plan(&i, "sources/papers", "sources/articles", |_| Ok(false), |_| false).is_ok());
     }
 
     #[test]
     fn source_citations_follow() {
         let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ndigest: d\n---\n# T\n\nSee [[sources/papers/p.pdf#p3]].\n";
         let i = from_texts(&[("concepts/a/x.md", c), ("sources/papers/p.pdf", "")]);
-        let p = plan(&i, "sources/papers/p.pdf", "sources/papers/q.pdf", false, |_| false).unwrap();
+        let p = plan(&i, "sources/papers/p.pdf", "sources/papers/q.pdf", |_| Ok(false), |_| false).unwrap();
         assert!(p.writes["concepts/a/x.md"].contains("[[sources/papers/q.pdf#p3]]"));
     }
 
     #[test]
     fn table_pipe_kept() {
         let i = from_texts(&[("concepts/a/old.md", C), ("views/v.md", "# V\n\n| a |\n|---|\n| [[old\\|x]] |\n")]);
-        let p = plan(&i, "concepts/a/old.md", "concepts/a/new.md", false, |_| false).unwrap();
+        let p = plan(&i, "concepts/a/old.md", "concepts/a/new.md", |_| Ok(false), |_| false).unwrap();
         assert!(p.writes["views/v.md"].contains("[[new\\|x]]"));
     }
 
@@ -166,7 +299,7 @@ mod tests {
             ("views/v.md", "# V\n\n[[x]] ![[concepts/a/g/p.png]]\n"),
             ("concepts/a/g/p.png", ""),
         ]);
-        let p = plan(&i, "concepts/a/g", "concepts/a/h", false, |_| false).unwrap();
+        let p = plan(&i, "concepts/a/g", "concepts/a/h", |_| Ok(false), |_| false).unwrap();
         assert_eq!(p.moves.len(), 2);
         assert_eq!(p.writes["views/v.md"], "# V\n\n[[x]] ![[concepts/a/h/p.png]]\n");
     }

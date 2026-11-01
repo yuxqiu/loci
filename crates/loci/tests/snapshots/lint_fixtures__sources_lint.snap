@@ -4,7 +4,7 @@ expression: diag_lines(&env)
 ---
 concepts/a/c.md:11:21 error link.dangling-heading: `sources/docs/guide` has no heading `nope`
 concepts/a/c.md:11:53 error link.dangling: `sources/papers/missing.pdf` does not resolve
-sources/Talks/intro.md error sources.layout: `sources/Talks/intro.md` is not a `sources/<type>/<slug>.<ext>` file
-sources/clippings/nested/page.md error sources.layout: `sources/clippings/nested/page.md` is not a `sources/<type>/<slug>.<ext>` file
-sources/papers/noext error sources.layout: `sources/papers/noext` is not a `sources/<type>/<slug>.<ext>` file
-sources/stray.md error sources.layout: `sources/stray.md` is not a `sources/<type>/<slug>.<ext>` file
+sources/Talks/intro.md error sources.layout: not a `sources/<type>/<slug>.<ext>` file
+sources/clippings/nested/page.md error sources.layout: not a `sources/<type>/<slug>.<ext>` file
+sources/papers/noext error sources.layout: not a `sources/<type>/<slug>.<ext>` file
+sources/stray.md error sources.layout: not a `sources/<type>/<slug>.<ext>` file

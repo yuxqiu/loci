@@ -16,8 +16,16 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         Some(d) => ctx.cwd.join(d),
         None => ctx.cwd.clone(),
     };
-    if dir.join(config::FILE).exists() {
+    let present = |name: &str| dir.join(name).symlink_metadata().is_ok();
+    if present(config::FILE) {
         return Err(Refusal::refused("init.exists", "loci.toml already exists"));
+    }
+    // There is no vault to check yet (`Vault::open` refuses symlinks): before anything
+    // is written, the files `init` manages must not be links (m0 §3).
+    let managed = ["RULES.md", "STYLE.md", "AGENTS.md", ".gitignore"];
+    if let Some(name) = managed.into_iter().find(|n| dir.join(n).symlink_metadata().is_ok_and(|m| m.is_symlink())) {
+        let message = format!("`{name}` is a symlink; loci does not follow symlinks");
+        return Err(Refusal::refused("file.symlink", message));
     }
     match git::toplevel(&dir) {
         // Not in a work tree (or git cannot tell): `git init` creates one or fails loudly.
@@ -35,11 +43,10 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     ];
     let (mut created, mut skipped) = (vec![], vec![]);
     for (name, content) in files {
-        let path = dir.join(name);
-        if path.exists() {
+        if present(name) {
             skipped.push(name.to_string());
         } else {
-            std::fs::write(&path, content).map_err(Refusal::io)?;
+            std::fs::write(dir.join(name), content).map_err(Refusal::io)?;
             created.push(name.to_string());
         }
     }

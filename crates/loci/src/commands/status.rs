@@ -3,7 +3,7 @@
 use loci_core::digest;
 use loci_core::envelope::{Diagnostic, Outcome, Refusal, Report};
 use loci_core::git;
-use loci_core::index::Index;
+use loci_core::index::{FileIssue, Index};
 use serde_json::json;
 
 use super::{Ctx, plugins};
@@ -15,8 +15,11 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     let mut diags: Vec<Diagnostic> = vec![];
     let mut human = String::new();
 
+    // Every part reads the vault's files from the index, like every other command.
+    let index = Index::open(&vault);
+
     // 1. The agent entry point.
-    if !root.join("AGENTS.md").is_file() {
+    if !index.files.iter().any(|f| f == "AGENTS.md") {
         diags.push(
             Diagnostic::warning("install.missing", "`AGENTS.md` is missing")
                 .with_hint("run `loci init` in a new vault"),
@@ -70,7 +73,6 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     };
 
     // 5. Inbox.
-    let index = Index::open(&vault);
     let inbox: Vec<&String> = index.files.iter().filter(|f| f.starts_with("inbox/")).collect();
     let uncommitted: Option<Vec<&String>> = changes.as_ref().map(|c| {
         let changed = |f: &String| c.untracked.contains(f) || c.modified.contains(f) || c.added.contains(f);
@@ -101,14 +103,19 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     let mut rules = serde_json::Map::new();
     for name in ["RULES.md", "STYLE.md"] {
         human.push('\n');
-        match std::fs::read_to_string(root.join(name)) {
-            Ok(text) => {
-                human.push_str(&text);
-                rules.insert(name.to_string(), json!(text));
+        match index.markdown.get(name) {
+            Some(note) => {
+                human.push_str(&note.text);
+                rules.insert(name.to_string(), json!(note.text));
             }
-            Err(e) => {
-                human.push_str(&format!("`{name}`: cannot be read\n"));
-                diags.push(Diagnostic::warning("status.rules", format!("`{name}` cannot be read: {e}")).at_path(name));
+            None => {
+                let why = match index.issues.get(name) {
+                    Some(FileIssue::NotUtf8) => "is not valid UTF-8".to_string(),
+                    Some(FileIssue::Unreadable(reason)) => format!("cannot be read: {reason}"),
+                    None => "is missing".to_string(),
+                };
+                human.push_str(&format!("`{name}` {why}\n"));
+                diags.push(Diagnostic::warning("status.rules", format!("`{name}` {why}")).at_path(name));
                 rules.insert(name.to_string(), serde_json::Value::Null);
             }
         }

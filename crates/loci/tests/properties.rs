@@ -125,6 +125,9 @@ fn destination(from: &str, rename: bool) -> String {
         }
     } else if from.starts_with("concepts/") {
         "concepts/moved-area".to_string()
+    } else if !from.contains('/') {
+        // A top-level folder moves inside itself, so its files stay in a known folder.
+        format!("{from}/moved/inner")
     } else {
         format!("{from}-moved/inner")
     }
@@ -150,10 +153,11 @@ proptest! {
         let from = g.movable[pick.index(g.movable.len())].clone();
         let to = destination(&from, rename);
         let before = build(&g.files);
-        let plan = match mv::plan(&before, &from, &to, false, |_| false) {
+        let plan = match mv::plan(&before, &from, &to, |_| Ok(false), |_| false) {
             Ok(p) => p,
             Err(e) => {
-                // A rename onto a slug in use is a legitimate refusal; anything else is not.
+                // A rename onto a slug in use is a legitimate refusal; anything else is not
+                // (every generated destination follows the path rules).
                 prop_assert_eq!(e.code(), "mv.collision", "mv {} {}: {}", from, to, e.error.message);
                 return Ok(());
             }
@@ -162,8 +166,8 @@ proptest! {
         let after = build(&after_files);
         let map: BTreeMap<&str, &str> = plan.moves.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
         let mapped = |p: &str| map.get(p).map_or(p.to_string(), |n| n.to_string());
-        for note in before.notes.values() {
-            let new_note = &after.notes[&mapped(&note.path)];
+        for note in before.markdown.values() {
+            let new_note = &after.markdown[&mapped(&note.path)];
             prop_assert_eq!(note.links.len(), new_note.links.len(), "{}", note.path);
             for (old, new) in note.links.iter().zip(&new_note.links) {
                 let Ok(r) = before.resolve(note, old) else { continue };

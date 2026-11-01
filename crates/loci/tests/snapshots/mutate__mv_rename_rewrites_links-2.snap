@@ -7,38 +7,38 @@ expression: v.tree()
 
 Area a.
 
-== concepts/a/absent.md ==
+== concepts/a/block-target.md ==
+---
+id: [ulid]
+digest: A note linked by block id.
+---
+# Block target
+
+Text. ^b
+
+== concepts/a/heading-target.md ==
 ---
 id: [ulid]
 digest: A linked note.
 ---
-# Absent
+# Heading target
 
 ## Heading
 
-== concepts/a/block.md ==
+== concepts/a/prereq-holder.md ==
 ---
 id: [ulid]
-digest: A block note.
----
-# Block
-
-Text. ^b
-
-== concepts/a/empty-flow.md ==
----
-id: [ulid]
-prereqs: ["[[flow-new]]", "[[absent]]"]
+prereqs: ["[[renamed-new]]", "[[heading-target]]"]
 digest: A note with prerequisites.
 ---
-# Empty flow
+# Prereq holder
 
-== concepts/a/flow-new.md ==
+== concepts/a/renamed-new.md ==
 ---
 id: [ulid]
-digest: A flow note.
+digest: A renamed note.
 ---
-# Flow
+# Renamed
 
 From [[sources/papers/p1.pdf#p2]].
 
@@ -55,10 +55,10 @@ p1
 == views/linker.md ==
 # Linker
 
-- [[flow-new]] and [[flow-new|label]] and [[flow-new]]
-- [[concepts/a/block]] and [[concepts/a/block#^b]]
-- [[absent#Heading]]
-- [markdown](concepts/a/flow.md) is not edited
+- [[renamed-new]] and [[renamed-new|label]] and [[renamed-new]]
+- [[concepts/a/block-target]] and [[concepts/a/block-target#^b]]
+- [[heading-target#Heading]]
+- [markdown](concepts/a/renamed.md) is not edited
 - ![[sources/papers/p1.pdf]]
 - [[views/sub/inner]]
 

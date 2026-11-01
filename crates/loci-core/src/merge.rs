@@ -22,22 +22,27 @@ pub fn plan(index: &Index, from: &str, into: &str) -> Result<Merge, Refusal> {
     let mut edits = relink::link_edits(index, &targets, &[from.clone()].into());
 
     // A prereq of `into` that named `from` would now name `into` itself: remove it.
-    let into_note = &index.notes[&into];
+    let into_note = &index.markdown[&into];
     let self_prereqs = self_prereqs(index, into_note, &from);
     let mut into_edits = edits.remove(&into).unwrap_or_default();
     into_edits.retain(|e| !self_prereqs.iter().any(|(_, r)| r.contains(&e.range.start)));
     if let Some(entry) = into_note.frontmatter.as_ref().and_then(|f| f.get("prereqs"))
-        && let FmValue::List { items, span, flow } = &entry.value
+        && let FmValue::List { items, flow, .. } = &entry.value
         && !self_prereqs.is_empty()
     {
-        if !*flow && self_prereqs.len() == items.len() {
+        let text = &into_note.text;
+        let removed = |item: &FmValue| self_prereqs.iter().any(|(_, r)| *r == item.span());
+        let (first, last) = (items[0].span(), items.last().expect("the list holds the removed items").span());
+        if *flow {
+            // One edit for the whole list, so adjacent removals cannot overlap. Items are
+            // verbatim (m0 §6.1), so their text is copied as written.
+            let kept: Vec<&str> = items.iter().filter(|i| !removed(i)).map(|i| &text[i.span()]).collect();
+            into_edits.push(Edit::replace(first.start..last.end, kept.join(", ")));
+        } else if self_prereqs.len() == items.len() {
             // An emptied block list would leave `prereqs:` (null): drop the whole entry.
-            let last = items.last().expect("the list holds the removed items").span();
-            into_edits.push(remove_lines(&into_note.text, entry.key_span.start..last.end));
+            into_edits.push(remove_lines(text, entry.key_span.start..last.end));
         } else {
-            for (_, item_range) in &self_prereqs {
-                into_edits.push(remove_list_item(into_note, span.clone(), item_range.clone(), *flow));
-            }
+            into_edits.extend(self_prereqs.iter().map(|(_, r)| remove_lines(text, r.clone())));
         }
         change.removed_links.extend(self_prereqs.iter().map(|(i, _)| (into.clone(), *i)));
     }
@@ -69,23 +74,6 @@ fn self_prereqs(index: &Index, into: &Note, from: &str) -> Vec<(usize, std::ops:
         .collect()
 }
 
-/// The edit that removes one item of a frontmatter list (flow or block form).
-fn remove_list_item(note: &Note, list_span: std::ops::Range<usize>, item: std::ops::Range<usize>, flow: bool) -> Edit {
-    let text = &note.text;
-    if flow {
-        // Remove the item and one adjacent comma with its spaces.
-        let after = &text[item.end..];
-        let trailing = after.len() - after.trim_start_matches([',', ' ']).len();
-        if after.starts_with(',') || after.trim_start().starts_with(',') {
-            return Edit::replace(item.start..item.end + trailing, "");
-        }
-        let before = &text[list_span.start..item.start];
-        let leading = before.len() - before.trim_end_matches([',', ' ']).len();
-        return Edit::replace(item.start - leading..item.end, "");
-    }
-    remove_lines(text, item)
-}
-
 /// The edit that removes the whole lines spanned by `range`.
 fn remove_lines(text: &str, range: std::ops::Range<usize>) -> Edit {
     let line_start = text[..range.start].rfind('\n').map_or(0, |i| i + 1);
@@ -110,9 +98,23 @@ mod tests {
         ]);
         let c = plan(&i, "old", "dijkstra").unwrap().change;
         assert!(c.deleted.contains("concepts/a/old.md"));
+        // Not a concept: named by its path, not reported as missing.
+        let e = plan(&i, "views/v", "dijkstra").err().unwrap();
+        assert_eq!(e.error.message, "`views/v.md` is not a concept");
         assert_eq!(c.writes["views/v.md"], "# V\n\n[[dijkstra]] [[concepts/a/dijkstra#A]]\n");
         let d = &c.writes["concepts/a/dijkstra.md"];
         assert!(d.contains("prereqs: [\"[[heap]]\"]"), "{d}");
+    }
+
+    #[test]
+    fn adjacent_self_prereqs_are_removed_together() {
+        let id = |n: &str| format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T{n}\ndigest: d\n---\n# {n}\n");
+        let c =
+            "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TC\nprereqs: [\"[[w]]\", \"[[y]]\", \"[[Y]]\"]\ndigest: d\n---\n# C\n";
+        let i =
+            from_texts(&[("concepts/a/w.md", id("W")), ("concepts/a/y.md", id("Y")), ("concepts/a/c.md", c.into())]);
+        let d = &plan(&i, "y", "c").unwrap().change.writes["concepts/a/c.md"];
+        assert!(d.contains("prereqs: [\"[[w]]\"]\n"), "{d}");
     }
 
     #[test]

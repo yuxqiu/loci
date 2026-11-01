@@ -30,7 +30,9 @@ fn matches(expect: &[String], path: &str) -> bool {
     let stem = vault::stem(path);
     let is_concept = vault::kind_of(path) == Some(Kind::Concept);
     let without_md = path.strip_suffix(".md").unwrap_or(path);
-    expect.iter().any(|e| e.strip_suffix(".md").unwrap_or(e) == without_md || (is_concept && e == stem))
+    // Slugs compare case-insensitively (m0 §6.2), as in `mentions`.
+    let slug_matches = |e: &str| is_concept && e.to_lowercase() == stem.to_lowercase();
+    expect.iter().any(|e| e.strip_suffix(".md").unwrap_or(e) == without_md || slug_matches(e))
 }
 
 /// True if the agent's output mentions an expected item: a vault path (an entry with a
@@ -181,6 +183,7 @@ mod tests {
     fn matching() {
         let e = vec!["bfs".to_string(), "views/plan".to_string()];
         assert!(matches(&e, "concepts/a/bfs.md"));
+        assert!(matches(&["BFS".to_string()], "concepts/a/bfs.md"), "slugs compare case-insensitively");
         assert!(matches(&e, "views/plan.md"));
         assert!(!matches(&e, "views/bfs.md"));
         assert!(mentions(&e, "see [[bfs]] for details"));

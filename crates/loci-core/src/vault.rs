@@ -107,11 +107,13 @@ pub fn is_source_file(path: &str) -> bool {
 }
 
 /// The kind of a vault-relative, `/`-separated path. `None` for paths core never reads
-/// (`plugins/`, `.git/`).
+/// as vault files (m0 §3): `plugins/`, `.git/`, the root `loci.toml` and `.gitignore`.
 pub fn kind_of(path: &str) -> Option<Kind> {
     let parts: Vec<&str> = path.split('/').collect();
     let first = parts[0];
-    if first == "plugins" || first == ".git" {
+    // Plugin data, git's own files and the vault's configuration are never read as
+    // vault files (m0 §3).
+    if first == "plugins" || first == ".git" || path == config::FILE || path == ".gitignore" {
         return None;
     }
     let is_md = path.ends_with(".md");
@@ -159,6 +161,8 @@ pub fn stem(path: &str) -> &str {
 pub struct Vault {
     pub root: PathBuf,
     pub config: Config,
+    /// The vault's files, listed once when it is opened.
+    files: Walk,
 }
 
 impl Vault {
@@ -197,31 +201,28 @@ impl Vault {
                 ));
             }
         }
+        // loci never reads or writes through a symlink (m0 §3). Checked here, once, so
+        // that no command has to: a vault holding one is refused before anything is read.
+        let files = walk(&root)?;
         let invalid = |m: String| Refusal::refused("config.invalid", m);
         let text = std::fs::read_to_string(root.join(config::FILE)).map_err(|e| invalid(e.to_string()))?;
         let config = Config::parse(&text).map_err(invalid)?;
-        Ok(Self { root, config })
+        Ok(Self { root, config, files })
     }
 
     pub fn abs(&self, rel: &str) -> PathBuf {
         self.root.join(rel)
     }
 
-    /// Every file core reads (m0 §3): the working tree minus `.git/`, `plugins/` and
-    /// gitignored paths.
+    /// Every file core reads (m0 §3): the files git sees (tracked, or untracked and not
+    /// ignored), minus `plugins/` and paths core never reads, as listed at open.
     pub fn walk(&self) -> Walk {
-        walk(&self.root)
+        self.files.clone()
     }
 }
 
-/// Paths core owns outside the vault content: `.git/`, `loci.toml` and the root
-/// `.gitignore`. They are never read as vault files nor written by `mv`.
-pub fn is_reserved(path: &str) -> bool {
-    path == ".git" || path.starts_with(".git/") || path == config::FILE || path == ".gitignore"
-}
-
 /// The result of [`walk`].
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Walk {
     /// Vault-relative `/` paths, sorted by bytes.
     pub files: Vec<String>,
@@ -230,62 +231,110 @@ pub struct Walk {
     pub unreadable: Vec<(String, String)>,
 }
 
-fn walk(root: &Path) -> Walk {
-    let mut out = Walk::default();
-    let walker = ignore::WalkBuilder::new(root)
-        .hidden(false)
-        .git_ignore(true)
-        .git_global(false)
-        .git_exclude(true)
-        .ignore(false)
-        .parents(false)
-        .require_git(false)
-        .filter_entry(|e| {
-            let name = e.file_name();
-            !(e.depth() == 1 && (name == ".git" || name == "plugins"))
-        })
-        .build();
-    let relative = |p: &Path| {
-        let rel = p.strip_prefix(root).expect("the walk stays under the root");
-        let parts: Vec<_> = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect();
-        if parts.is_empty() { ".".to_string() } else { parts.join("/") }
-    };
-    for entry in walker {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(e) => {
-                let path = error_path(&e).map_or(".".to_string(), relative);
-                out.unreadable.push((path, e.to_string()));
-                continue;
-            }
-        };
-        if !entry.file_type().is_some_and(|t| t.is_file()) {
-            continue;
+/// The first symlink on the way to the listed path `raw` (a folder above it, or the
+/// path itself), as a vault path. Checked on the raw name, so a non-UTF-8 name is
+/// checked too. loci never reads or writes through a symlink (m0 §3).
+fn symlink_on_path(root: &Path, raw: &[u8]) -> Option<String> {
+    use std::os::unix::ffi::OsStrExt;
+    let mut at = root.to_path_buf();
+    let mut end = 0;
+    for part in raw.split(|b| *b == b'/') {
+        at.push(std::ffi::OsStr::from_bytes(part));
+        end += part.len();
+        if std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Some(String::from_utf8_lossy(&raw[..end]).into_owned());
         }
-        let rel = relative(entry.path());
-        if entry.path().to_str().is_none() {
-            out.unreadable.push((rel, "file name is not UTF-8".to_string()));
-            continue;
-        }
-        if is_reserved(&rel) {
-            continue;
-        }
-        if kind_of(&rel).is_some() {
-            out.files.push(rel);
-        }
+        end += 1;
     }
-    out.files.sort();
-    out.unreadable.sort();
-    out
+    None
 }
 
-/// The path an `ignore` walk error is about, if it names one.
-fn error_path(e: &ignore::Error) -> Option<&Path> {
-    match e {
-        ignore::Error::WithPath { path, .. } => Some(path),
-        ignore::Error::WithDepth { err, .. } | ignore::Error::WithLineNumber { err, .. } => error_path(err),
+/// The path rule `path` breaks, if any, as (lint code, message): a file under `sources/`
+/// that is not `sources/<type>/<slug>.<ext>` (§6.4), a `.md` file outside every known
+/// folder (§3), a concept whose slug fails §6.2, a journal entry outside a
+/// `journal/<stream>/` folder named by a slug (§6.6). Lint reports it; `new` and `mv`
+/// refuse a destination that breaks one, with the same code. The message does not name
+/// the path: each caller does.
+pub fn path_problem(path: &str) -> Option<(&'static str, String)> {
+    if path.starts_with("sources/") && !is_source_file(path) {
+        return Some(("sources.layout", "not a `sources/<type>/<slug>.<ext>` file".to_string()));
+    }
+    match kind_of(path) {
+        Some(Kind::Unknown) => Some(("kind.unknown", "file is outside every known folder".to_string())),
+        Some(Kind::Concept) if !is_slug(stem(path)) => {
+            Some(("slug.format", format!("slug `{}` does not match the slug pattern", stem(path))))
+        }
+        Some(Kind::Journal) if !journal_path_ok(path) => Some((
+            "journal.path",
+            "journal entry is not inside a `journal/<stream>/` folder whose name is a slug".to_string(),
+        )),
         _ => None,
     }
+}
+
+/// Whether core reads vault path `rel` (it has a [`kind_of`]).
+pub fn is_core_path(rel: &str) -> bool {
+    kind_of(rel).is_some()
+}
+
+/// Whether vault path `rel` is a regular file (not a symlink, a folder or missing).
+pub fn is_regular_file(root: &Path, rel: &str) -> bool {
+    std::fs::symlink_metadata(root.join(rel)).is_ok_and(|m| m.is_file())
+}
+
+/// The files git sees (tracked, or untracked and not ignored: m0 §3) that exist on disk
+/// and that core reads. Git decides membership, as it does for every other command.
+/// Refuses a vault in which any listed path is, or lies under, a symlink
+/// (`file.symlink`), and a failed listing (`git`): loci never runs on a guess.
+fn walk(root: &Path) -> Result<Walk, Refusal> {
+    let (paths, warnings) = crate::git::ls_files(root, None).map_err(Refusal::git)?;
+    let mut out = Walk::default();
+    // Git skips what it cannot read (a directory without permission) with a warning.
+    if !warnings.is_empty() {
+        out.unreadable.push((".".to_string(), warnings));
+    }
+    let mut symlinks = vec![];
+    for raw in paths {
+        // Every listed path, `plugins/`, `loci.toml` and non-UTF-8 names included.
+        if let Some(link) = symlink_on_path(root, &raw) {
+            symlinks.push(link);
+            continue;
+        }
+        let Ok(rel) = String::from_utf8(raw.clone()) else {
+            // Reported only if core would read it and it is on disk, like any listed path.
+            // The prefixes `is_core_path` tests are ASCII, so the lossy form decides it.
+            let lossy = String::from_utf8_lossy(&raw).into_owned();
+            let on_disk = {
+                use std::os::unix::ffi::OsStrExt;
+                std::fs::symlink_metadata(root.join(std::ffi::OsStr::from_bytes(&raw))).is_ok()
+            };
+            if is_core_path(&lossy) && on_disk {
+                out.unreadable.push((lossy, "file name is not UTF-8".to_string()));
+            }
+            continue;
+        };
+        if is_core_path(&rel) && is_regular_file(root, &rel) {
+            out.files.push(rel);
+        }
+        // Otherwise a path core never reads, a tracked file gone from disk, or a submodule.
+    }
+    if !symlinks.is_empty() {
+        symlinks.sort();
+        // Every file listed under a symlinked folder names the same link.
+        symlinks.dedup();
+        return Err(Refusal::refused(
+            "file.symlink",
+            format!(
+                "loci does not follow symlinks; replace each with the file or folder itself: {}",
+                symlinks.join(", ")
+            ),
+        ));
+    }
+    out.files.sort();
+    // An unmerged file is listed once per conflict stage.
+    out.files.dedup();
+    out.unreadable.sort();
+    Ok(out)
 }
 
 /// Writes a file via a temporary sibling and a rename, so readers never see a partial file.

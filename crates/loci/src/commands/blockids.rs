@@ -2,7 +2,7 @@
 
 use loci_core::blockids;
 use loci_core::envelope::{Outcome, Refusal, Report};
-use loci_core::parse;
+use loci_core::index::Index;
 use loci_core::vault::{self, write_atomic};
 use serde_json::json;
 
@@ -10,25 +10,19 @@ use super::Ctx;
 
 pub fn run(ctx: &Ctx, note: &str, section: &str) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
-    let path = vault::path_arg(note)?;
-    let kind = vault::kind_of(&path);
-    if !kind.is_some_and(|k| k.is_managed()) {
-        return Err(Refusal::refused("block-ids.kind", format!("`{path}` is not a managed note")));
+    let arg = vault::path_arg(note)?;
+    // Like every note argument: a path (`.md` optional) or a concept slug (m0 §9.9).
+    let index = Index::open(&vault);
+    let parsed = index.note(&arg).map_err(|e| e.refusal("block-ids.kind", &arg))?;
+    if !parsed.kind.is_managed() {
+        return Err(Refusal::refused("block-ids.kind", format!("`{}` is not a managed note", parsed.path)));
     }
-    let abs = vault.abs(&path);
-    let text = match std::fs::read_to_string(&abs) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(Refusal::refused("block-ids.kind", format!("`{path}` does not exist")));
-        }
-        Err(e) => return Err(Refusal::io(format!("reading `{path}`: {e}"))),
-    };
-    let parsed = parse::parse(&path, kind.expect("checked above"), text);
-    let Some((out, assigned)) = blockids::assign(&parsed, section, blockids::ulid_ids()) else {
+    let path = parsed.path.clone();
+    let Some((out, assigned)) = blockids::assign(parsed, section, blockids::ulid_ids()) else {
         return Err(Refusal::refused("block-ids.no-section", format!("`{path}` has no `## {section}`")));
     };
     if !assigned.is_empty()
-        && let Err(e) = write_atomic(&abs, out.as_bytes())
+        && let Err(e) = write_atomic(&vault.abs(&path), out.as_bytes())
     {
         return Err(Refusal::io(e));
     }

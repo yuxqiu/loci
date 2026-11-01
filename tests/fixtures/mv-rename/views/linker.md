@@ -1,8 +1,8 @@
 # Linker
 
-- [[flow]] and [[flow|label]] and [[FLOW]]
-- [[concepts/a/block]] and [[concepts/a/block#^b]]
-- [[absent#Heading]]
-- [markdown](concepts/a/flow.md) is not edited
+- [[renamed]] and [[renamed|label]] and [[RENAMED]]
+- [[concepts/a/block-target]] and [[concepts/a/block-target#^b]]
+- [[heading-target#Heading]]
+- [markdown](concepts/a/renamed.md) is not edited
 - ![[sources/papers/p1.pdf]]
 - [[views/sub/inner]]

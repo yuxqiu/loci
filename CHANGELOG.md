@@ -27,7 +27,7 @@ them under its version.
   folders.
 - An unsupported `schema` in `loci.toml` is refused with a message naming the
   supported one.
-- `loci search` reports `search.index` when it cannot build its index.
+- `loci find` reports `search.index` when it cannot build its index.
 - `vault.not-git` now includes git's own message, so a missing or broken git is no
   longer reported as "not a git work tree" alone. `lint` reports `git.failed`, and
   `loci done` reports `done.record`, when git cannot tell whether there is a commit.
@@ -36,9 +36,11 @@ them under its version.
 - `loci bench --agent` no longer waits forever when the agent leaves a process
   holding its output open; the 600-second timeout applies.
 - `plugin.failed` includes what the plugin printed on stderr.
-- `loci mv` keeps the source layout (a source can be renamed, not moved out of
-  `sources/<type>/<slug>.<ext>`), and a file that becomes a concept must have a
-  valid, unused slug.
+- `loci mv` refuses a destination that breaks a path rule lint checks
+  (`sources.layout`, `kind.unknown`, `slug.format`, `journal.path`), with that rule's
+  code, and `loci new` a concept path whose slug fails (`slug.format`); a source
+  can be renamed but not moved out of `sources/` or given another extension, and a
+  file that becomes a concept must have an unused slug.
 - A source is one file, `sources/<type>/<slug>.<ext>`, with no folder or
   `source.yaml`, filed with `loci mv` from the inbox or downloaded into place;
   where it came from is not recorded. Lint
@@ -48,6 +50,24 @@ them under its version.
 - A source's extension is lowercase letters and digits with at least one letter;
   `loci mv` keeps a source's extension and refuses to move a source you have edited
   (`mv.source-changed`).
+- A permission-only change to a file is not reported as a change, and a stray file
+  under `sources/` is reported only by `sources.layout`.
+- The vault's files are the ones git sees: a tracked file is read even if
+  `.gitignore` matches it, and your global excludes file is respected.
+- `loci mv` refuses a destination that, or a folder on whose path, differs from an
+  existing name only in letter case (`mv.case-only`): it cannot complete one safely on
+  macOS, and elsewhere it would make twin folders. For a case-only rename of the
+  source it says to use `git mv -f`; otherwise, to use the existing spelling.
+- When git cannot list the vault (for example a corrupt index), every command,
+  `loci status` included, stops with `git` (exit 3) instead of running on an empty
+  file list.
+- loci does not follow symlinks: a vault that holds one (a file or a folder) is
+  refused by every command with `file.symlink`, naming each link, until it is
+  replaced with the file or folder itself.
+- `loci mv` refuses a directory move that would leave a moved file ignored by git.
+- `loci merge` no longer fails when it removes two adjacent prerequisites; `loci mv`
+  can rename a file or folder whose name is not NFC; `loci bench` matches slugs
+  case-insensitively.
 - A line in `plugins/learn/reviews.jsonl` that does not parse is `learn.log` with
   exit 1 (was exit 3).
 - Commands that take a note accept the same path forms everywhere (`./`, a trailing

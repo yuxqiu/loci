@@ -20,7 +20,7 @@ pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
 
     let mut human = format!("links from {path}:\n");
     let mut outgoing = vec![];
-    if let Some(note) = index.notes.get(&path) {
+    if let Some(note) = index.markdown.get(&path) {
         for link in &note.links {
             let line = line_col(&note.text, link.range.start).0;
             let to = index.link_target(note, link);

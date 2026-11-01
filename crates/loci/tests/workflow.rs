@@ -57,17 +57,24 @@ fn status_envelope() {
 fn status_reports_every_part_when_one_fails() {
     let v = TestVault::committed(BIN, "agent-workflow");
     std::fs::remove_file(v.root.join("STYLE.md")).unwrap();
-    std::fs::write(v.root.join(".git/index"), "corrupt").unwrap();
     let (code, env) = v.run(&["status"]);
     assert_eq!(code, 0, "{env:#}");
-    assert!(env["data"]["changes"].is_null());
-    assert!(env["data"]["inbox"]["uncommitted"].is_null());
-    assert!(env["data"]["inbox"]["files"].is_array());
+    assert!(env["data"]["changes"].is_object());
     assert!(env["data"]["digest"].is_string());
     assert!(env["data"]["rules"]["RULES.md"].is_string());
     assert!(env["data"]["rules"]["STYLE.md"].is_null());
-    assert_eq!(with_code(&env, "status.git").len(), 1, "{env:#}");
     assert!(has(&env, "status.rules", "STYLE.md"), "{env:#}");
+}
+
+/// When git cannot list the vault, no command runs on a guess (m0 §3).
+#[test]
+fn a_vault_git_cannot_list_is_refused() {
+    let v = TestVault::committed(BIN, "agent-workflow");
+    std::fs::write(v.root.join(".git/index"), "corrupt").unwrap();
+    for args in [&["status"][..], &["lint"], &["new", "concepts/a/fresh"]] {
+        let (code, env) = v.run(args);
+        assert_eq!((code, error_code(&env)), (3, "git"), "{args:?}: {env:#}");
+    }
 }
 
 #[test]

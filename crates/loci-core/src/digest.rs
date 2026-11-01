@@ -76,12 +76,12 @@ pub fn areas(index: &Index) -> Vec<Area> {
 
 pub fn area(index: &Index, name: &str) -> Area {
     let area_md = format!("concepts/{name}/AREA.md");
-    let parts = index.notes.get(&area_md).and_then(area_parts);
-    let heading_title = index.notes.get(&area_md).and_then(|n| n.h1()).map(str::to_string);
+    let parts = index.markdown.get(&area_md).and_then(area_parts);
+    let heading_title = index.markdown.get(&area_md).and_then(|n| n.h1()).map(str::to_string);
     let title = parts.as_ref().map(|(t, _)| t.clone()).or(heading_title).unwrap_or_else(|| name.to_string());
     let prefix = format!("concepts/{name}/");
     let mut groups: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
-    for note in index.notes.values().filter(|n| n.kind == Kind::Concept) {
+    for note in index.markdown.values().filter(|n| n.kind == Kind::Concept) {
         let Some(rest) = note.path.strip_prefix(&prefix) else { continue };
         let dir = rest.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
         let slug = vault::stem(&note.path).to_string();

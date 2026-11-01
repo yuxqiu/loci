@@ -26,58 +26,81 @@ fn mv_refused(v: &TestVault, from: &str, to: &str, code: &str) {
 #[test]
 fn mv_rename_rewrites_links() {
     let v = TestVault::committed(BIN, "mv-rename");
-    let before = v.read("concepts/a/flow.md");
-    let env = mv(&v, "concepts/a/flow.md", "concepts/a/flow-new.md");
+    let before = v.read("concepts/a/renamed.md");
+    let env = mv(&v, "concepts/a/renamed.md", "concepts/a/renamed-new.md");
     assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
     // The note itself is unchanged; links by bare slug stay bare; markdown links are
     // never edited.
-    assert_eq!(v.read("concepts/a/flow-new.md"), before);
+    assert_eq!(v.read("concepts/a/renamed-new.md"), before);
     let linker = v.read("views/linker.md");
-    assert!(linker.contains("- [[flow-new]] and [[flow-new|label]] and [[flow-new]]\n"), "{linker}");
-    assert!(linker.contains("[markdown](concepts/a/flow.md)"), "{linker}");
-    assert!(v.read("concepts/a/empty-flow.md").contains(r#"prereqs: ["[[flow-new]]", "[[absent]]"]"#));
-    assert!(!v.exists("concepts/a/flow.md"));
+    assert!(linker.contains("- [[renamed-new]] and [[renamed-new|label]] and [[renamed-new]]\n"), "{linker}");
+    assert!(linker.contains("[markdown](concepts/a/renamed.md)"), "{linker}");
+    assert!(v.read("concepts/a/prereq-holder.md").contains(r#"prereqs: ["[[renamed-new]]", "[[heading-target]]"]"#));
+    assert!(!v.exists("concepts/a/renamed.md"));
     assert_snapshot!(v.tree());
 }
 
 #[test]
 fn mv_rename_rewrites_path_links() {
     let v = TestVault::committed(BIN, "mv-rename");
-    mv(&v, "concepts/a/block.md", "concepts/a/block-new.md");
+    mv(&v, "concepts/a/block-target.md", "concepts/a/block-target-new.md");
     let linker = v.read("views/linker.md");
-    assert!(linker.contains("- [[concepts/a/block-new]] and [[concepts/a/block-new#^b]]\n"), "{linker}");
+    assert!(linker.contains("- [[concepts/a/block-target-new]] and [[concepts/a/block-target-new#^b]]\n"), "{linker}");
 }
 
 #[test]
 fn mv_rename_rewrites_fragments_and_prereqs() {
     let v = TestVault::committed(BIN, "mv-rename");
-    mv(&v, "concepts/a/absent.md", "concepts/a/absent-new.md");
-    assert!(v.read("views/linker.md").contains("- [[absent-new#Heading]]\n"));
-    assert!(v.read("concepts/a/empty-flow.md").contains(r#"prereqs: ["[[flow]]", "[[absent-new]]"]"#));
+    mv(&v, "concepts/a/heading-target.md", "concepts/a/heading-target-new.md");
+    assert!(v.read("views/linker.md").contains("- [[heading-target-new#Heading]]\n"));
+    assert!(v.read("concepts/a/prereq-holder.md").contains(r#"prereqs: ["[[renamed]]", "[[heading-target-new]]"]"#));
     // Renaming back is a rename like any other.
-    mv(&v, "concepts/a/absent-new.md", "concepts/a/absent.md");
-    assert!(v.read("concepts/a/empty-flow.md").contains(r#"prereqs: ["[[flow]]", "[[absent]]"]"#));
+    mv(&v, "concepts/a/heading-target-new.md", "concepts/a/heading-target.md");
+    assert!(v.read("concepts/a/prereq-holder.md").contains(r#"prereqs: ["[[renamed]]", "[[heading-target]]"]"#));
     // The vault still lints the same: no new link errors.
     let (_, env) = v.run(&["lint"]);
     assert_eq!(env["data"]["errors"], 1, "{}", diag_lines(&env)); // the markdown link
 }
 
 #[test]
+fn mv_fixes_a_non_nfc_name() {
+    let v = TestVault::committed(BIN, "mv-rename");
+    v.write("views/cafe\u{301}.md", "# Cafe\n");
+    v.commit_all("nfd");
+    let (_, env) = v.run(&["lint"]);
+    assert!(has(&env, "path.not-nfc", "views/cafe\u{301}.md"), "{}", diag_lines(&env));
+    // Named by its NFC form, as typed.
+    mv(&v, "views/caf\u{e9}.md", "views/cafe.md");
+    let (_, env) = v.run(&["lint"]);
+    assert!(with_code(&env, "path.not-nfc").is_empty(), "{}", diag_lines(&env));
+}
+
+#[test]
+fn a_folder_name_is_never_a_pattern() {
+    let v = TestVault::committed(BIN, "mv-rename");
+    v.write("views/q*/a.md", "# A\n");
+    v.write("views/qa/b.md", "# B\n");
+    v.commit_all("look-alike folders");
+    mv(&v, "views/q*", "views/z");
+    assert!(v.exists("views/z/a.md") && v.exists("views/qa/b.md"));
+}
+
+#[test]
 fn mv_refusals() {
     let v = TestVault::committed(BIN, "mv-rename");
-    mv_refused(&v, "concepts/a/flow.md", "concepts/a/block.md", "mv.exists");
-    mv_refused(&v, "concepts/a/flow.md", "concepts/a/sub/block.md", "mv.collision");
-    mv_refused(&v, "concepts/a/flow.md", "concepts/a/sub/Block.md", "mv.collision");
-    mv_refused(&v, "concepts/a/flow.md", "concepts/a/B1.md", "slug.format");
+    mv_refused(&v, "concepts/a/renamed.md", "concepts/a/block-target.md", "mv.exists");
+    mv_refused(&v, "concepts/a/renamed.md", "concepts/a/sub/block-target.md", "mv.collision");
+    mv_refused(&v, "concepts/a/renamed.md", "concepts/a/sub/Block-target.md", "slug.format");
+    mv_refused(&v, "concepts/a/renamed.md", "concepts/a/Upper.md", "slug.format");
     mv_refused(&v, "sources", "old/sources", "mv.source-file");
-    mv_refused(&v, "concepts/a/flow.md", "views/flow.md", "mv.no-area");
+    mv_refused(&v, "concepts/a/renamed.md", "views/renamed.md", "mv.no-area");
     mv_refused(&v, "concepts/a/nope.md", "concepts/a/x.md", "mv.from");
-    mv_refused(&v, "concepts/a/flow.md", "../out.md", "path.outside");
+    mv_refused(&v, "concepts/a/renamed.md", "../out.md", "path.outside");
     mv_refused(&v, "plugins/learn/state.json", "views/state.json", "mv.from");
     mv_refused(&v, "views/linker.md", "plugins/learn/linker.md", "mv.to");
     mv_refused(&v, "sources/papers/p1.pdf", "sources/papers/p1/x.pdf", "mv.source-file");
     mv_refused(&v, "sources/papers/p1.pdf", "views/p1.pdf", "mv.source-file");
-    mv_refused(&v, "views/linker.md", "sources/papers/Linker.md", "mv.source-file");
+    mv_refused(&v, "views/linker.md", "sources/papers/Linker.md", "sources.layout");
 }
 
 #[test]
@@ -96,7 +119,7 @@ fn mv_source_renames_citations() {
     let v = TestVault::committed(BIN, "mv-rename");
     mv(&v, "sources/papers/p1.pdf", "sources/papers/p2.pdf");
     assert!(v.exists("sources/papers/p2.pdf") && !v.exists("sources/papers/p1.pdf"));
-    assert!(v.read("concepts/a/flow.md").contains("[[sources/papers/p2.pdf#p2]]"));
+    assert!(v.read("concepts/a/renamed.md").contains("[[sources/papers/p2.pdf#p2]]"));
     assert!(v.read("views/linker.md").contains("![[sources/papers/p2.pdf]]"));
     let (_, env) = v.run(&["lint"]);
     assert!(with_code(&env, "link.dangling").is_empty(), "{}", diag_lines(&env));
@@ -117,7 +140,7 @@ fn mv_area_directory_renames_nothing_but_paths() {
     let v = TestVault::committed(BIN, "mv-rename");
     mv(&v, "concepts/a", "concepts/b");
     let linker = v.read("views/linker.md");
-    assert!(linker.contains("[[concepts/b/block]]") && linker.contains("- [[flow]] and"), "{linker}");
+    assert!(linker.contains("[[concepts/b/block-target]]") && linker.contains("- [[renamed]] and"), "{linker}");
     let (_, env) = v.run(&["lint"]);
     assert_eq!(env["data"]["errors"], 1, "{}", diag_lines(&env));
 }
@@ -182,7 +205,7 @@ fn cjk_mv_edits_frontmatter_at_the_right_offset() {
     mv(&v, "views/zh.md", "views/中文.md");
     assert_eq!(
         v.read("views/linker.md"),
-        "# Linker\n\n[[views/中文#复杂度分析]] [[views/中文#^要点一]] [[二分查找]] [[views/zh#不存在]]\n"
+        "# Linker\n\n[[views/中文#复杂度分析]] [[views/中文#^要点一]] [[二分查找]] [[views/中文#不存在]]\n"
     );
 }
 
@@ -242,6 +265,11 @@ fn block_ids_any_managed_note_and_refusals() {
     assert_eq!((code, error_code(&env)), (1, "block-ids.kind"));
     let (code, env) = block_ids(&v, "concepts/a/cards.md", "Nope");
     assert_eq!((code, error_code(&env)), (1, "block-ids.no-section"));
+    // Like every note argument, `.md` is optional and a concept slug works.
+    for arg in ["concepts/a/cards", "cards"] {
+        let (code, env) = block_ids(&v, arg, "Nope");
+        assert_eq!((code, error_code(&env)), (1, "block-ids.no-section"), "{arg}: {env:#}");
+    }
     // `### Deeper heading` is not an H2.
     let (code, env) = block_ids(&v, "concepts/a/cards.md", "Deeper heading");
     assert_eq!((code, error_code(&env)), (1, "block-ids.no-section"));
@@ -264,8 +292,8 @@ fn an_inbox_file_is_filed_as_a_source_with_mv() {
     // The source layout holds: a type and a slug, both slugs, and an extension.
     v.write("inbox/drafts/again.md", "# Again\n");
     v.commit_all("more");
-    for to in ["sources/Videos/again.md", "sources/docs/Bad_Slug.md", "sources/docs/again", "sources/again.md"] {
-        mv_refused(&v, "inbox/drafts/again.md", to, "mv.source-file");
+    for to in ["sources/Clips/again.md", "sources/docs/Bad_Slug.md", "sources/docs/again", "sources/again.md"] {
+        mv_refused(&v, "inbox/drafts/again.md", to, "sources.layout");
     }
 }
 

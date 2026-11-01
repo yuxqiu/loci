@@ -32,8 +32,9 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
     let target = vault::path_arg(target)?;
-    let path = index.note(&target).map_err(|e| e.refusal("export.unknown", &target))?.path.clone();
-    if !matches!(vault::kind_of(&path), Some(Kind::View | Kind::Concept)) {
+    let note = index.note(&target).map_err(|e| e.refusal("export.unknown", &target))?;
+    let path = note.path.clone();
+    if !matches!(note.kind, Kind::View | Kind::Concept) {
         return Err(Refusal::refused("export.kind", format!("`{path}` is not a view or a concept")));
     }
     let e = export::export(&index, &path, depth);

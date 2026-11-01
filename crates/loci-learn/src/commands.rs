@@ -27,7 +27,7 @@ pub fn skills() -> Result<Report, Refusal> {
 pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
     let index = Index::open(vault);
     let (all, issues) = cards::all(&index);
-    let text_of = |path: &str| index.notes.get(path).map(|n| n.text.as_str()).expect("cards come from parsed notes");
+    let text_of = |path: &str| index.markdown.get(path).map(|n| n.text.as_str()).expect("cards come from parsed notes");
     let mut diags = vec![];
     for i in &issues {
         diags.push(
