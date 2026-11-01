@@ -1,0 +1,75 @@
+{
+  "schema": 1,
+  "loci": "0.1.0",
+  "command": "bench",
+  "ok": true,
+  "data": {
+    "cases": 15,
+    "median_s": 6.011049158,
+    "pass_rate": 1.0,
+    "results": [
+      {
+        "pass": true,
+        "q": "Which note explains exploring a graph level by level from a starting vertex? Answer with the note as [[slug]]."
+      },
+      {
+        "pass": true,
+        "q": "Which note covers sorting by splitting the input in half and merging the sorted halves? Answer with the note as [[slug]]."
+      },
+      {
+        "pass": true,
+        "q": "Which note describes the structure used for autocomplete over word prefixes? Answer with the note as [[slug]]."
+      },
+      {
+        "pass": true,
+        "q": "Which note covers updating a belief after seeing evidence? Answer with the note as [[slug]]."
+      },
+      {
+        "pass": true,
+        "q": "Which note covers the LIFO collection? Answer with the note as [[slug]]."
+      },
+      {
+        "pass": true,
+        "q": "Which note explains why a passing siren's pitch drops? Answer with the note as [[slug]]."
+      },
+      {
+        "pass": true,
+        "q": "Which note covers memoization? Answer with the note as [[slug]]."
+      },
+      {
+        "pass": true,
+        "q": "Which note covers the shortest-path method that copes with edges of negative cost? Answer with the note as [[slug]]."
+      },
+      {
+        "pass": true,
+        "q": "Name one note a reader must know before Dijkstra's algorithm. Answer with the note as [[slug]]."
+      },
+      {
+        "pass": true,
+        "q": "Which algorithm note relies on the disjoint-set structure? Answer with the note as [[slug]]."
+      },
+      {
+        "pass": true,
+        "q": "Name one physics note that builds on the derivative. Answer with the note as [[slug]]."
+      },
+      {
+        "pass": true,
+        "q": "Which data-structure note does breadth-first search rely on, besides the graph itself? Answer with the note as [[slug]]."
+      },
+      {
+        "pass": true,
+        "q": "Where should a new concept note on red-black trees be filed? Reply with the folder path (for example concepts/x/y), without a trailing slash."
+      },
+      {
+        "pass": true,
+        "q": "Where should a new concept note on Ohm's law be filed? Reply with the folder path (for example concepts/x/y), without a trailing slash."
+      },
+      {
+        "pass": true,
+        "q": "Where should a new concept note on the determinant of a matrix be filed? Reply with the folder path (for example concepts/x/y), without a trailing slash."
+      }
+    ]
+  },
+  "diagnostics": [],
+  "error": null
+}

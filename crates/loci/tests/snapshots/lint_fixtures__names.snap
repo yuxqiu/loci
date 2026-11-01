@@ -13,7 +13,7 @@ expression: v.redact(&env)
   "diagnostics": [
     {
       "code": "link.dangling",
-      "hint": "link non-concepts by path",
+      "hint": "no concept is named `plan`; create it with `loci new`, or link a non-concept by path",
       "location": {
         "path": "concepts/algo/dfs.md",
         "span": {
@@ -28,7 +28,7 @@ expression: v.redact(&env)
     },
     {
       "code": "link.dangling",
-      "hint": "link non-concepts by path",
+      "hint": "no concept is named `25-03-14`; create it with `loci new`, or link a non-concept by path",
       "location": {
         "path": "concepts/algo/dfs.md",
         "span": {
@@ -43,7 +43,7 @@ expression: v.redact(&env)
     },
     {
       "code": "link.dangling",
-      "hint": "link non-concepts by path",
+      "hint": "no concept is named `diagram.png`; create it with `loci new`, or link a non-concept by path",
       "location": {
         "path": "concepts/algo/dfs.md",
         "span": {
@@ -88,7 +88,7 @@ expression: v.redact(&env)
     },
     {
       "code": "link.dangling",
-      "hint": "link non-concepts by path",
+      "hint": "no concept is named `breadth-first`; create it with `loci new`, or link a non-concept by path",
       "location": {
         "path": "concepts/algo/dfs.md",
         "span": {

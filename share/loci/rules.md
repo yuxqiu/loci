@@ -28,23 +28,34 @@ This vault is a loci knowledge base. These rules apply to every agent working in
 1. The user commits before asking you for anything. If `inbox/` holds uncommitted
    files, stop and ask the user to commit them.
 2. Edit the working tree directly. Never commit. Run `git add -N <path>` on every
-   file you create, so `git diff` shows it.
+   file you create, so `git diff` shows it (`loci new` does this for you).
 3. Check your work with `loci lint` as you go. Finish every task by running
    `loci done` and fixing what it reports: it lints, then records your result as a
    local git ref so the user's later corrections can be found (the `improve`
    skill). Never run `loci done` for work the user did.
 4. The user reviews with `git diff`, then commits or discards (`git reset --hard`).
 5. The user edits notes by hand at any time; there is nothing to sync. Change text
-   the user wrote only when the request covers it.
+   the user wrote only when the request covers it (adding a link to a new concept
+   is covered: see "Adding a concept").
 
 ## Writing concept notes
 
-- Create notes with `loci new concepts/<area>/<slug>.md`; never invent ids.
+- **Adding a concept**, in order:
+  1. Search for it under every name it might go by (see "Finding things"). If it
+     exists, revise that note instead; if two notes cover it, propose a merge to
+     the user (never merge on your own).
+  2. File it: the paths of the related notes the search found suggest the area
+     and sub-folder; confirm against the scope notes (`concepts/*/AREA.md`: what
+     each area holds and which look-alike topics go to a neighbour) and the area's
+     folders (`ls concepts/<area>/`). Create a sub-folder when several notes in
+     the area share a topic; otherwise put the note at the area's root.
+  3. Create it with `loci new concepts/<area>/.../<slug>.md` (never invent ids),
+     and link the first mention of every concept that has a note.
+  4. Link it from the notes that mention it: `loci links <new note>` lists them
+     under "unlinked mentions". Adding a link to an existing note is part of
+     adding a concept, even in text the user wrote.
 - Frontmatter holds only `id` and `prereqs`. Other names for a concept go in its H1
   or text.
-- **Filing a concept.** Choose the area by reading the scope notes
-  (`concepts/*/AREA.md`): what each area holds and which look-alike topics go to a
-  neighbour. Then choose the sub-folder by listing `concepts/<area>/`.
 - Cite evidence with a link next to the claim it supports:
   `[[sources/<type>/<slug>.pdf#p<N>]]`, `[[sources/<type>/<slug>#<heading>]]` or a
   journal entry. Never cite
@@ -53,11 +64,7 @@ This vault is a loci knowledge base. These rules apply to every agent working in
 - Link concepts by bare slug (`[[slug]]`), everything else by vault path
   (`[[views/x]]`, `![[concepts/a/attachments/x.png]]`). Never use markdown links for
   vault files.
-- Before writing a concept, search for it and its neighbours (`loci find <term>`):
-  link the related concepts, and if it already exists, revise that note instead.
-- In a note, link the first mention of every concept that has a note.
-- After creating a concept, find the notes that mention it (`loci find <term>`) and
-  link it from them, so the new note is not reachable only from itself.
+- In any note you write, link the first mention of every concept that has a note.
 - Move or rename with `loci mv`, which rewrites links.
 - **Filing a source.** A source is one file `sources/<type>/<slug>.<ext>`. Use a type
   the vault already has (`ls sources/`) when one fits, such as `papers` (slug: the
@@ -65,8 +72,6 @@ This vault is a loci knowledge base. These rules apply to every agent working in
   slugs. Move an inbox file there with `loci mv`; download a URL straight there (for
   example `curl -L -o sources/papers/<key>.pdf <url>`). Never edit a source after
   filing it.
-- Prefer revising an existing concept to creating a near-duplicate. Propose
-  merges to the user; never merge on your own.
 - Follow `STYLE.md`. Record reusable lessons in the `## Lessons` section of
   `RULES.md`.
 
@@ -76,7 +81,7 @@ This vault is a loci knowledge base. These rules apply to every agent working in
   Lessons about writing go in `STYLE.md` instead.
 - Before adding a lesson, update or delete an existing one it overlaps or
   contradicts. Never only append.
-- Prefer a check to a lesson: if a correction can become a `bench/retrieval.jsonl`
+- Prefer a check to a lesson: if a correction can become a `bench/cases.jsonl`
   case or a `loci.toml` budget, propose that instead.
 - When asked to review the lessons, propose deleting those that are stale,
   contradict each other, or are now enforced by `loci lint`.
@@ -94,8 +99,17 @@ This vault is a loci knowledge base. These rules apply to every agent working in
 
 - `loci status` reports what has changed: uncommitted changes, agent work to
   review, and the inbox. Run it before each task.
-- `loci find <query>` searches the notes (concepts, areas, views, journal entries);
-  add `--kind source`, `inbox`, `rules` or `unknown` to search those instead. Then
-  read the files you need.
+- Search with `rg` (ripgrep). The formed notes are in `concepts/`, `views/` and
+  `journal/`; add `sources/` or `inbox/` only when you mean them.
+  - Titles: `rg -i '^# .*heap' concepts/`.
+  - Words, with any separator: `rg -il 'breadth.first' concepts/ views/ journal/`
+    (`-l` lists files; drop it to see the lines).
+  - Every name at once: `rg -il 'priority queue|heap' concepts/`.
+  - Control output size: `-l` for files, `-c` for counts, `-m 1` for the first
+    match per file. If a search may hit many notes, list or count first, then read.
+  - No output means no match for that spelling in those folders; try other names.
+- After a hit, `loci links <note>` shows its neighbours: the notes it links to, the
+  notes that link to it, and the notes that mention it without linking it. Write
+  `[[slug]]` only for a note you have seen.
 - `loci skill show` lists the procedures for larger tasks; read one before starting
   such a task.

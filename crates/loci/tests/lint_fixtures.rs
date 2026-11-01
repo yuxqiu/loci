@@ -37,8 +37,11 @@ fn names() {
     // `[[slug]]` resolves to a concept (case-insensitively); paths resolve.
     let dangling = covered_by(&v, &env, "link.dangling", dfs);
     assert_eq!(dangling, ["plan", "25-03-14", "diagram.png", "breadth-first"]);
-    let hints: Vec<_> = with_code(&env, "link.dangling").iter().map(|d| d["hint"].clone()).collect();
-    assert_eq!(hints, ["link non-concepts by path"; 4]);
+    // Nothing close to suggest: create the concept, or link a non-concept by path.
+    for d in with_code(&env, "link.dangling") {
+        let hint = d["hint"].as_str().unwrap();
+        assert!(hint.starts_with("no concept is named") && hint.ends_with("or link a non-concept by path"), "{hint}");
+    }
     assert_eq!(covered_by(&v, &env, "link.path-form", dfs), ["/RULES", "../x"]);
     // A view sharing a concept's stem is not a slug duplicate; two concepts are.
     let dups = with_code(&env, "slug.duplicate");
@@ -222,15 +225,6 @@ fn code_hash() {
     assert!(msgs[0].contains("not a heading") && msgs[1].contains("`tag`") && msgs[2].contains("notaheading"));
 }
 
-#[test]
-fn code_hash_find_body_excludes_nothing_but_frontmatter() {
-    // Hashtags are text: `find` finds them as words.
-    let v = TestVault::committed(BIN, "code-hash");
-    let (_, env) = v.run(&["find", "another"]);
-    let hits = env["data"]["hits"].as_array().unwrap();
-    assert_eq!(hits[0]["path"], "concepts/a/code.md");
-}
-
 // ---------------------------------------------------------------- cjk
 
 #[test]
@@ -250,47 +244,6 @@ fn cjk_lint() {
     let n: usize = regex::Regex::new(r"is (\d+) characters").unwrap().captures(msg).unwrap()[1].parse().unwrap();
     assert!((19..=20).contains(&n), "{msg}");
     assert!(msg.ends_with("(budget 18)"), "{msg}");
-}
-
-fn find(v: &TestVault, q: &str) -> serde_json::Value {
-    let (code, env) = v.run(&["find", q]);
-    assert_eq!(code, 0, "{env:#}");
-    assert_eq!(env["command"], "find");
-    env
-}
-
-fn hit_paths(env: &serde_json::Value) -> Vec<String> {
-    env["data"]["hits"].as_array().unwrap().iter().map(|h| h["path"].as_str().unwrap().to_string()).collect()
-}
-
-#[test]
-fn cjk_find_hits_words_inside_longer_runs() {
-    let v = TestVault::committed(BIN, "cjk");
-    assert!(hit_paths(&find(&v, "数组")).contains(&"views/zh.md".to_string()));
-    assert_eq!(hit_paths(&find(&v, "アルゴリズム")), ["views/ja.md"]);
-    // A kanji-only query is split like the same word inside Japanese text (m0 §9.3).
-    assert!(hit_paths(&find(&v, "勉強")).contains(&"views/ja.md".to_string()));
-    assert_eq!(hit_paths(&find(&v, "공부")), ["views/ko.md"]);
-    let env = find(&v, "アルゴリズム");
-    let hit = &env["data"]["hits"][0];
-    assert_eq!(hit["line"], 3);
-    assert_eq!(hit["title"], "日本語");
-    assert_eq!(hit["kind"], "view");
-    assert_eq!(hit["snippet"], "東京大学でアルゴリズムを勉強しています。");
-}
-
-#[test]
-fn find_without_diagnostics_filters_and_limits() {
-    let v = TestVault::committed(BIN, "names");
-    let env = find(&v, "bfs");
-    assert!(diags(&env).is_empty(), "{}", diag_lines(&env));
-    let hits = hit_paths(&env);
-    assert_eq!(hits[0], "concepts/algo/bfs.md");
-    // `--kind` filters, `-k` limits.
-    let (_, env) = v.run(&["find", "bfs", "--kind", "view"]);
-    assert!(hit_paths(&env).iter().all(|p| p.starts_with("views/")));
-    let (_, env) = v.run(&["find", "bfs", "-k", "1"]);
-    assert_eq!(hit_paths(&env).len(), 1);
 }
 
 // ---------------------------------------------------------------- kinds
@@ -319,8 +272,6 @@ fn kinds() {
         assert!(!p.starts_with("plugins/") && !p.starts_with("secret/") && !p.starts_with(".loci/"), "{d}");
     }
     assert_snapshot!(diag_lines(&env));
-    // Not indexed.
-    assert_eq!(hit_paths(&find(&v, "zanzibar")), ["views/v.md"]);
 }
 
 // ---------------------------------------------------------------- table-pipe
@@ -491,7 +442,7 @@ fn a_vault_with_a_symlink_is_refused() {
     // A link with a non-UTF-8 name is refused too.
     let odd = v.root.join(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"views/odd\xff"));
     std::os::unix::fs::symlink(v.tmp.path().join("secret.md"), &odd).unwrap();
-    for args in [&["lint"][..], &["status"], &["find", "secret-token-xyz"], &["mv", "views/linker.md", "views/x.md"]] {
+    for args in [&["lint"][..], &["status"], &["mv", "views/linker.md", "views/x.md"]] {
         let (code, env) = v.run(args);
         assert_eq!((code, error_code(&env)), (1, "file.symlink"), "{args:?}: {env:#}");
         let message = env["error"]["message"].as_str().unwrap();
@@ -594,10 +545,8 @@ fn an_unreadable_file_refuses_the_vault() {
     for p in ["views/locked.md", "views/closed", "inbox/shut", "sources/papers/p.pdf"] {
         mode(p, 0o000);
     }
-    let runs: Vec<_> = [&["lint"][..], &["status"], &["find", "inner"], &["new", "concepts/a/fresh"]]
-        .iter()
-        .map(|args| v.run(args))
-        .collect();
+    let runs: Vec<_> =
+        [&["lint"][..], &["status"], &["new", "concepts/a/fresh"]].iter().map(|args| v.run(args)).collect();
     for p in ["views/closed", "inbox/shut"] {
         mode(p, 0o755);
     }

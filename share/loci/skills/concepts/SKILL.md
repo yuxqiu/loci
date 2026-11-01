@@ -6,8 +6,8 @@ description: Write, revise, split, merge and organise concept notes and areas. U
 # Concepts
 
 If you have not read them this session, read the framework rules (`loci rules`),
-`RULES.md` and `STYLE.md` first. The framework rules ("Writing concept notes") say how to
-search before writing, file a concept and link it.
+`RULES.md` and `STYLE.md` first. The framework rules ("Adding a concept") say how to search
+before writing, file a concept and link it.
 
 ## A concept note
 
@@ -25,9 +25,11 @@ claim it supports ([[sources/papers/<key>.pdf#p3]]).
 ## Open questions
 ```
 
-- `prereqs` lists direct prerequisites only, each quoted.
+- `prereqs` lists direct prerequisites only, each quoted: a concept the reader
+  must know to follow this note's definition, not one that is merely related or
+  compared with it (link that one in the text).
 - Other names (an abbreviation, a spelling, a translation) go in the title or the
-  text, where `loci find` finds them. There is no alias field.
+  text, where a search (`rg`) finds them. There is no alias field.
 - One note per concept. An idea gets its own note once it has its own definition
   and other notes need to link to it on its own (`loci links <note>` lists what
   links to a note); otherwise it is a heading in its parent.
@@ -63,5 +65,5 @@ links are rewritten for you.
 
 A curated view is a file in `views/`: an ordered list of concept links with
 connecting text (a reading path, a project overview, a learning plan). Build
-one from `loci find`, `loci closure` (prerequisites in order) and the folders under
-`concepts/`.
+one from searches (`rg`), `loci closure` (prerequisites in order) and the folders
+under `concepts/`.

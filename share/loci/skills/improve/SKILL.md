@@ -34,8 +34,7 @@ month of commits):
   that keeps being restated or broken is a gap.
 - **Repeated work.** Steps done by hand again and again: the same searches, edits
   or checks that a command, lint rule or view could do.
-- **Health.** `loci lint` warnings that are always present, and `loci bench` results
-  if `bench/retrieval.jsonl` has cases.
+- **Health.** `loci lint` warnings that are always present.
 
 List each finding with its evidence (commits, lines). Drop findings with a single
 occurrence unless the user points to them.
@@ -46,7 +45,7 @@ For each finding, propose the strongest fix that fits, at the level that owns it
 
 | Level | Fixes |
 |---|---|
-| the user's vault | a `bench/retrieval.jsonl` case, a `loci.toml` budget, a `RULES.md` lesson or a `STYLE.md` line (following the framework rules on lessons), a view, an area change |
+| the user's vault | a `bench/cases.jsonl` case, a `loci.toml` budget, a `RULES.md` lesson or a `STYLE.md` line (following the framework rules on lessons), a view, an area change |
 | the user's workflow | a new habit to try, for example "drop rough notes in `inbox/drafts/` instead of editing concepts directly", with what it saves |
 | loci itself | an issue draft for the loci repository (below) |
 
@@ -56,9 +55,12 @@ that cannot be skipped beats an instruction that can.
 ## 3. Test before adopting, where cheap
 
 - **A rule, lesson or style change:** if the vault has benchmark cases and the user
-  agrees to the cost, run `loci bench --agent '<agent command>' --json` with and
+  agrees to the cost, run `loci bench '<agent command>' --json` with and
   without the change and compare pass rates. Do not tune the change on the same
-  cases you report.
+  cases you report. A case is one JSON line, a question or task and a shell check
+  that exits 0 when the agent got it right, on its reply or on the vault it left:
+  `{"q": "Which note covers LIFO collections? Answer with [[slug]].", "check":
+  "grep -q '\\[\\[stack' \"$LOCI_BENCH_OUTPUT\""}`.
 - **A workflow or structure change:** try it on one real example and show the diff.
 - **Untestable:** say so; it is adopted on the user's judgement alone.
 

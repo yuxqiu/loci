@@ -41,6 +41,12 @@ impl Kind {
         }
     }
 
+    /// The formed notes, written to be read (concepts, area files, views, journal
+    /// entries), as opposed to sources, inbox drafts and rule files.
+    pub fn is_formed(self) -> bool {
+        matches!(self, Kind::Concept | Kind::Area | Kind::View | Kind::Journal)
+    }
+
     /// The managed kinds (m0 §3): C, A, V, J, R.
     pub fn is_managed(self) -> bool {
         matches!(self, Kind::Concept | Kind::Area | Kind::View | Kind::Journal | Kind::Rules)
@@ -435,7 +441,7 @@ mod tests {
         assert_eq!(kind_of("inbox/drafts/a.md"), Some(Kind::Inbox));
         assert_eq!(kind_of("concepts/algo/attachments/x.png"), Some(Kind::Asset));
         assert_eq!(kind_of("plugins/learn/reviews.jsonl"), None);
-        assert_eq!(kind_of("bench/retrieval.jsonl"), Some(Kind::Asset));
+        assert_eq!(kind_of("bench/cases.jsonl"), Some(Kind::Asset));
     }
 
     #[test]

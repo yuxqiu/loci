@@ -18,11 +18,10 @@ For each draft:
 
 1. Read it fully. List the concepts it explains, the results it reports (dated,
    may go stale) and the open questions it raises.
-2. For each concept, find whether it already exists (`loci find` with the names
-   and phrasings it might go by). Merge new material into the existing note; create a note with
-   `loci new` only when the idea has its own definition and other notes will
-   need to link to it on its own. Otherwise make it a heading in its parent
-   concept.
+2. Add each concept as the framework rules say ("Adding a concept"): new
+   material for an existing note goes into that note. Give an idea its own note
+   only when it has its own definition and other notes will need to link to it on
+   its own; otherwise make it a heading in its parent concept.
 3. Write in the user's style (`STYLE.md`). Keep every formula, image and code block
    the draft contains, moving images into the concept area's `attachments/` and
    embedding them by vault path.

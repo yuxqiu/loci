@@ -203,6 +203,77 @@ impl Index {
         out
     }
 
+    /// The existing concept slug most like `slug`, if one is close (Jaro-Winkler
+    /// similarity of at least 0.85): a likely typo or a shortened name.
+    pub fn closest_slug(&self, slug: &str) -> Option<&str> {
+        self.slugs
+            .iter()
+            .filter(|(_, paths)| !paths.is_empty())
+            .map(|(s, _)| (strsim::jaro_winkler(slug, s), s.as_str()))
+            .filter(|(score, _)| *score >= 0.85)
+            .max_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(a.1)))
+            .map(|(_, s)| s)
+    }
+
+    /// The concept paths that have slug `slug` (case-insensitive).
+    pub fn slug_paths(&self, slug: &str) -> &[String] {
+        self.slugs.get(&slug.to_lowercase()).map_or(&[], Vec::as_slice)
+    }
+
+    /// The formed notes ([`Kind::is_formed`]) that mention `target` but do not link
+    /// it, with the byte offset of the first mention, in note path order. A mention is
+    /// the title, the title without its parenthesised parts, each parenthesised name
+    /// (`# Breadth-first search (BFS)`), or the slug read as words. ASCII case is
+    /// folded and `-` matches a space; a Latin match must stand as whole words;
+    /// mentions inside links are not counted.
+    pub fn unlinked_mentions(&self, target: &Note) -> Vec<(&Note, usize)> {
+        // Byte for byte, so offsets into the folded text are offsets into the note.
+        let fold = |s: &str| s.to_ascii_lowercase().replace('-', " ");
+        let title = target.title();
+        let mut names = vec![title.to_string(), vault::stem(&target.path).to_string()];
+        let (mut bare, mut rest) = (String::new(), title);
+        while let Some((before, after)) = rest.split_once('(') {
+            bare.push_str(before);
+            let Some((inner, tail)) = after.split_once(')') else { break };
+            names.push(inner.to_string());
+            rest = tail;
+        }
+        bare.push_str(rest);
+        names.push(bare);
+        let mut names: Vec<String> = names
+            .iter()
+            .map(|n| fold(n).split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|n| !n.is_empty())
+            .collect();
+        names.sort();
+        names.dedup();
+        let linking: BTreeSet<&str> = self.incoming(&target.path).iter().map(|(n, _)| n.path.as_str()).collect();
+        let edge = |c: Option<char>| !c.is_some_and(|c| c.is_ascii_alphanumeric());
+        let mut out = vec![];
+        for note in self.notes() {
+            if !note.kind.is_formed() || note.path == target.path || linking.contains(note.path.as_str()) {
+                continue;
+            }
+            let text = fold(&note.text);
+            let start = note.body_start();
+            let in_link = |at: usize| note.links.iter().any(|l| l.range.contains(&at));
+            let first = names
+                .iter()
+                .filter_map(|name| {
+                    text[start..].match_indices(name.as_str()).map(|(i, _)| start + i).find(|&at| {
+                        edge(text[..at].chars().next_back())
+                            && edge(text[at + name.len()..].chars().next())
+                            && !in_link(at)
+                    })
+                })
+                .min();
+            if let Some(at) = first {
+                out.push((note, at));
+            }
+        }
+        out
+    }
+
     /// Whether `slug` is already a concept's slug, other than paths `moving` accepts,
     /// which are being renamed (§9.5, §9.7).
     pub fn name_taken(&self, slug: &str, moving: impl Fn(&str) -> bool) -> bool {
@@ -246,7 +317,13 @@ impl Index {
                     return Err(LinkError::Dangling { hint: Some(hint) });
                 }
                 Some([]) | None => {
-                    return Err(LinkError::Dangling { hint: Some("link non-concepts by path".to_string()) });
+                    let hint = match self.closest_slug(&key) {
+                        Some(s) => format!("no concept is named `{key}`; did you mean [[{s}]]?"),
+                        None => format!(
+                            "no concept is named `{key}`; create it with `loci new`, or link a non-concept by path"
+                        ),
+                    };
+                    return Err(LinkError::Dangling { hint: Some(hint) });
                 }
             }
         } else {
@@ -284,11 +361,58 @@ pub fn heading_key(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::envelope::line_col;
 
     fn first_link(i: &Index, path: &str) -> (Note, Link) {
         let n = i.markdown[path].clone();
         let l = n.links[0].clone();
         (n, l)
+    }
+
+    #[test]
+    fn a_dangling_slug_suggests_the_closest_concept() {
+        let i = from_texts(&[
+            ("concepts/a/breadth-first-search.md", "# BFS\n"),
+            ("concepts/a/dijkstras-algorithm.md", "# D\n"),
+            ("views/v.md", "# V\n\n[[bread-first-search]] [[dijkstra-algo]] [[zebra]]\n"),
+        ]);
+        let n = i.markdown["views/v.md"].clone();
+        let hint = |k: usize| match i.resolve(&n, &n.links[k]) {
+            Err(LinkError::Dangling { hint: Some(h) }) => h,
+            other => panic!("{other:?}"),
+        };
+        assert!(hint(0).ends_with("did you mean [[breadth-first-search]]?"), "{}", hint(0));
+        assert!(hint(1).ends_with("did you mean [[dijkstras-algorithm]]?"), "{}", hint(1));
+        assert!(hint(2).contains("create it with `loci new`"), "{}", hint(2));
+    }
+
+    #[test]
+    fn unlinked_mentions_are_whole_names_outside_links() {
+        let i = from_texts(&[
+            ("concepts/a/breadth-first-search.md", "# Breadth-first search (BFS)\n"),
+            ("concepts/a/graph.md", "# Graph\n\nA paragraph. Breadth first search walks it.\n"),
+            ("concepts/a/queue.md", "# Queue\n\nUsed by [[breadth-first-search]]; BFS again.\n"),
+            ("concepts/a/heap.md", "# Heap\n\nNot [[graph|bfs here]] but BFS-like order.\n"),
+            ("concepts/a/tree.md", "# Tree\n\nsubfs and bfsx are other words.\n"),
+            ("concepts/b/二分.md", "# 二分查找\n"),
+            ("views/v.md", "# V\n\n学习二分查找。\n"),
+            ("inbox/drafts/d.md", "# D\n\nBFS in a draft.\n"),
+            ("sources/docs/s.md", "# S\n\nBFS in a source.\n"),
+        ]);
+        let found = |p: &str| -> Vec<(String, usize)> {
+            let n = i.parsed(p).unwrap();
+            i.unlinked_mentions(n).into_iter().map(|(n, at)| (n.path.clone(), line_col(&n.text, at).0)).collect()
+        };
+        // Hyphen or space, the alias, case; not inside a link, not in a note that links
+        // it, not inside another word, not in drafts or sources.
+        assert_eq!(
+            found("concepts/a/breadth-first-search.md"),
+            [("concepts/a/graph.md".to_string(), 3), ("concepts/a/heap.md".to_string(), 3)]
+        );
+        // A CJK title matches inside running text.
+        assert_eq!(found("concepts/b/二分.md"), [("views/v.md".to_string(), 3)]);
+        // "graph" inside "paragraph" is no mention.
+        assert!(found("concepts/a/graph.md").is_empty());
     }
 
     #[test]

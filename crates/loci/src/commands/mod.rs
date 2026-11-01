@@ -7,7 +7,6 @@ pub mod closure;
 pub mod dispatch;
 pub mod done;
 pub mod export;
-pub mod find;
 pub mod init;
 pub mod links;
 pub mod lint;

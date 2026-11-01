@@ -1,53 +1,28 @@
 //! `loci bench` (m1-m4 §3).
 
 use std::io::{Read, Write};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use loci_core::envelope::{Refusal, Report};
-use loci_core::index::Index;
-use loci_core::search;
-use loci_core::vault::{self, Kind};
-use regex::Regex;
 use serde::Deserialize;
 use serde_json::json;
 
 use super::Ctx;
 
-pub const FILE: &str = "bench/retrieval.jsonl";
+/// The default cases file, relative to the vault root.
+pub const FILE: &str = "bench/cases.jsonl";
 const AGENT_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// One case: a question or task for the agent, and a shell command that passes (exit
+/// 0) when the agent did it. The check runs in the agent's copy of the vault, with
+/// `LOCI_BENCH_OUTPUT` naming a file that holds the agent's reply.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Case {
     q: String,
-    expect: Vec<String>,
-}
-
-/// True if a hit or a mention names one of the expected items (a vault path, or a
-/// concept slug).
-fn matches(expect: &[String], path: &str) -> bool {
-    let stem = vault::stem(path);
-    let is_concept = vault::kind_of(path) == Some(Kind::Concept);
-    let without_md = path.strip_suffix(".md").unwrap_or(path);
-    // Slugs compare case-insensitively (m0 §6.2), as in `mentions`.
-    let slug_matches = |e: &str| is_concept && e.to_lowercase() == stem.to_lowercase();
-    expect.iter().any(|e| e.strip_suffix(".md").unwrap_or(e) == without_md || slug_matches(e))
-}
-
-/// True if the agent's output mentions an expected item: a vault path (an entry with a
-/// `/`, `.md` optional, not part of a longer path), or a concept as `[[slug]]`
-/// (also `[[slug|…]]` and `[[slug#…]]`).
-fn mentions(expect: &[String], output: &str) -> bool {
-    expect.iter().any(|e| {
-        let pattern = if e.contains('/') {
-            let path = regex::escape(e.strip_suffix(".md").unwrap_or(e));
-            format!(r"(?:^|[^\w/.-]){path}(?:\.md)?(?:$|[^\w/-])")
-        } else {
-            format!(r"(?i)\[\[{}(?:\]\]|\||#)", regex::escape(e))
-        };
-        Regex::new(&pattern).expect("escaped pattern").is_match(output)
-    })
+    check: String,
 }
 
 fn median(xs: &mut [f64]) -> f64 {
@@ -99,99 +74,81 @@ fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::R
     }
 }
 
-pub fn run(ctx: &Ctx, agent: Option<&str>, k: usize) -> Result<Report, Refusal> {
+pub fn run(ctx: &Ctx, agent: &str, cases_file: Option<&Path>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
-    let text = match std::fs::read_to_string(vault.abs(FILE)) {
+    let path = cases_file.map_or_else(|| vault.abs(FILE), Path::to_path_buf);
+    let shown = path.display();
+    let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(Refusal::refused("bench.none", format!("`{FILE}` does not exist")));
+            return Err(Refusal::refused("bench.none", format!("`{shown}` does not exist")));
         }
-        Err(e) => return Err(Refusal::io(format!("reading `{FILE}`: {e}"))),
+        Err(e) => return Err(Refusal::io(format!("reading `{shown}`: {e}"))),
     };
     let mut cases = vec![];
     for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
         let case = serde_json::from_str::<Case>(line)
-            .map_err(|e| Refusal::refused("bench.case", format!("{FILE} line {}: {e}", n + 1)))?;
+            .map_err(|e| Refusal::refused("bench.case", format!("{shown} line {}: {e}", n + 1)))?;
         cases.push(case);
     }
-    let index = Index::open(&vault);
-    let docs = search::docs(&index);
-    let (mut ranked, mut rr_sum) = (0usize, 0f64);
-    let mut latencies = vec![];
-    let (mut agent_passes, mut agent_times) = (0usize, vec![]);
-    let mut results = vec![];
-    for case in &cases {
+    let (mut passes, mut times, mut results) = (0usize, vec![], vec![]);
+    for (n, case) in cases.iter().enumerate() {
         let start = Instant::now();
-        let hits = search::search(&docs, &case.q, k, &[])?;
-        latencies.push(start.elapsed().as_secs_f64() * 1000.0);
-        let rank = hits.iter().position(|h| matches(&case.expect, &h.path)).map(|i| i + 1);
-        if let Some(r) = rank {
-            ranked += 1;
-            rr_sum += 1.0 / r as f64;
-        }
-        let agent_pass = match agent {
-            None => None,
-            Some(cmd) => {
-                let start = Instant::now();
-                let out = match run_agent(cmd, &case.q, &vault.root) {
-                    Ok(out) => out,
-                    Err(e) => {
-                        return Err(Refusal::internal(
-                            "bench.agent",
-                            format!("cannot run the agent through `sh`: {e}"),
-                        ));
-                    }
-                };
-                agent_times.push(start.elapsed().as_secs_f64());
-                let pass = out.is_some_and(|out| mentions(&case.expect, &out));
-                agent_passes += usize::from(pass);
-                Some(pass)
-            }
-        };
-        results.push(json!({"q": case.q, "rank": rank, "agent_pass": agent_pass}));
+        let pass = run_case(&vault.root, agent, case, n).map_err(|e| Refusal::internal("bench.agent", e))?;
+        times.push(start.elapsed().as_secs_f64());
+        passes += usize::from(pass);
+        results.push(json!({"q": case.q, "pass": pass}));
     }
-    let n = cases.len().max(1) as f64;
-    let recall = ranked as f64 / n;
-    let mrr = rr_sum / n;
-    let max = latencies.iter().copied().fold(0.0, f64::max);
-    let med = median(&mut latencies);
-    let agent_stats = agent.map(|_| (agent_passes as f64 / n, median(&mut agent_times)));
-    let agent_json = agent_stats.map(|(pass_rate, median_s)| json!({"pass_rate": pass_rate, "median_s": median_s}));
-    let mut human = format!(
-        "{} cases: recall@{k} {recall:.3}, MRR {mrr:.3}, find median {med:.1} ms (max {max:.1} ms)\n",
-        cases.len()
-    );
-    if let Some((pass_rate, median_s)) = agent_stats {
-        human.push_str(&format!("agent: pass rate {pass_rate:.3}, median {median_s:.1} s\n"));
-    }
-    let data = json!({
-        "cases": cases.len(),
-        "recall_at_k": recall,
-        "mrr": mrr,
-        "latency_ms": {"median": med, "max": max},
-        "agent": agent_json,
-        "results": results,
-    });
+    let pass_rate = passes as f64 / cases.len().max(1) as f64;
+    let median_s = median(&mut times);
+    let human = format!("{} cases: pass rate {pass_rate:.3}, median {median_s:.1} s\n", cases.len());
+    let data = json!({"cases": cases.len(), "pass_rate": pass_rate, "median_s": median_s, "results": results});
     Ok(Report::ok(data, human))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Runs one case on a fresh copy of the vault (without `bench/`), so that the agent
+/// never sees the cases and no case sees another's edits; the copy is deleted after.
+fn run_case(root: &Path, agent: &str, case: &Case, n: usize) -> Result<bool, String> {
+    let work = std::env::temp_dir().join(format!("loci-bench-{}-{n}", std::process::id()));
+    let result = (|| {
+        let copy = work.join("vault");
+        copy_dir(root, &copy).map_err(|e| format!("copying the vault: {e}"))?;
+        let Some(reply) =
+            run_agent(agent, &case.q, &copy).map_err(|e| format!("cannot run the agent through `sh`: {e}"))?
+        else {
+            return Ok(false);
+        };
+        let output = work.join("output.txt");
+        std::fs::write(&output, reply).map_err(|e| format!("writing the agent's reply: {e}"))?;
+        let status = Command::new("sh")
+            .args(["-c", &case.check])
+            .current_dir(&copy)
+            .env("LOCI_BENCH_OUTPUT", &output)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|e| format!("cannot run the check through `sh`: {e}"))?;
+        Ok(status.success())
+    })();
+    // A copy that cannot be deleted is left behind, not mistaken for a result.
+    let _ = std::fs::remove_dir_all(&work);
+    result
+}
 
-    #[test]
-    fn matching() {
-        let e = vec!["bfs".to_string(), "views/plan".to_string()];
-        assert!(matches(&e, "concepts/a/bfs.md"));
-        assert!(matches(&["BFS".to_string()], "concepts/a/bfs.md"), "slugs compare case-insensitively");
-        assert!(matches(&e, "views/plan.md"));
-        assert!(!matches(&e, "views/bfs.md"));
-        assert!(mentions(&e, "see [[bfs]] for details"));
-        assert!(mentions(&e, "see [[bfs|breadth-first]] and [[bfs#Proof]]"));
-        assert!(mentions(&e, "read views/plan.md."));
-        assert!(mentions(&e, "read views/plan"));
-        assert!(!mentions(&e, "nothing here"));
-        assert!(!mentions(&e, "subfs and bfs-variant, plain bfs"));
-        assert!(!mentions(&e, "read views/plan2.md or views/plan/x.md"));
+/// Copies the vault at `root` to `to`, leaving out its `bench/`.
+fn copy_dir(root: &Path, to: &Path) -> std::io::Result<()> {
+    fn copy(from: &Path, to: &Path, skip: Option<&str>) -> std::io::Result<()> {
+        std::fs::create_dir_all(to)?;
+        for entry in std::fs::read_dir(from)? {
+            let entry = entry?;
+            if skip.is_some_and(|s| entry.file_name() == s) {
+                continue;
+            }
+            let (src, dst) = (entry.path(), to.join(entry.file_name()));
+            if entry.file_type()?.is_dir() { copy(&src, &dst, None)? } else { std::fs::copy(&src, &dst).map(|_| ())? }
+        }
+        Ok(())
     }
+    copy(root, to, Some("bench"))
 }

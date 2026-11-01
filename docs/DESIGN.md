@@ -69,15 +69,6 @@ changes from task to task:
 `loci` but no installed skills (for example, one working from a fresh clone) can
 still read them.
 
-Agent setup:
-
-| Agent | Reads |
-|---|---|
-| Codex, Cursor, Copilot, opencode | `AGENTS.md` |
-| Claude Code | `AGENTS.md` only when there is no `CLAUDE.md`; otherwise a line in `CLAUDE.md` pointing at `AGENTS.md` |
-| Gemini CLI | `AGENTS.md` once the context file name is set to it |
-| any other agent with a shell | told to run `loci rules`, `loci status` and `loci skill show` |
-
 ## 4. Vault
 
 ### 4.1 Layout
@@ -100,7 +91,7 @@ journal/<stream>/...               dated records; folders and names below the st
 views/<name>.md                   a curated view: concept links in a chosen order
 views/learn/<concept>.md          a learning plan
 plugins/<name>/                   data owned by a plugin (e.g. plugins/learn/reviews.jsonl); core ignores it
-bench/retrieval.jsonl             retrieval benchmark cases
+bench/cases.jsonl                 benchmark cases: a question or task, and a shell check
 .loci/                            gitignored output (exports)
 ```
 
@@ -156,7 +147,7 @@ each claim: the greedy choice is safe for non-negative weights
   (the intake commit deletes the draft and writes the concept).
 - **H1:** the title. Exactly one, directly after the frontmatter.
 - **Other names** (abbreviations, spellings, a translation, the names of sub-ideas
-  folded into the note) go in the H1 or the text, which `loci find` searches. There is no alias field: a rename or merge rewrites every link, and an
+  folded into the note) go in the H1 or the text, where a search (`rg`) finds them. There is no alias field: a rename or merge rewrites every link, and an
   agent searching by meaning finds a concept without one.
 - **No other fields.** In particular, `tags:` is an error.
 - **Links:** a bare `[[name]]` resolves only to the concept with that slug. Every
@@ -194,7 +185,7 @@ type and slug, and lint checks the layout (`sources.layout`). Clippings arrive
 through `inbox/sources/`. Sources never change: git holds the original, and lint
 reports a source that differs from its committed version (`sources.changed`, an
 error). PDFs are committed. They are evidence, read by the agent during intake, not
-searched: `loci find` searches the notes written from them.
+searched: a search (`rg`) runs over the notes written from them.
 
 ### 4.6 Views
 
@@ -206,7 +197,7 @@ curated view is created in any of three ways:
 
 - the user writes or edits it directly, and lint checks its links;
 - the user asks the agent, for example "make a view of everything I know about
-  graph search, in prerequisite order". The agent builds it from `loci find` and
+  graph search, in prerequisite order". The agent builds it from a search (`rg`) and
   `loci closure`;
 - the user drops a draft whose value is mainly its arrangement of existing
   concepts, such as a reading path. The intake skill keeps the arrangement as a
@@ -245,7 +236,8 @@ about them. Lint never blocks a commit.
 
 **Editing by hand.** Notes are plain markdown files, and the user may change
 anything except `sources/` and `plugins/` at any time. Nothing derived is stored
-(search and closures are computed from the files on each command), so
+(a search reads the files directly, and closures are computed from them on each
+command), so
 there is nothing to sync and the agent is not involved unless asked. What a hand
 edit needs:
 
@@ -360,7 +352,7 @@ question.
    - **load-bearing:** the material cannot be understood without it;
    - **peripheral:** it gets a one-line definition where it appears.
 2. **Sort.** The agent pre-fills each load-bearing concept as know, shaky or don't
-   know, from the knowledge-base match (slug, `loci find`) and the estimate.
+   know, from the knowledge-base match (slug, a search with `rg`) and the estimate.
    The user corrects each with one keystroke:
    - **know:** the boundary; stop here.
    - **shaky:** the boundary; the concept goes to the diagnostic.
@@ -415,7 +407,7 @@ and `docs/specs/m1-m4.md`, the learn plugin in `docs/specs/learn-plugin.md`.
 | session | `rules`, `status`, `skill show [<name>]` |
 | structure | `new`, `block-ids --section`, `mv` (links are rewritten), `merge` (M1) |
 | health | `lint` (also runs each installed plugin's lint), `done` (an agent's last step: lint, then a local record of its work for the `improve` skill) |
-| find | `find`, `closure`, `links` (a note's links and the links to it) |
+| find | `closure`, `links` (a note's links, the links to it and its unlinked mentions) |
 | views | `export` |
 | benchmark | `bench` |
 
@@ -459,30 +451,25 @@ Implementation:
   the user's text is never re-serialised.
 - **Frontmatter:** `saphyr` for reading; edits are splices of the original bytes.
 - **Git:** the `git` CLI.
-- **Search:** tantivy, with an in-memory index built on each `loci find` call.
-  Chinese and Japanese text is segmented with ICU4X's word segmenter; Korean text
-  is indexed as syllable bigrams. No dictionary download or build feature is needed
-  (details: `docs/specs/m0.md` §9.3).
+- **Search:** none in loci; agents use ripgrep (§8).
 - **Size budgets** count characters.
 - **Scheduling (learn plugin):** the `fsrs` crate (FSRS-6).
 
 ## 8. Search
 
-- **Agent:** `loci find` (BM25 over the formed notes: concepts, areas, views,
-  journal entries) and grep. When filing a concept, the agent reads the area scope
-  notes (`concepts/*/AREA.md`) directly and lists `concepts/<area>/` for
-  sub-folders. Sources and inbox drafts
-  are searched only when asked for by kind; the notes written from them are what
-  `find` returns. Skills depend only on `loci find --json`, so the
-  engine can be replaced without changing them.
+- **Agent:** ripgrep (`rg`), following the patterns in the framework rules
+  ("Finding things"): titles, separator-agnostic words, alternatives, and output
+  control (`-l`, `-c`, `-m 1`). loci keeps no search index (D166, research 16).
+  When filing a concept, the agent reads the area scope notes
+  (`concepts/*/AREA.md`) directly and lists `concepts/<area>/` for sub-folders.
 - **User:** hister indexes the vault directly through its `indexer.directories`
   setting. loci reads nothing from hister.
-- **Benchmark:** `loci bench` runs the cases in `bench/retrieval.jsonl`. Cases are
-  written during the pilot and added whenever the agent misses something that
-  exists. It runs at two levels:
-  - **tool level:** recall@k, MRR and latency, with no LLM;
-  - **agent level:** whether the agent cites the expected notes, and at what cost.
-    The agent command is a parameter.
+- **Benchmark:** `loci bench <agent>` runs the cases in `bench/cases.jsonl`
+  against an agent command, each on a fresh copy of the vault, and reports the pass
+  rate (a case passes when its shell check, on the agent's reply or the vault it
+  left, exits 0) and the median wall time. It measures only the agent level; there is
+  no tool-level metric. Cases are written during the pilot and added whenever the
+  agent misses something that exists.
 
   Procedure goldens run fixed inputs through the skills and check their invariants.
 
@@ -520,8 +507,8 @@ and its benchmark cases stay in the vault.
 | fixture vaults (`tests/fixtures/`) | duplicate filenames; heading links into a dissolved note; relative and colliding image links; notes without an H1; `#` lines and hashtags inside code; CJK text; a review log with lines for deleted cards |
 | golden (`tests/golden/`) | a fixture plus a command, compared with the expected tree and JSON |
 | property (proptest) | `mv` keeps every link resolving; `lint` is idempotent; replay is deterministic |
-| scale | a generated vault of 10k–100k notes, timing `find`, `lint` and replay |
-| sample vault (`examples/sample-vault/`) | about 100 concepts from openly licensed material, with its own license; used by `loci bench` |
+| scale | a generated vault of 10k–100k notes, timing `lint`, `status` and replay |
+| agent evals (`evals/`) | a generated sample vault (39 neutral concepts so far; thousands needed to tell rule variants apart), suites of `loci bench` cases with shell checks, rule variants, and dated results; run on demand with a real agent (`evals/README.md`) |
 | procedures | skills run on fixed inputs with a real agent: lint passes, concepts cite their sources, no duplicates are created, and the learn closure stops at the boundary |
 
 Every bug found on a real vault becomes a fixture with no private content.
@@ -536,4 +523,4 @@ Every bug found on a real vault becomes a fixture with no private content.
 | M2 | PDF intake | an annotated paper becomes a source, concepts and a journal entry in one diff |
 | M3 | the `loci-learn` plugin (`lint`, `skills`, `log`, `state`, `review`), `closure`, the learn skill | a "learn X" session runs end to end and reviews are scheduled |
 | M4 | full migration, `export` | every area is migrated, and views export |
-| later | projects outside the vault; a persistent search index; a phone web UI; the relation registry; exposure signals in the estimate; `learn calibrate`; reading annotations directly from a PDF reader's database | when the benchmark, usage or data justify it |
+| later | projects outside the vault; a phone web UI; the relation registry; exposure signals in the estimate; `learn calibrate`; reading annotations directly from a PDF reader's database | when the benchmark, usage or data justify it |

@@ -40,6 +40,11 @@ fn status_change_counts_and_inbox() {
     assert!(out.contains("13 file(s), 13 uncommitted (drafts 2, sources 11)"), "{out}");
     assert_eq!(out.lines().filter(|l| l.starts_with("- inbox/")).count(), 10, "{out}");
     assert!(out.contains("- and 3 more"), "{out}");
+    assert!(out.contains("Next: ask the user to commit these"), "{out}");
+    // With everything committed, the next step is the intake skill.
+    v.commit_all("inbox");
+    let (_, out, _) = v.run_raw(&["status"]);
+    assert!(out.contains("Next: process them with the intake skill (`loci skill show intake`)."), "{out}");
 }
 
 #[test]
@@ -164,6 +169,11 @@ fn new_writes_the_skeleton() {
     let text = v.read("concepts/a/sub/fresh.md");
     assert_eq!(text, format!("---\nid: {id}\nprereqs: []\n---\n# fresh\n"));
     assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
+    // Marked intent-to-add, so `git diff` shows it.
+    assert_eq!(v.git(&["status", "--porcelain", "--", "concepts/a/sub/fresh.md"]), " A concepts/a/sub/fresh.md\n");
+    // A slug already taken names the note that has it.
+    let (_, env) = v.run(&["new", "concepts/b/fresh"]);
+    assert_eq!(env["error"]["message"], "`fresh` is already the slug of `concepts/a/sub/fresh.md`");
     // The skeleton lints clean.
     let (_, env) = v.run(&["lint"]);
     assert_eq!(codes_on(&env, "concepts/a/sub/fresh.md"), Vec::<String>::new());

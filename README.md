@@ -17,14 +17,6 @@ The name: *loci communes* were the topic headings of a commonplace book; the met
    repository and an `AGENTS.md` that tells agents to read the framework
    rules (`loci rules`), `RULES.md` and `STYLE.md` at the start of a session, and to
    run `loci status` before each task.
-   Agents read `AGENTS.md` as follows:
-
-   | Agent | Reads `AGENTS.md` |
-   |---|---|
-   | Codex, Cursor, Copilot, opencode | yes |
-   | Claude Code | only when there is no `CLAUDE.md`; otherwise add a line to `CLAUDE.md` telling it to follow `AGENTS.md` |
-   | Gemini CLI | once its context file name is set to `AGENTS.md` |
-   | any other agent with a shell | tell it to follow `AGENTS.md` |
 
 ## Using it
 
@@ -57,5 +49,4 @@ Thanks to my friend [chenyue42](https://github.com/chenyue42), whose project car
 
 ## License
 
-MIT. See `LICENSE`. The binary includes ICU4X word segmentation code and data;
-its notices are in `THIRD_PARTY_NOTICES`.
+MIT. See `LICENSE`.

@@ -8,7 +8,6 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use loci_core::envelope::Report;
-use loci_core::vault::Kind;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -17,7 +16,6 @@ pub const CORE_COMMANDS: &[&str] = &[
     "init",
     "lint",
     "done",
-    "find",
     "rules",
     "mv",
     "status",
@@ -54,25 +52,22 @@ enum Cmd {
     Lint,
     /// End an agent task: lint, then record the agent's work for review.
     Done,
-    /// Full-text search.
-    Find {
-        query: String,
-        #[arg(short, default_value_t = 10)]
-        k: usize,
-        /// Kinds to search, replacing the default (concept, area, view, journal);
-        /// repeatable.
-        #[arg(long = "kind", value_enum)]
-        kinds: Vec<commands::find::KindArg>,
-    },
     /// Print the framework rules (read at session start).
     Rules,
     /// Move or rename a file or directory, rewriting links.
-    Mv { from: String, to: String },
+    Mv {
+        /// The vault path of a file or folder.
+        from: String,
+        /// Its new vault path.
+        to: String,
+    },
     /// Show what has changed: uncommitted changes, agent work to review, the inbox.
     Status,
-    /// Create a concept note.
+    /// Create a concept note with a new id; missing folders are created.
     New {
+        /// `concepts/<area>/.../<slug>.md` (`.md` may be omitted).
         path: String,
+        /// The H1 (default: the slug).
         #[arg(long)]
         title: Option<String>,
     },
@@ -84,35 +79,51 @@ enum Cmd {
     /// Assign ULID block ids to the top-level blocks of a section.
     #[command(name = "block-ids")]
     BlockIds {
+        /// A note path (`.md` optional) or a concept slug.
         note: String,
+        /// The text of the H2 whose blocks get ids.
         #[arg(long)]
         section: String,
     },
     /// Fold concept FROM into concept INTO after merging their content.
-    Merge { from: String, into: String },
+    Merge {
+        /// The concept to fold in and delete (path or slug).
+        from: String,
+        /// The concept that keeps the merged content (path or slug).
+        into: String,
+    },
     /// List a note's links and the links pointing at it.
-    Links { note: String },
+    Links {
+        /// A note path (`.md` optional), a concept slug, or any vault file.
+        note: String,
+    },
     /// List a concept's prerequisite closure, prerequisites first.
     Closure {
+        /// A concept path or slug.
         concept: String,
+        /// Keep only prerequisites at most this many steps away.
         #[arg(long)]
         depth: Option<usize>,
     },
-    /// Run the retrieval benchmark in bench/retrieval.jsonl.
+    /// Run an agent on each case, each on a fresh copy of the vault, and check the result.
     Bench {
-        /// Also run this agent command (via `sh -c`, question on stdin) per case.
+        /// The agent command, run through `sh -c` with the question on stdin.
+        agent: String,
+        /// The cases file (default: bench/cases.jsonl in the vault).
         #[arg(long)]
-        agent: Option<String>,
-        #[arg(short, default_value_t = 10)]
-        k: usize,
+        cases: Option<PathBuf>,
     },
     /// Write one self-contained document from a view or concept.
     Export {
+        /// A view or concept: a note path (`.md` optional) or a concept slug.
         target: String,
+        /// How many links away notes are included.
         #[arg(long, default_value_t = 1)]
         depth: usize,
+        /// The output format (html and pdf need pandoc).
         #[arg(long = "to", value_enum, default_value = "md")]
         format: commands::export::Format,
+        /// The output file (default: `.loci/export/<stem>.<ext>`).
         #[arg(short)]
         output: Option<PathBuf>,
     },
@@ -122,7 +133,10 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum SkillCmd {
-    Show { name: Option<String> },
+    Show {
+        /// The skill to print (default: list them all).
+        name: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -133,9 +147,6 @@ fn main() -> ExitCode {
         Cmd::Init => ("init", commands::init::run(&ctx)),
         Cmd::Lint => ("lint", commands::lint::run(&ctx)),
         Cmd::Done => ("done", commands::done::run(&ctx)),
-        Cmd::Find { query, k, kinds } => {
-            ("find", commands::find::run(&ctx, &query, k, &kinds.into_iter().map(Kind::from).collect::<Vec<_>>()))
-        }
         Cmd::Rules => ("rules", commands::rules::run()),
         Cmd::Mv { from, to } => ("mv", commands::mv::run(&ctx, &from, &to)),
         Cmd::Status => ("status", commands::status::run(&ctx)),
@@ -145,7 +156,7 @@ fn main() -> ExitCode {
         Cmd::Merge { from, into } => ("merge", commands::merge::run(&ctx, &from, &into)),
         Cmd::Links { note } => ("links", commands::links::run(&ctx, &note)),
         Cmd::Closure { concept, depth } => ("closure", commands::closure::run(&ctx, &concept, depth)),
-        Cmd::Bench { agent, k } => ("bench", commands::bench::run(&ctx, agent.as_deref(), k)),
+        Cmd::Bench { agent, cases } => ("bench", commands::bench::run(&ctx, &agent, cases.as_deref())),
         Cmd::Export { target, depth, format, output } => {
             ("export", commands::export::run(&ctx, &target, depth, format, output))
         }

@@ -15,7 +15,6 @@ let
     fileset = lib.fileset.unions [
       ../Cargo.toml
       ../Cargo.lock
-      ../THIRD_PARTY_NOTICES
       ../crates
       ../LICENSE
       (lib.fileset.maybeMissing ../share)
@@ -41,7 +40,7 @@ let
       postInstall = ''
         mkdir -p $out/share/loci/skills $out/share/doc/${pname}
         cp -r ${skills}/. $out/share/loci/skills/
-        cp THIRD_PARTY_NOTICES LICENSE $out/share/doc/${pname}/
+        cp LICENSE $out/share/doc/${pname}/
       '';
       meta.mainProgram = pname;
     };

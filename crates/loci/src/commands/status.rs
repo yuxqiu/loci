@@ -87,6 +87,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         if u.len() > LISTED {
             human.push_str(&format!("- and {} more\n", u.len() - LISTED));
         }
+        human.push_str("Next: ask the user to commit these before processing the inbox.\n");
         diags.push(Diagnostic::warning(
             "inbox.uncommitted",
             format!(
@@ -94,6 +95,10 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
                 u.len()
             ),
         ));
+    }
+
+    if !inbox.is_empty() && uncommitted.as_ref().is_some_and(|u| u.is_empty()) {
+        human.push_str("Next: process them with the intake skill (`loci skill show intake`).\n");
     }
 
     let data = json!({

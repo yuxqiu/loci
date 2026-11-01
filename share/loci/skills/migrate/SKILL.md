@@ -63,7 +63,7 @@ Follow the `intake` skill, with these additions:
 ## 5. Review and continue
 
 Summarise what went where, which links were left as plain text, and which files
-were skipped. After the first batch, add a few `bench/retrieval.jsonl` cases for
+were skipped. After the first batch, add a few `bench/cases.jsonl` cases for
 questions the user asks of these notes, and check that the size budgets in
 `loci.toml` fit. After the user reviews and commits, take the next batch. When a
 later batch brings in a note that earlier summaries listed as a plain-text link,

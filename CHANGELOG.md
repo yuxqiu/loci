@@ -22,9 +22,10 @@ them under its version.
 - The `--json` diagnostics nest their location: `"location": {"path", "span":
   {"line", "col", "byte_start", "byte_end"}}`, or `null`, instead of five flat
   fields that could be partly `null`.
-- The framework rules say when to link: search before writing a concept, link the
-  first mention of every concept that has a note, and link a new concept from the
-  notes that mention it.
+- The framework rules give one ordered procedure for adding a concept: search under
+  every name, file it next to what the search found (checked against the areas'
+  scope notes), create it and link first mentions, then link it from the notes that
+  mention it, including notes the user wrote.
 - `AREA.md`'s paragraph is a scope note: what the area holds and which look-alike
   topics go to a neighbouring area. The agent reads it when filing a concept.
   Concept sub-folders may nest at any depth.
@@ -33,6 +34,12 @@ them under its version.
   named. The framework rules, `RULES.md`, `STYLE.md`, the index and the plugin
   list are no longer printed. The agent reads the rules at session start, as the
   `AGENTS.md` that `loci init` writes says, through the new `loci rules`.
+- `loci links` lists **unlinked mentions**: notes that name the note (title,
+  parenthesised alias or slug) without linking it, and marks prerequisites
+  `(prereq)`. `loci new` runs `git add -N` on the file it creates and, on a slug
+  collision, names the note that has the slug. A dangling `[[slug]]` suggests the
+  closest concept. `loci status` ends with the next step. Every argument has a
+  `--help` description.
 - Every command exits 1 when it reports an error diagnostic, not only `lint`:
   `loci skill` now exits 1 when a plugin's `skills` hook fails.
 - Source types and journal streams are any slug you choose; nothing is declared
@@ -43,13 +50,12 @@ them under its version.
   folders.
 - An unsupported `schema` in `loci.toml` is refused with a message naming the
   supported one.
-- `loci find` reports `search.index` when it cannot build its index.
 - `vault.not-git` now includes git's own message, so a missing or broken git is no
   longer reported as "not a git work tree" alone. `lint` reports `git.failed`, and
   `loci done` reports `done.record`, when git cannot tell whether there is a commit.
 - Files in a merge conflict are no longer ignored by `loci status`, the inbox check
   and `material-dropped`.
-- `loci bench --agent` no longer waits forever when the agent leaves a process
+- `loci bench` no longer waits forever when the agent leaves a process
   holding its output open; the 600-second timeout applies.
 - `plugin.failed` includes what the plugin printed on stderr.
 - `loci mv` refuses a destination that breaks a path rule lint checks
@@ -62,9 +68,6 @@ them under its version.
   where it came from is not recorded. Lint
   reports a source that differs from its committed version (`sources.changed`).
 - Concepts cite evidence with links in their text, next to the claim.
-- `loci find` searches the formed notes (concepts, areas, views, journal) by default;
-  sources, inbox drafts, rule files and markdown outside the known folders only with
-  `--kind` (`source`, `inbox`, `rules`, `unknown`).
 - `loci done` reports a failure to delete old records as `done.prune`.
 - A source's extension is lowercase letters and digits with at least one letter;
   `loci mv` keeps a source's extension and refuses to move a source you have edited
@@ -106,11 +109,22 @@ them under its version.
 
 ### Removed
 
+- `loci find`: agents search with `rg`, as the framework rules show (titles, words
+  with any separator, several names at once, output size). Every
+  production coding agent searches this way, and in published comparisons grep
+  beat BM25 and embedding search inside an agent loop
+  (`docs/research/16-find-vs-grep.md`). The binary no longer contains tantivy or
+  ICU4X, and `THIRD_PARTY_NOTICES` is gone. `loci bench` runs only the agent level:
+  `loci bench '<agent command>'` reports the pass rate (no recall@k, MRR or `-k`).
+  Each case is now a question or task and a shell check (`{"q", "check"}`) on the
+  agent's reply (`LOCI_BENCH_OUTPUT`) or the vault it left, run on a fresh copy of
+  the vault; the file is `bench/cases.jsonl` (was `bench/retrieval.jsonl`, with
+  `expect`), or `--cases <file>`.
 - The concept `digest` frontmatter field, with `digest.multiline`, `digest.has-link`
   and `digest.too-long`; the `loci digest` command, the root and area indexes and
   `index.over-budget`; the `digest`, `root_index` and `area_index` budgets; and the
-  glossary of `loci export`; the `digest` key of `loci closure --json` members, and
-  digests in `loci find`. Research found no evidence that a one-line summary helps
+  glossary of `loci export`; and the `digest` key of `loci closure --json` members.
+  Research found no evidence that a one-line summary helps
   beyond the title (`docs/research/15-digests-vs-search.md`). To update a vault:
   delete `digest`, `root_index` and `area_index` from `[budgets]` in `loci.toml`
   (otherwise `config.invalid`), and the `digest:` line from every concept
@@ -130,5 +144,5 @@ them under its version.
   `sources.uncovered` and `sources.hash-mismatch`.
 - The `aliases` frontmatter field, with `alias.duplicate`, `mv.frontmatter` and
   `merge.frontmatter`. Other names for a concept go in its title or text,
-  which `loci find` searches. `loci mv` and `loci merge` rewrite links only and no
+  where a search finds them. `loci mv` and `loci merge` rewrite links only and no
   longer edit the renamed or kept note, so renaming a concept back now works.

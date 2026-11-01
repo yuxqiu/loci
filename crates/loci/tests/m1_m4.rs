@@ -122,51 +122,58 @@ fn closure_depth_and_cycles() {
 }
 
 #[test]
-fn bench_tool_and_agent_levels() {
+fn bench_runs_the_agent_on_every_case() {
+    let cases = concat!(
+        r#"{"q": "queue level", "check": "grep -q '\\[\\[bfs\\]\\]' \"$LOCI_BENCH_OUTPUT\""}"#,
+        "\n\n",
+        r#"{"q": "isolation", "check": "test -f views/new.md && ! grep -q 'LEAK\\|SEEN' \"$LOCI_BENCH_OUTPUT\""}"#,
+        "\n",
+        r#"{"q": "fails", "check": "exit 1"}"#,
+        "\n",
+    );
     let v = vault(&[
         ("concepts/g/bfs.md", concept(IDS[0], "", "# BFS\n\nVisits by level with a queue.\n")),
         ("views/plan.md", "# Plan\n\nNothing relevant.\n".into()),
-        (
-            "bench/retrieval.jsonl",
-            "{\"q\": \"queue level\", \"expect\": [\"bfs\"]}\n\n{\"q\": \"zebra\", \"expect\": [\"views/plan.md\"]}\n"
-                .into(),
-        ),
+        ("bench/cases.jsonl", cases.into()),
     ]);
+    // Reports whether it sees the cases or an earlier case's edit, answers, and edits.
+    let agent = "test -d bench && echo LEAK; test -f views/new.md && echo SEEN; echo '[[bfs]]'; : > views/new.md";
     // The test PATH holds only `git`: the agent cannot start.
-    let (code, env) = v.run(&["bench", "--agent", "echo 'answer: [[bfs]]'"]);
+    let (code, env) = v.run(&["bench", agent]);
     assert_eq!((code, error_code(&env)), (3, "bench.agent"));
-    std::os::unix::fs::symlink(find_on_path("sh"), v.bin().join("sh")).unwrap();
-    let (code, env) = v.run(&["bench", "--agent", "echo 'answer: [[bfs]]'"]);
+    for tool in ["sh", "grep", "head"] {
+        std::os::unix::fs::symlink(find_on_path(tool), v.bin().join(tool)).unwrap();
+    }
+    let (code, env) = v.run(&["bench", agent]);
     assert_eq!(code, 0, "{env}");
     let d = &env["data"];
-    assert_eq!(d["cases"], 2, "{env}");
-    assert_eq!(d["recall_at_k"], 0.5, "{env}");
-    assert_eq!(d["mrr"], 0.5);
-    assert_eq!(d["results"][0]["rank"], 1);
-    assert!(d["results"][1]["rank"].is_null());
-    assert_eq!(d["agent"]["pass_rate"], 0.5);
-    assert_eq!(d["results"][0]["agent_pass"], true);
-    assert_eq!(d["results"][1]["agent_pass"], false);
+    assert_eq!(d["cases"], 3, "{env}");
+    let passes: Vec<bool> = d["results"].as_array().unwrap().iter().map(|r| r["pass"].as_bool().unwrap()).collect();
+    // The reply is checked; each case runs on a fresh copy without `bench/`, where the
+    // agent's edit is seen by the check; a failing check fails the case.
+    assert_eq!(passes, [true, true, false], "{env:#}");
+    assert!(!v.exists("views/new.md"), "the vault itself is untouched");
+
+    // Cases may live outside the vault.
+    let outside = v.tmp.path().join("cases.jsonl");
+    std::fs::write(&outside, cases).unwrap();
+    let (code, env) = v.run(&["bench", agent, "--cases", outside.to_str().unwrap()]);
+    assert_eq!((code, env["data"]["cases"].clone()), (0, json!(3)), "{env:#}");
 
     // Output larger than a pipe buffer does not block the agent.
-    std::os::unix::fs::symlink(find_on_path("head"), v.bin().join("head")).unwrap();
     let start = std::time::Instant::now();
-    let (code, env) = v.run(&["bench", "--agent", "head -c 200000 /dev/zero; echo '[[bfs]]'"]);
+    let (code, env) = v.run(&["bench", "head -c 200000 /dev/zero; echo '[[bfs]]'"]);
     assert_eq!(code, 0, "{env:#}");
-    assert_eq!(env["data"]["agent"]["pass_rate"], 0.5);
+    assert_eq!(env["data"]["results"][0]["pass"], true);
     assert!(start.elapsed() < std::time::Duration::from_secs(30));
 
-    let (_, env) = v.run(&["bench"]);
-    assert!(env["data"]["agent"].is_null());
-    assert!(env["data"]["results"][0]["agent_pass"].is_null());
-
-    v.write("bench/retrieval.jsonl", "{\"q\": \"x\", \"expect\": []}\n{\"q\": \"x\"}\n");
-    let (code, env) = v.run(&["bench"]);
+    v.write("bench/cases.jsonl", "{\"q\": \"x\", \"check\": \"true\"}\n{\"q\": \"x\", \"expect\": []}\n");
+    let (code, env) = v.run(&["bench", "true"]);
     assert_eq!((code, error_code(&env)), (1, "bench.case"));
     assert!(env["error"]["message"].as_str().unwrap().contains("line 2"), "{env}");
 
-    std::fs::remove_file(v.root.join("bench/retrieval.jsonl")).unwrap();
-    let (code, env) = v.run(&["bench"]);
+    std::fs::remove_file(v.root.join("bench/cases.jsonl")).unwrap();
+    let (code, env) = v.run(&["bench", "true"]);
     assert_eq!((code, error_code(&env)), (1, "bench.none"));
 }
 
@@ -264,6 +271,7 @@ fn links_lists_outgoing_and_incoming() {
             ),
         ),
         ("concepts/g/queue.md", concept(IDS[1], "", "# Queue\n")),
+        ("concepts/g/graph.md", concept(IDS[2], "", "# Graph\n\nWalked by BFS.\n")),
         ("views/v.md", "# V\n\n[[bfs#Proof]] and [[concepts/g/bfs]].\n".into()),
         ("concepts/g/attachments/grid.png", "PNG".into()),
         ("sources/papers/p.pdf", "%PDF".into()),
@@ -295,6 +303,14 @@ fn links_lists_outgoing_and_incoming() {
         .map(|l| (l["path"].as_str().unwrap(), l["line"].as_u64().unwrap()))
         .collect();
     assert_eq!(incoming, [("views/v.md", 3), ("views/v.md", 3)]);
+    // A note that names it without linking it is a candidate for a link.
+    assert_eq!(d["unlinked"], json!([{"path": "concepts/g/graph.md", "line": 6, "text": "Walked by BFS."}]));
+    let (_, human, _) = v.run_raw(&["links", "bfs"]);
+    assert!(human.contains("-> concepts/g/queue.md (prereq)\n"), "{human}");
+    assert!(
+        human.contains("unlinked mentions of concepts/g/bfs.md:\n  concepts/g/graph.md:6: Walked by BFS.\n"),
+        "{human}"
+    );
 
     // A prerequisite is an incoming link; a source is cited by an ordinary link; an image is embedded.
     let (_, env) = v.run(&["links", "queue"]);

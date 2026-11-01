@@ -1,6 +1,6 @@
 //! `loci new` (m0 §9.7).
 
-use loci_core::envelope::{Refusal, Report};
+use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::git;
 use loci_core::index::Index;
 use loci_core::vault::{self, Kind};
@@ -39,7 +39,9 @@ pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal
         return Err(Refusal::refused("path.ignored", format!("`{path}` is ignored by git")));
     }
     if index.name_taken(&slug, |_| false) {
-        return Err(Refusal::refused("new.collision", format!("`{slug}` is already a concept's slug")));
+        let existing: Vec<String> = index.slug_paths(&slug).iter().map(|p| format!("`{p}`")).collect();
+        let existing = existing.join(", ");
+        return Err(Refusal::refused("new.collision", format!("`{slug}` is already the slug of {existing}")));
     }
     let id = vault::new_concept_id();
     let text = format!("---\nid: {id}\nprereqs: []\n---\n# {}\n", title.unwrap_or(&slug));
@@ -49,5 +51,13 @@ pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal
         return Err(Refusal::io(e));
     }
     std::fs::write(&abs, text).map_err(Refusal::io)?;
-    Ok(Report::ok(json!({"path": path, "id": id}), format!("{path} {id}\n")))
+    // Marked for `git diff`, as the framework rules ask of every file an agent creates.
+    let mut diags = vec![];
+    if let Err(e) = git::run(&vault.root, &["add", "-N", "--", &path]) {
+        diags.push(
+            Diagnostic::warning("new.git-add", format!("created, but `git add -N` failed: {e}; run it yourself"))
+                .at_path(path.as_str()),
+        );
+    }
+    Ok(Report::ok(json!({"path": path, "id": id}), format!("{path} {id}\n")).with_diagnostics(diags))
 }
