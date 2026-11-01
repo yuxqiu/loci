@@ -89,19 +89,21 @@ pub fn path_arg(p: &str) -> Result<String, Refusal> {
     Ok(nfc(trimmed))
 }
 
-/// Whether `path` is a source folder `sources/<type>/<slug>` (m0 §6.4).
-pub fn is_source_folder(path: &str) -> bool {
+/// The extension of a source file `sources/<type>/<slug>.<ext>` (m0 §6.4), where
+/// `<ext>` is lowercase ASCII letters and digits with at least one letter (`pdf`,
+/// `mp3`, not `03762`); `None` for any other path.
+pub fn source_ext(path: &str) -> Option<&str> {
     let parts: Vec<&str> = path.split('/').collect();
-    parts.len() == 3 && parts[0] == "sources" && is_slug(parts[1]) && is_slug(parts[2])
+    let [top, ty, name] = parts[..] else { return None };
+    let (slug, ext) = name.rsplit_once('.')?;
+    let ext_ok = ext.bytes().any(|b| b.is_ascii_lowercase())
+        && ext.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
+    (top == "sources" && is_slug(ty) && is_slug(slug) && ext_ok).then_some(ext)
 }
 
-/// The source folder holding `path`, and the path inside it, when `path` lies inside
-/// one (m0 §6.4).
-pub fn source_folder(path: &str) -> Option<(&str, &str)> {
-    let mut slashes = path.match_indices('/').map(|(i, _)| i);
-    let end = slashes.nth(2)?;
-    let (folder, rest) = (&path[..end], &path[end + 1..]);
-    (is_source_folder(folder) && !rest.is_empty()).then_some((folder, rest))
+/// Whether `path` is a source file (see [`source_ext`]).
+pub fn is_source_file(path: &str) -> bool {
+    source_ext(path).is_some()
 }
 
 /// The kind of a vault-relative, `/`-separated path. `None` for paths core never reads
@@ -306,13 +308,21 @@ mod tests {
     }
 
     #[test]
-    fn source_folders() {
-        assert!(is_source_folder("sources/papers/dijkstra-1959"));
-        assert!(!is_source_folder("sources/Papers/x") && !is_source_folder("sources/papers"));
-        assert_eq!(source_folder("sources/papers/p/p.pdf"), Some(("sources/papers/p", "p.pdf")));
-        assert_eq!(source_folder("sources/papers/p/a/b.md"), Some(("sources/papers/p", "a/b.md")));
-        assert_eq!(source_folder("sources/papers/p"), None);
-        assert_eq!(source_folder("sources/stray.md"), None);
+    fn source_files() {
+        assert!(is_source_file("sources/papers/dijkstra-1959.pdf"));
+        assert!(is_source_file("sources/clippings/heaps.md"));
+        for bad in [
+            "sources/Papers/x.pdf",
+            "sources/papers/x",
+            "sources/papers/X.pdf",
+            "sources/x.pdf",
+            "sources/papers/p/p.pdf",
+            "sources/papers/x.PDF",
+            "sources/papers/vaswani.03762",
+            "sources/docs/a.b c",
+        ] {
+            assert!(!is_source_file(bad), "{bad}");
+        }
     }
 
     #[test]

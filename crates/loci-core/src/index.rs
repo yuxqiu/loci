@@ -20,46 +20,6 @@ fn note_path(arg: &str) -> String {
     if arg.ends_with(".md") { arg.to_string() } else { format!("{arg}.md") }
 }
 
-/// A source folder `sources/<type>/<slug>` and its files (m0 §6.4).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceFolder {
-    pub path: String,
-    /// Paths inside the folder, `source.yaml` included.
-    pub files: Vec<String>,
-}
-
-impl SourceFolder {
-    pub fn has_meta(&self) -> bool {
-        self.files.iter().any(|f| f == "source.yaml")
-    }
-
-    /// The source file: the folder's one file besides `source.yaml`, as a vault path.
-    /// `None` when there is not exactly one (`sources.uncovered`).
-    pub fn original(&self) -> Option<String> {
-        let mut others = self.files.iter().filter(|f| f.as_str() != "source.yaml");
-        match (others.next(), others.next()) {
-            (Some(f), None) => Some(format!("{}/{f}", self.path)),
-            _ => None,
-        }
-    }
-}
-
-/// What a `sources` entry names ([`Index::resolve_source`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SourceTarget {
-    Folder(SourceFolder),
-    /// A journal note.
-    Note(String),
-}
-
-impl SourceTarget {
-    pub fn into_path(self) -> String {
-        match self {
-            SourceTarget::Folder(SourceFolder { path, .. }) | SourceTarget::Note(path) => path,
-        }
-    }
-}
-
 /// Why [`Index::concept`] found no single concept.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConceptLookup {
@@ -93,8 +53,6 @@ pub struct Index {
     pub slugs: BTreeMap<String, Vec<String>>,
     /// Link targets by path: notes without `.md`, other files with their extension.
     pub targets: BTreeSet<String>,
-    /// Every source folder that holds a file, by path.
-    pub sources: BTreeMap<String, SourceFolder>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,16 +95,7 @@ pub fn build(files: Vec<String>, read: impl Fn(&str) -> std::io::Result<Vec<u8>>
         issues: BTreeMap::new(),
         slugs: BTreeMap::new(),
         targets: BTreeSet::new(),
-        sources: BTreeMap::new(),
     };
-    for (folder, file) in files.iter().filter_map(|f| vault::source_folder(f)) {
-        index
-            .sources
-            .entry(folder.to_string())
-            .or_insert_with(|| SourceFolder { path: folder.to_string(), files: vec![] })
-            .files
-            .push(file.to_string());
-    }
     for path in files {
         let kind = vault::kind_of(&path).unwrap_or(Kind::Unknown);
         if let Some(stripped) = path.strip_suffix(".md") {
@@ -236,34 +185,19 @@ impl Index {
     }
 
     /// Where `link` in note `from` points, ignoring its fragment: a note or file path,
-    /// a source folder (`sources/<type>/<slug>`), or `None` when it does not resolve.
+    /// or `None` when it does not resolve.
     pub fn link_target(&self, from: &Note, link: &Link) -> Option<String> {
-        if link.form == LinkForm::Source {
-            return self.resolve_source(link).map(SourceTarget::into_path);
-        }
         let whole = Link { fragment: None, ..link.clone() };
         self.resolve(from, &whole).ok().map(|r| r.path().to_string())
     }
 
-    /// What a `sources` entry names (§5.5), ignoring its fragment: a source folder
-    /// `sources/<type>/<slug>` that exists, or a journal note. Anything else is `None`.
-    pub fn resolve_source(&self, link: &Link) -> Option<SourceTarget> {
-        let target = &link.target;
-        if vault::is_source_folder(target) {
-            return self.sources.get(target).cloned().map(SourceTarget::Folder);
-        }
-        let note = format!("{target}.md");
-        (target.starts_with("journal/") && self.notes.contains_key(&note)).then_some(SourceTarget::Note(note))
-    }
-
-    /// Every link that points at `path`, or at the source folder holding it, as
-    /// (linking note, link), in note path order.
+    /// Every link that points at `path`, as (linking note, link), in note path order.
     pub fn incoming(&self, path: &str) -> Vec<(&Note, &Link)> {
         let mut out = vec![];
         for note in self.notes.values() {
             for link in &note.links {
                 let Some(target) = self.link_target(note, link) else { continue };
-                if target == path || path.strip_prefix(&target).is_some_and(|rest| rest.starts_with('/')) {
+                if target == path {
                     out.push((note, link));
                 }
             }
@@ -272,7 +206,7 @@ impl Index {
     }
 
     /// Whether `slug` is already a concept's slug, other than paths `moving` accepts,
-    /// which are being renamed (§9.5, §9.8).
+    /// which are being renamed (§9.5, §9.7).
     pub fn name_taken(&self, slug: &str, moving: impl Fn(&str) -> bool) -> bool {
         self.slugs.get(&slug.to_lowercase()).is_some_and(|ps| ps.iter().any(|p| !moving(p)))
     }
@@ -281,8 +215,7 @@ impl Index {
         self.notes.values().filter(|n| n.kind == Kind::Concept)
     }
 
-    /// Resolves a body or `prereqs` link from note `from` (§5.3, §5.4). `Source` links
-    /// are resolved by [`Index::resolve_source`].
+    /// Resolves a body or `prereqs` link from note `from` (§5.3, §5.4).
     pub fn resolve(&self, from: &Note, link: &Link) -> Result<Resolved, LinkError> {
         let target = &link.target;
         let resolved = if target.is_empty() {

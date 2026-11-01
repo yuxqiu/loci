@@ -7,6 +7,7 @@ use crate::envelope::Refusal;
 use crate::index::{Index, Resolved};
 use crate::parse::{FmValue, LinkForm, Note};
 use crate::relink::{self, Change};
+use crate::splice::Edit;
 
 /// Plans merging concept `from` into concept `into` (each a concept path or slug).
 pub fn plan(index: &Index, from: &str, into: &str) -> Result<Merge, Refusal> {
@@ -32,10 +33,10 @@ pub fn plan(index: &Index, from: &str, into: &str) -> Result<Merge, Refusal> {
         if !*flow && self_prereqs.len() == items.len() {
             // An emptied block list would leave `prereqs:` (null): drop the whole entry.
             let last = items.last().expect("the list holds the removed items").span();
-            into_edits.push(relink::remove_lines(&into_note.text, entry.key_span.start..last.end));
+            into_edits.push(remove_lines(&into_note.text, entry.key_span.start..last.end));
         } else {
             for (_, item_range) in &self_prereqs {
-                into_edits.push(relink::remove_list_item(into_note, span.clone(), item_range.clone(), *flow));
+                into_edits.push(remove_list_item(into_note, span.clone(), item_range.clone(), *flow));
             }
         }
         change.removed_links.extend(self_prereqs.iter().map(|(i, _)| (into.clone(), *i)));
@@ -66,6 +67,30 @@ fn self_prereqs(index: &Index, into: &Note, from: &str) -> Vec<(usize, std::ops:
         .filter(|(_, l)| matches!(index.resolve(into, l), Ok(Resolved::Note(p)) if p == from))
         .map(|(i, l)| (i, l.range.clone()))
         .collect()
+}
+
+/// The edit that removes one item of a frontmatter list (flow or block form).
+fn remove_list_item(note: &Note, list_span: std::ops::Range<usize>, item: std::ops::Range<usize>, flow: bool) -> Edit {
+    let text = &note.text;
+    if flow {
+        // Remove the item and one adjacent comma with its spaces.
+        let after = &text[item.end..];
+        let trailing = after.len() - after.trim_start_matches([',', ' ']).len();
+        if after.starts_with(',') || after.trim_start().starts_with(',') {
+            return Edit::replace(item.start..item.end + trailing, "");
+        }
+        let before = &text[list_span.start..item.start];
+        let leading = before.len() - before.trim_end_matches([',', ' ']).len();
+        return Edit::replace(item.start - leading..item.end, "");
+    }
+    remove_lines(text, item)
+}
+
+/// The edit that removes the whole lines spanned by `range`.
+fn remove_lines(text: &str, range: std::ops::Range<usize>) -> Edit {
+    let line_start = text[..range.start].rfind('\n').map_or(0, |i| i + 1);
+    let line_end = text[range.end..].find('\n').map_or(text.len(), |i| range.end + i + 1);
+    Edit::replace(line_start..line_end, "")
 }
 
 #[cfg(test)]

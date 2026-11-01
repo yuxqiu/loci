@@ -98,14 +98,13 @@ pub struct BlockId {
     pub kind: BlockKind,
 }
 
-/// Serialized in lowercase (`wiki`, `embed`, `prereq`, `source`).
+/// Serialized in lowercase (`wiki`, `embed`, `prereq`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LinkForm {
     Wiki,
     Embed,
     Prereq,
-    Source,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,21 +174,6 @@ impl Note {
         }
     }
 
-    /// The string items of frontmatter list `key` (other items are skipped; lint
-    /// reports them).
-    pub fn fm_strings(&self, key: &str) -> Vec<&str> {
-        match self.fm(key) {
-            Some(FmValue::List { items, .. }) => items
-                .iter()
-                .filter_map(|i| match i {
-                    FmValue::Str { value, .. } => Some(value.as_str()),
-                    _ => None,
-                })
-                .collect(),
-            _ => vec![],
-        }
-    }
-
     /// The raw text of the first H1, if any.
     pub fn h1(&self) -> Option<&str> {
         self.headings.iter().find(|h| h.level == 1).map(|h| h.text.as_str())
@@ -250,9 +234,15 @@ fn options() -> Options {
         | Options::ENABLE_TASKLISTS
 }
 
-/// The slug of a `prereqs` value, if it is exactly `[[<slug>]]` (m0 §6.1; slugs match
-/// case-insensitively).
-pub fn prereq_slug(value: &str) -> Option<&str> {
+/// The slug of a `prereqs` item, if it is a quoted `"[[<slug>]]"` written verbatim
+/// (m0 §6.1; slugs match case-insensitively). Only such an item is a link.
+pub fn prereq_item<'a>(text: &str, item: &'a FmValue) -> Option<&'a str> {
+    let FmValue::Str { value, span, quoted: true } = item else { return None };
+    // Escapes and folded lines would make offsets into the value wrong for the file.
+    let raw = &text[span.clone()];
+    if raw.len() < 2 || &raw[1..raw.len() - 1] != value {
+        return None;
+    }
     let inner = value.strip_prefix("[[")?.strip_suffix("]]")?;
     crate::vault::is_slug(&inner.to_lowercase()).then_some(inner)
 }
@@ -268,14 +258,6 @@ pub fn strip_list_marker(s: &str) -> &str {
         Some(rest) if digits > 0 => rest.trim_start(),
         _ => s,
     }
-}
-
-/// True if a frontmatter scalar's source bytes are its value (inside its quotes when
-/// quoted), so that offsets into the value are offsets into the file. Escapes and
-/// folded lines break this.
-pub fn verbatim(text: &str, span: &Range<usize>, value: &str, quoted: bool) -> bool {
-    let raw = &text[span.clone()];
-    if quoted { raw.len() >= 2 && &raw[1..raw.len() - 1] == value } else { raw == value }
 }
 
 /// Normalises a link target (§5.2): returns (target, fragment), or `None` for `[[]]`.
@@ -491,19 +473,18 @@ fn block_ids(text: &str, items: &[ListItem], paragraphs: &[Range<usize>]) -> Vec
     out
 }
 
-/// The `prereqs` and `sources` links of a frontmatter (§5.1), from verbatim scalars only.
+/// The `prereqs` links of a frontmatter (§5.1), from verbatim scalars only.
 fn frontmatter_links(text: &str, fm: &Frontmatter) -> Vec<Link> {
     let mut out = vec![];
-    let items = |key: &str| match fm.get(key) {
+    let items = match fm.get("prereqs") {
         Some(FmEntry { value: FmValue::List { items, .. }, .. }) => items.as_slice(),
         _ => &[],
     };
-    for item in items("prereqs") {
-        if let FmValue::Str { value, span, quoted: true } = item
-            && verbatim(text, span, value, true)
-            && let Some(inner) = prereq_slug(value)
+    for item in items {
+        if let Some(inner) = prereq_item(text, item)
             && let Some((target, fragment)) = normalize_target(inner)
         {
+            let span = item.span();
             // After the opening `"[[`.
             let start = span.start + 3;
             out.push(Link {
@@ -511,22 +492,6 @@ fn frontmatter_links(text: &str, fm: &Frontmatter) -> Vec<Link> {
                 range: span.clone(),
                 target_range: start..start + inner.len(),
                 raw: inner.to_string(),
-                target,
-                fragment,
-            });
-        }
-    }
-    for item in items("sources") {
-        if let FmValue::Str { value, span, quoted } = item
-            && verbatim(text, span, value, *quoted)
-            && let Some((target, fragment)) = normalize_target(value)
-        {
-            let q = usize::from(*quoted);
-            out.push(Link {
-                form: LinkForm::Source,
-                range: span.clone(),
-                target_range: span.start + q..span.end - q,
-                raw: value.clone(),
                 target,
                 fragment,
             });

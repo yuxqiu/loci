@@ -32,17 +32,6 @@ pub fn plan(
     if exists(to) || index.files.iter().any(|f| f == to || f.starts_with(&format!("{to}/"))) {
         return Err(Refusal::refused("mv.exists", format!("`{to}` already exists")));
     }
-    // Sources move only as whole folders.
-    let in_sources = |p: &str| p == "sources" || p.starts_with("sources/");
-    if in_sources(from) || in_sources(to) {
-        let whole_folder = !is_file && vault::is_source_folder(from) && vault::is_source_folder(to);
-        if !whole_folder {
-            return Err(Refusal::refused(
-                "mv.source-file",
-                "only a whole source folder `sources/<type>/<slug>` can move",
-            ));
-        }
-    }
     let mut map: BTreeMap<String, String> = BTreeMap::new();
     if is_file {
         map.insert(from.to_string(), to.to_string());
@@ -50,6 +39,19 @@ pub fn plan(
         for f in dir_files {
             map.insert(f.clone(), format!("{to}/{}", &f[prefix.len()..]));
         }
+    }
+    // A source can be renamed, keeping its type (extension), but not moved out of
+    // `sources/<type>/<slug>.<ext>`; any other file moved under `sources/` must become
+    // a source. A stray file (`sources.layout`) may move anywhere.
+    let layout_kept = |old: &str, new: &str| match vault::source_ext(old) {
+        Some(ext) => vault::source_ext(new) == Some(ext),
+        None => !new.starts_with("sources/") || vault::is_source_file(new),
+    };
+    if let Some((_, new)) = map.iter().find(|(old, new)| !layout_kept(old, new)) {
+        return Err(Refusal::refused(
+            "mv.source-file",
+            format!("`{new}` is not a `sources/<type>/<slug>.<ext>` file of the same type"),
+        ));
     }
     // A destination that exists on disk (a file the index does not hold) is never
     // overwritten.
@@ -119,33 +121,34 @@ mod tests {
             ("concepts/a/y.md", C),
             ("concepts/b/AREA.md", "# B\n"),
             ("views/v.md", "# V\n"),
-            ("sources/papers/p/paper.pdf", ""),
-            ("sources/papers/p/source.yaml", "sha256: x\n"),
+            ("sources/papers/p.pdf", ""),
+            ("sources/stray.md", "# Stray\n"),
         ]);
         let e = |f: &str, t: &str| plan(&i, f, t, false, |_| false).unwrap_err().code().to_string();
         assert_eq!(e("concepts/a/x.md", "concepts/a/y.md"), "mv.exists");
         assert_eq!(e("concepts/a/x.md", "concepts/b/y.md"), "mv.collision");
         assert_eq!(e("concepts/a/x.md", "views/x.md"), "mv.no-area");
-        assert_eq!(e("sources/papers/p/paper.pdf", "sources/papers/q.pdf"), "mv.source-file");
+        assert_eq!(e("sources/papers/p.pdf", "sources/papers/p/q.pdf"), "mv.source-file");
+        assert_eq!(e("sources/papers/p.pdf", "views/p.pdf"), "mv.source-file");
+        assert_eq!(e("sources/papers/p.pdf", "sources/papers/p.md"), "mv.source-file", "a source keeps its type");
+        // A stray file under `sources/` may leave, which fixes its `sources.layout`.
+        assert!(plan(&i, "sources/stray.md", "views/stray.md", false, |_| false).is_ok());
         assert_eq!(e("plugins/learn", "x"), "mv.from");
         assert_eq!(e("sources", "old/sources"), "mv.source-file");
         assert_eq!(e("concepts/a/x.md", "concepts/a/Bad Name.md"), "slug.format");
         // A file that becomes a concept follows the concept naming rules too.
         assert_eq!(e("views/v.md", "concepts/b/x.md"), "mv.collision");
         assert_eq!(e("views/v.md", "concepts/b/Bad.md"), "slug.format");
-        assert!(plan(&i, "sources/papers/p", "sources/papers/q", false, |_| false).is_ok());
+        assert!(plan(&i, "sources/papers/p.pdf", "sources/papers/q.pdf", false, |_| false).is_ok());
+        assert!(plan(&i, "sources/papers", "sources/articles", false, |_| false).is_ok());
     }
 
     #[test]
-    fn source_folder_citations_follow() {
-        let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nsources: [\"sources/papers/p#p3\"]\ndigest: d\n---\n# T\n";
-        let i = from_texts(&[
-            ("concepts/a/x.md", c),
-            ("sources/papers/p/paper.pdf", ""),
-            ("sources/papers/p/source.yaml", "sha256: x\n"),
-        ]);
-        let p = plan(&i, "sources/papers/p", "sources/papers/q", false, |_| false).unwrap();
-        assert!(p.writes["concepts/a/x.md"].contains("\"sources/papers/q#p3\""));
+    fn source_citations_follow() {
+        let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ndigest: d\n---\n# T\n\nSee [[sources/papers/p.pdf#p3]].\n";
+        let i = from_texts(&[("concepts/a/x.md", c), ("sources/papers/p.pdf", "")]);
+        let p = plan(&i, "sources/papers/p.pdf", "sources/papers/q.pdf", false, |_| false).unwrap();
+        assert!(p.writes["concepts/a/x.md"].contains("[[sources/papers/q.pdf#p3]]"));
     }
 
     #[test]

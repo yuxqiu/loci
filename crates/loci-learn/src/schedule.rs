@@ -6,7 +6,7 @@ use fsrs::{FSRS, FSRS6_DEFAULT_DECAY, FSRSItem, FSRSReview, MemoryState, current
 use jiff::{Timestamp, ToSpan, tz::TimeZone};
 
 use crate::cards::Card;
-use crate::reviewlog::{Grade, Line};
+use crate::reviewlog::{Grade, Line, Subject};
 
 const SECONDS_PER_DAY: f64 = 86_400.0;
 
@@ -71,7 +71,7 @@ fn add_days(t: Timestamp, days: f64) -> Timestamp {
 fn lines_by_card(lines: &[Line]) -> BTreeMap<&str, Vec<&Line>> {
     let mut out: BTreeMap<&str, Vec<&Line>> = BTreeMap::new();
     for l in lines {
-        if let Some(c) = &l.card {
+        if let Subject::Card(c) = &l.subject {
             out.entry(c.as_str()).or_default().push(l);
         }
     }
@@ -109,7 +109,8 @@ pub fn estimate<'a>(
         let r = rs.iter().sum::<f32>() / rs.len() as f32;
         return (Estimate::Cards { r }, used);
     }
-    let items: Vec<&Line> = lines.iter().filter(|l| l.concept.as_deref() == Some(concept)).collect();
+    let items: Vec<&Line> =
+        lines.iter().filter(|l| matches!(&l.subject, Subject::Concept(c) if c == concept)).collect();
     match items.last() {
         Some(last) => {
             let age_days = (now.as_second() - last.t.as_second()).max(0) as f64 / SECONDS_PER_DAY;
@@ -153,19 +154,9 @@ pub fn select<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::reviewlog::{Grader, Purpose};
 
     fn line(t: &str, grade: Grade) -> Line {
-        Line {
-            t: t.parse().unwrap(),
-            card: Some("C".into()),
-            concept: None,
-            item: None,
-            purpose: Purpose::Review,
-            grader: Grader::Myself,
-            grade,
-            verdicts: None,
-        }
+        Line { t: t.parse().unwrap(), subject: Subject::Card("C".into()), grade }
     }
 
     #[test]
@@ -210,16 +201,7 @@ mod tests {
     }
 
     fn card_line(card: &str, t: &str, grade: Grade) -> Line {
-        Line {
-            t: t.parse().unwrap(),
-            card: Some(card.into()),
-            concept: None,
-            item: None,
-            purpose: Purpose::Review,
-            grader: Grader::Myself,
-            grade,
-            verdicts: None,
-        }
+        Line { t: t.parse().unwrap(), subject: Subject::Card(card.into()), grade }
     }
 
     #[test]
@@ -250,13 +232,8 @@ mod tests {
         let (e, used) = estimate(&cs, "K", &lines, &s, now);
         assert!(matches!(e, Estimate::Cards { r } if r > 0.5 && r <= 1.0));
         assert_eq!(used.len(), 1);
-        let quiz = vec![Line {
-            card: None,
-            concept: Some("K".into()),
-            item: Some("q".into()),
-            purpose: Purpose::Diagnostic,
-            ..card_line("x", "2026-10-28T00:00:00Z", Grade::Hard)
-        }];
+        let quiz =
+            vec![Line { subject: Subject::Concept("K".into()), ..card_line("x", "2026-10-28T00:00:00Z", Grade::Hard) }];
         let (e, _) = estimate(&[], "K", &quiz, &s, now);
         assert!(matches!(e, Estimate::Item { grade: Grade::Hard, age_days } if (age_days - 2.0).abs() < 1e-9));
         assert_eq!(estimate(&[], "K", &[], &s, now).0, Estimate::Unknown);

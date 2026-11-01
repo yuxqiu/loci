@@ -13,7 +13,7 @@ use serde_json::json;
 
 use crate::cards::{self, Card};
 use crate::config::Config;
-use crate::reviewlog::{self, Grade, Grader, Input, Line, Purpose};
+use crate::reviewlog::{self, Grade, Input, Line, Subject};
 use crate::schedule::{self, Estimate, Scheduler};
 
 const SKILL_FILES: &[(&str, &str)] = &[("learn-session", include_str!("../skills/learn-session/SKILL.md"))];
@@ -70,18 +70,15 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
 
 /// Validates a line against the working tree: its card or concept must exist.
 fn check_exists(line: &Line, all: &[Card], index: &Index) -> Result<(), Refusal> {
-    if let Some(card) = &line.card
-        && !all.iter().any(|c| c.id.as_deref() == Some(card))
-    {
-        return Err(Refusal::refused("learn.unknown-card", format!("no card has id `{card}`")));
-    }
-    if let Some(concept) = &line.concept {
-        let known = index.concepts().any(|n| n.fm_str("id") == Some(concept));
-        if !known {
-            return Err(Refusal::refused("learn.unknown-concept", format!("no concept has id `{concept}`")));
+    match &line.subject {
+        Subject::Card(card) if !all.iter().any(|c| c.id.as_deref() == Some(card)) => {
+            Err(Refusal::refused("learn.unknown-card", format!("no card has id `{card}`")))
         }
+        Subject::Concept(concept) if !index.concepts().any(|n| n.fm_str("id") == Some(concept)) => {
+            Err(Refusal::refused("learn.unknown-concept", format!("no concept has id `{concept}`")))
+        }
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 pub fn log(vault: &Vault, mut stdin: impl Read) -> Result<Report, Refusal> {
@@ -163,16 +160,8 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
         for (i, card) in session.iter().enumerate() {
             let progress = format!("{}/{}", i + 1, session.len());
             let Some(grade) = ask(card, &progress, &mut input, &mut err)? else { return Ok(()) };
-            let line = Line {
-                t: Timestamp::now(),
-                card: card.id.clone(),
-                concept: None,
-                item: None,
-                purpose: Purpose::Review,
-                grader: Grader::Myself,
-                grade,
-                verdicts: None,
-            };
+            let id = card.id.clone().expect("only cards with ids are scheduled");
+            let line = Line { t: Timestamp::now(), subject: Subject::Card(id), grade };
             // The interrupt handler takes this lock, so it waits for a line being written
             // and always sees whole lines.
             let mut n = appended.lock().expect("the counter lock is never poisoned");

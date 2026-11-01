@@ -1,4 +1,4 @@
-//! `loci skill show` (m0 §9.9).
+//! `loci skill show` (m0 §9.8).
 
 use loci_core::envelope::{Diagnostic, Outcome, Refusal, Report};
 use loci_core::plugin::{self, Skill};

@@ -1,4 +1,4 @@
-//! `loci block-ids` (m0 §9.10): assign ULID block ids to the top-level blocks of a section.
+//! `loci block-ids` (m0 §9.9): assign ULID block ids to the top-level blocks of a section.
 
 use std::ops::Range;
 
@@ -12,7 +12,7 @@ pub struct Assigned {
     pub id: String,
 }
 
-/// Fresh ULIDs, monotonic within one run (m0 §9.10).
+/// Fresh ULIDs, monotonic within one run (m0 §9.9).
 pub fn ulid_ids() -> impl FnMut() -> String {
     let mut generator = ulid::Generator::new();
     move || generator.generate().expect("a ULID generator does not overflow within one run").to_string()

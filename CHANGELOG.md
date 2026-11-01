@@ -36,9 +36,18 @@ them under its version.
 - `loci bench --agent` no longer waits forever when the agent leaves a process
   holding its output open; the 600-second timeout applies.
 - `plugin.failed` includes what the plugin printed on stderr.
-- `loci mv` refuses to move `sources/` other than as a whole source folder, and a
-  file that becomes a concept must have a valid, unused slug.
+- `loci mv` keeps the source layout (a source can be renamed, not moved out of
+  `sources/<type>/<slug>.<ext>`), and a file that becomes a concept must have a
+  valid, unused slug.
+- A source is one file, `sources/<type>/<slug>.<ext>`, with no folder or
+  `source.yaml`, filed with `loci mv` from the inbox or downloaded into place;
+  where it came from is not recorded. Lint
+  reports a source that differs from its committed version (`sources.changed`).
+- Concepts cite evidence with links in their text, next to the claim.
 - `loci done` reports a failure to delete old records as `done.prune`.
+- A source's extension is lowercase letters and digits with at least one letter;
+  `loci mv` keeps a source's extension and refuses to move a source you have edited
+  (`mv.source-changed`).
 - A line in `plugins/learn/reviews.jsonl` that does not parse is `learn.log` with
   exit 1 (was exit 3).
 - Commands that take a note accept the same path forms everywhere (`./`, a trailing
@@ -47,6 +56,14 @@ them under its version.
 ### Removed
 
 - The home-manager module, and the skill checks in `loci status`.
+- `purpose`, `grader`, `verdicts` and `item` from `loci learn log` input and
+  review-log lines: a line is now the card or concept, the grade and the time.
+- `loci fetch`, and with it loci's only network access (the `ureq` dependency).
+  File a source with `loci mv` from the inbox, or download it into
+  `sources/<type>/<slug>.<ext>` with the agent's own tools.
+- The `sources:` frontmatter field and `sources.unresolved`.
+- `source.yaml` and SHA-256 checks: `sources.no-provenance`, `sources.bad-meta`,
+  `sources.uncovered` and `sources.hash-mismatch`.
 - The `aliases` frontmatter field, with `alias.duplicate`, `mv.frontmatter` and
   `merge.frontmatter`. Other names for a concept go in its title, digest or text,
   which `loci find` searches. `loci mv` and `loci merge` rewrite links only and no

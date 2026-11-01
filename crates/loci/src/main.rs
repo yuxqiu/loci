@@ -21,7 +21,6 @@ pub const CORE_COMMANDS: &[&str] = &[
     "digest",
     "mv",
     "status",
-    "fetch",
     "new",
     "skill",
     "block-ids",
@@ -72,8 +71,6 @@ enum Cmd {
     Mv { from: String, to: String },
     /// Show install state, plugins, changes, inbox, index and rules.
     Status,
-    /// File a source from a URL or an inbox path into sources/<type>/<slug>.
-    Fetch { from: String, dest: String },
     /// Create a concept note.
     New {
         path: String,
@@ -143,7 +140,6 @@ fn main() -> ExitCode {
         Cmd::Digest { area } => ("digest", commands::digest::run(&ctx, area.as_deref())),
         Cmd::Mv { from, to } => ("mv", commands::mv::run(&ctx, &from, &to)),
         Cmd::Status => ("status", commands::status::run(&ctx)),
-        Cmd::Fetch { from, dest } => ("fetch", commands::fetch::run(&ctx, &from, &dest)),
         Cmd::New { path, title } => ("new", commands::new::run(&ctx, &path, title.as_deref())),
         Cmd::Skill { action: SkillCmd::Show { name } } => ("skill show", commands::skill::run(&ctx, name.as_deref())),
         Cmd::BlockIds { note, section } => ("block-ids", commands::blockids::run(&ctx, &note, &section)),

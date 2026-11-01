@@ -2,14 +2,9 @@
 source: crates/loci/tests/lint_fixtures.rs
 expression: diag_lines(&env)
 ---
-concepts/a/c.md:7:6 error sources.unresolved: source `sources/docs/guide#p2` does not resolve
-concepts/a/c.md:8:6 error sources.unresolved: source `sources/papers/heaps#intro` does not resolve
-concepts/a/c.md:9:6 error sources.unresolved: source `sources/docs/guide#nope` does not resolve
-concepts/a/c.md:10:6 error sources.unresolved: source `sources/papers/missing` does not resolve
-concepts/a/c.md:11:6 error sources.unresolved: source `elsewhere/thing` does not resolve
-sources/Talks/intro/talk.md error sources.layout: `sources/Talks/intro/talk.md` is not inside a `sources/<type>/<slug>/` folder
-sources/clippings/badmeta/source.yaml error sources.bad-meta: `source.yaml` is malformed: unknown key `extra`
-sources/clippings/nometa/source.yaml error sources.no-provenance: source folder has no `source.yaml`
-sources/clippings/two/source.yaml error sources.uncovered: source folder must hold exactly one file besides `source.yaml`
-sources/stray.md error sources.layout: `sources/stray.md` is not inside a `sources/<type>/<slug>/` folder
-sources/videos/talk/source.yaml error sources.no-provenance: source folder has no `source.yaml`
+concepts/a/c.md:11:21 error link.dangling-heading: `sources/docs/guide` has no heading `nope`
+concepts/a/c.md:11:53 error link.dangling: `sources/papers/missing.pdf` does not resolve
+sources/Talks/intro.md error sources.layout: `sources/Talks/intro.md` is not a `sources/<type>/<slug>.<ext>` file
+sources/clippings/nested/page.md error sources.layout: `sources/clippings/nested/page.md` is not a `sources/<type>/<slug>.<ext>` file
+sources/papers/noext error sources.layout: `sources/papers/noext` is not a `sources/<type>/<slug>.<ext>` file
+sources/stray.md error sources.layout: `sources/stray.md` is not a `sources/<type>/<slug>.<ext>` file

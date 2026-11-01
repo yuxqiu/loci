@@ -435,45 +435,39 @@ fn empty_vault_digest() {
 fn sources_lint() {
     let (v, code, env) = lint("sources");
     assert_eq!(code, 1);
-    // Citations: `#p3` on a PDF, `#setup` on markdown and a bare folder resolve.
-    let unresolved = covered_by(&v, &env, "sources.unresolved", "concepts/a/c.md");
-    assert_eq!(
-        unresolved,
-        [
-            "sources/docs/guide#p2",
-            "sources/papers/heaps#intro",
-            "sources/docs/guide#nope",
-            "sources/papers/missing",
-            "elsewhere/thing",
-        ]
-    );
-    let has_in = |code: &str, folder: &str| {
-        with_code(&env, code).iter().any(|d| d["path"].as_str().unwrap().starts_with(folder))
-    };
-    assert!(has_in("sources.no-provenance", "sources/clippings/nometa/"));
-    assert!(has_in("sources.bad-meta", "sources/clippings/badmeta/"));
-    assert!(has_in("sources.uncovered", "sources/clippings/two/"));
-    assert!(has(&env, "sources.layout", "sources/stray.md"));
-    // Any slug is a source type; a type that is not a slug is a layout error.
-    assert!(has_in("sources.no-provenance", "sources/videos/talk/"));
-    assert!(!has(&env, "sources.layout", "sources/videos/talk/talk.md"));
-    assert!(has(&env, "sources.layout", "sources/Talks/intro/talk.md"));
-    assert!(with_code(&env, "sources.hash-mismatch").is_empty());
-    // No link diagnostics inside sources.
-    for d in diags(&env) {
-        assert!(!d["code"].as_str().unwrap().starts_with("link."), "{d}");
+    // Citations are ordinary links: a page of a PDF and a heading of a markdown source
+    // resolve; a missing heading or file does not.
+    assert_eq!(covered_by(&v, &env, "link.dangling-heading", "concepts/a/c.md"), ["sources/docs/guide#nope"]);
+    assert_eq!(covered_by(&v, &env, "link.dangling", "concepts/a/c.md"), ["sources/papers/missing.pdf"]);
+    // Every source is `sources/<type>/<slug>.<ext>`, with any slug as the type.
+    for bad in
+        ["sources/stray.md", "sources/Talks/intro.md", "sources/clippings/nested/page.md", "sources/papers/noext"]
+    {
+        assert!(has(&env, "sources.layout", bad), "{bad}: {}", diag_lines(&env));
     }
+    for good in ["sources/videos/talk.md", "sources/papers/heaps.pdf", "sources/docs/guide.md"] {
+        assert!(on_path(&env, good).is_empty(), "{good}: {}", diag_lines(&env));
+    }
+    assert!(with_code(&env, "sources.changed").is_empty());
     assert_snapshot!(diag_lines(&env));
 }
 
 #[test]
-fn sources_hash_mismatch_after_edit() {
+fn sources_changed_after_edit() {
     let v = TestVault::committed(BIN, "sources");
-    v.write("sources/papers/heaps/heaps.pdf", "%PDF-1.4\nedited\n");
+    v.write("sources/papers/heaps.pdf", "%PDF-1.4\nedited\n");
     let (_, env) = v.run(&["lint"]);
-    let mm = with_code(&env, "sources.hash-mismatch");
-    assert_eq!(mm.len(), 1, "{}", diag_lines(&env));
-    assert_eq!(mm[0]["path"], "sources/papers/heaps/heaps.pdf");
+    let changed = with_code(&env, "sources.changed");
+    assert_eq!(changed.len(), 1, "{}", diag_lines(&env));
+    assert_eq!(changed[0]["path"], "sources/papers/heaps.pdf");
+    // An edited source cannot be renamed, which would hide the edit.
+    let (code, env) = v.run(&["mv", "sources/papers/heaps.pdf", "sources/papers/heap-notes.pdf"]);
+    assert_eq!((code, error_code(&env)), (1, "mv.source-changed"), "{env:#}");
+    // Renaming an unchanged source is not a change to it.
+    v.git(&["checkout", "--", "sources/papers/heaps.pdf"]);
+    v.run(&["mv", "sources/papers/heaps.pdf", "sources/papers/heap-notes.pdf"]);
+    let (_, env) = v.run(&["lint"]);
+    assert!(with_code(&env, "sources.changed").is_empty(), "{}", diag_lines(&env));
 }
 
 // ---------------------------------------------------------------- vault discovery

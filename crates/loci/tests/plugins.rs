@@ -47,7 +47,7 @@ fn unknown_command_lists_core_commands_and_plugins() {
     let (code, env) = v.run(&["nosuch"]);
     assert_eq!((code, error_code(&env)), (1, "cmd.unknown"));
     let msg = env["error"]["message"].as_str().unwrap();
-    for c in ["init", "lint", "find", "digest", "mv", "status", "fetch", "new", "skill", "block-ids"] {
+    for c in ["init", "lint", "find", "digest", "mv", "status", "new", "skill", "block-ids"] {
         assert!(msg.contains(c), "{msg}");
     }
     assert!(msg.contains("stub"), "{msg}");

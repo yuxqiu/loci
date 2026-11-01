@@ -10,7 +10,6 @@ use loci_core::digest;
 use loci_core::index::{self, Index};
 use loci_core::lint::Lint;
 use loci_core::mv;
-use loci_core::parse::LinkForm;
 use loci_core::splice::{self, Edit};
 use proptest::prelude::*;
 use proptest::sample::subsequence;
@@ -167,9 +166,6 @@ proptest! {
             let new_note = &after.notes[&mapped(&note.path)];
             prop_assert_eq!(note.links.len(), new_note.links.len(), "{}", note.path);
             for (old, new) in note.links.iter().zip(&new_note.links) {
-                if old.form == LinkForm::Source {
-                    continue;
-                }
                 let Ok(r) = before.resolve(note, old) else { continue };
                 let r2 = after.resolve(new_note, new);
                 prop_assert_eq!(

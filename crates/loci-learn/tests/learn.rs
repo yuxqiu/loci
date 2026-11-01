@@ -88,12 +88,11 @@ fn cards_lint() {
 fn log_commits_alone_and_validates() {
     let v = vault(&[("concepts/a/x.md", &concept(CONCEPT, &format!("- q :: a ^{ID1}\n")))]);
     v.write("views/draft.md", "# Uncommitted\n");
-    let (code, env) = learn(&v, &["log"], r#"{"card":"X","purpose":"pretest","grader":"self","grade":"good"}"#);
+    let (code, env) = learn(&v, &["log"], r#"{"card":"X","grade":"great"}"#);
     assert_eq!(code, 1);
     assert_eq!(error_code(&env), "learn.bad-input");
 
-    let input =
-        format!(r#"{{"card":"{ID1}","purpose":"practice","grader":"llm","verdicts":[[true,true],[true,false]]}}"#);
+    let input = format!(r#"{{"card":"{ID1}","grade":"hard"}}"#);
     let (code, env) = learn(&v, &["log"], &input);
     assert_eq!(code, 0, "{env}");
     assert_eq!(env["data"]["line"]["grade"], "hard");
@@ -103,9 +102,9 @@ fn log_commits_alone_and_validates() {
     assert!(v.git(&["status", "--porcelain", "-uall"]).contains("views/draft.md"), "other changes stay");
 
     let bad = [
-        (format!(r#"{{"card":"{ID1}","purpose":"review","grader":"llm","grade":"good","verdicts":[[true]]}}"#), "learn.bad-input"),
-        (r#"{"card":"01JBXXXXXXXXXXXXXXXXXXXXXX","purpose":"review","grader":"self","grade":"good"}"#.to_string(), "learn.unknown-card"),
-        (r#"{"concept":"01JBXXXXXXXXXXXXXXXXXXXXXX","item":"q","purpose":"diagnostic","grader":"self","grade":"good"}"#.to_string(), "learn.unknown-concept"),
+        (format!(r#"{{"card":"{ID1}","concept":"{CONCEPT}","grade":"good"}}"#), "learn.bad-input"),
+        (r#"{"card":"01JBXXXXXXXXXXXXXXXXXXXXXX","grade":"good"}"#.to_string(), "learn.unknown-card"),
+        (r#"{"concept":"01JBXXXXXXXXXXXXXXXXXXXXXX","grade":"good"}"#.to_string(), "learn.unknown-concept"),
     ];
     for (input, code) in bad {
         let (_, env) = learn(&v, &["log"], &input);
@@ -122,15 +121,11 @@ fn state_kinds() {
     ]);
     let (_, env) = learn(&v, &["state", "x"], "");
     assert_eq!(env["data"]["estimate"]["kind"], "unknown");
-    learn(&v, &["log"], &format!(r#"{{"card":"{ID1}","purpose":"review","grader":"self","grade":"good"}}"#));
+    learn(&v, &["log"], &format!(r#"{{"card":"{ID1}","grade":"good"}}"#));
     let (_, env) = learn(&v, &["state", "x"], "");
     assert_eq!(env["data"]["estimate"]["kind"], "cards");
     assert_eq!(env["data"]["lines"].as_array().unwrap().len(), 1, "only reviewed cards count");
-    learn(
-        &v,
-        &["log"],
-        r#"{"concept":"01JB9XQ7Z3K4M5N6P7Q8R9S0TW","item":"q?","purpose":"diagnostic","grader":"self","grade":"again"}"#,
-    );
+    learn(&v, &["log"], r#"{"concept":"01JB9XQ7Z3K4M5N6P7Q8R9S0TW","grade":"again"}"#);
     let (_, env) = learn(&v, &["state", "y"], "");
     assert_eq!(env["data"]["estimate"]["kind"], "item");
     assert_eq!(env["data"]["estimate"]["grade"], "again");
@@ -178,7 +173,10 @@ fn new_per_day_limit() {
 #[test]
 fn deleted_card_lines_are_ignored() {
     let v = vault(&[("concepts/a/x.md", &concept(CONCEPT, &format!("- q1 :: a1 ^{ID1}\n")))]);
-    v.write("plugins/learn/reviews.jsonl", r#"{"t":"2020-01-01T00:00:00Z","card":"01JBGONEGONEGONEGONEGONEGO","purpose":"review","grader":"self","grade":"good"}"#);
+    v.write(
+        "plugins/learn/reviews.jsonl",
+        r#"{"t":"2020-01-01T00:00:00Z","card":"01JBGONEGONEGONEGONEGONEGO","grade":"good"}"#,
+    );
     v.write("plugins/learn/reviews.jsonl", &(v.read("plugins/learn/reviews.jsonl") + "\n"));
     let (_, env) = learn(&v, &["review"], "q\n");
     assert_eq!(env["data"]["new"], 1, "{env}");

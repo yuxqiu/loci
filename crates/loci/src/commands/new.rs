@@ -1,4 +1,4 @@
-//! `loci new` (m0 §9.8).
+//! `loci new` (m0 §9.7).
 
 use loci_core::envelope::{Outcome, Refusal, Report};
 use loci_core::index::Index;
@@ -30,7 +30,7 @@ pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal
         return Err(Refusal::refused("new.collision", format!("`{slug}` is already a concept's slug")));
     }
     let id = vault::new_concept_id();
-    let text = format!("---\nid: {id}\nprereqs: []\nsources: []\ndigest: \"\"\n---\n# {}\n", title.unwrap_or(&slug));
+    let text = format!("---\nid: {id}\nprereqs: []\ndigest: \"\"\n---\n# {}\n", title.unwrap_or(&slug));
     if let Some(parent) = abs.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {

@@ -12,10 +12,9 @@ path reaches something the user already knows.
 ## Recording
 
 - Grades go to the review log with `loci learn log` (one JSON object on stdin):
-  - a card: `{"card": "<card id>", "purpose": "diagnostic"|"practice", "grader": "llm", "verdicts": [[true, false, ...]]}`;
-  - a quiz item without a card: `{"concept": "<concept id>", "item": "<the question>", "purpose": "diagnostic"|"practice", "grader": "llm", "verdicts": [[...]]}`.
-  Use `"grader": "self", "grade": "again"|"hard"|"good"|"easy"` when the user grades
-  themselves.
+  `{"card": "<card id>", "grade": "<grade>"}` for a card, or
+  `{"concept": "<concept id>", "grade": "<grade>"}` for a question on a concept that
+  has no card. A grade is `again`, `hard`, `good` or `easy`.
 - The session's questions on the material, their answers and grades, are recorded in
   a dated journal entry for the session in `journal/learn/` (named as the framework
   rules say), not in the review log.
@@ -23,10 +22,10 @@ path reaches something the user already knows.
 
 ## Grading
 
-Before showing an item, fix its reference answer and a short rubric. Grade the answer
-with two independent judgements, each a verdict per rubric criterion, and log both
-arrays as `verdicts`. If the user disputes a grade, re-judge with a fresh judgement
-that does not see the first verdict, and log only that one.
+Before showing a question, fix its reference answer and a short rubric. Grade the
+answer against the rubric: every criterion met is `good`, some met is `hard`, none
+met is `again`. Show the grade before logging it. If the user disputes it, re-judge
+from scratch without looking at the first grade, and log only the final grade.
 
 ## Steps
 
@@ -34,7 +33,8 @@ that does not see the first verdict, and log only that one.
    understood without; the user may edit, add or drop them. The user answers them
    before any teaching. Record questions, answers and grades in the session's journal
    entry.
-1. **Identify.** File the material with `loci fetch`. List the concepts it uses, with
+1. **Identify.** File the material as a source (framework rules, "Filing a
+   source"). List the concepts it uses, with
    the passages that use them. Each is load-bearing (the material cannot be
    understood without it) or peripheral (it gets a one-line definition where it
    appears).
@@ -43,8 +43,8 @@ that does not see the first verdict, and log only that one.
    corrects each. Know and shaky are the boundary; don't-know concepts are expanded.
    For a concept already in the knowledge base, offer its `prereqs` as the next level.
 3. **Expand.** For each don't-know concept, find external material that explains it
-   (the introducing paper, a textbook chapter, documentation), file it with
-   `loci fetch`, list its load-bearing prerequisites and sort them as in step 2.
+   (the introducing paper, a textbook chapter, documentation), file it as a source,
+   list its load-bearing prerequisites and sort them as in step 2.
    Repeat until every branch reaches the boundary or the user stops. New concept
    notes record their `prereqs`. Watch for synonyms (duplicate expansion) and
    homonyms (a false "know").

@@ -88,19 +88,13 @@ Reads exactly one JSON object from stdin:
 | Key | Required | Meaning |
 |---|---|---|
 | `card` | one of `card`, `concept` | card id (§1.2) |
-| `concept` | one of `card`, `concept` | concept ULID, for a quiz item that has no card |
-| `item` | iff `concept` | the prompt of the quiz item |
-| `purpose` | yes | `diagnostic`, `practice` or `review` |
-| `grader` | yes | `self` or `llm` |
-| `grade` | iff `grader` is `self` | `again`, `hard`, `good` or `easy` |
-| `verdicts` | iff `grader` is `llm` | `[[bool, ...], ...]`: one array per grader call (one or two calls), one boolean per rubric criterion |
+| `concept` | one of `card`, `concept` | concept ULID, for a graded question on a concept that has no card |
+| `grade` | yes | `again`, `hard`, `good` or `easy` |
 
-For `grader: llm`, `log` derives `grade` from `verdicts` (§3) and rejects a supplied
-`grade`. It adds `t` (now, UTC), validates, and appends the line to
+It adds `t` (now, UTC), validates, and appends the line to
 `plugins/learn/reviews.jsonl`.
 
-- Input that does not match the table, or purpose `review` without a `card`:
-  `learn.bad-input`.
+- Input that does not match the table: `learn.bad-input`.
 - A `card` that is not a card id in the working tree: `learn.unknown-card`.
 - A `concept` that does not name a concept note in the working tree:
   `learn.unknown-concept`.
@@ -126,7 +120,7 @@ by several concepts is `concept.ambiguous`). An unknown one is
 {"concept": "01JB9XQ7Z3K4M5N6P7Q8R9S0TV",
  "estimate": {"kind": "cards", "r": 0.82},
  "lines": [{"t": "2026-10-30T12:00:00Z", "card": "01JBA2K7N4P8R3T6W9X2Z5C8DF",
-            "purpose": "review", "grader": "self", "grade": "good"}]}
+            "grade": "good"}]}
 ```
 
 `estimate` is one of `{"kind": "cards", "r"}`, `{"kind": "item", "grade",
@@ -147,7 +141,7 @@ was computed from (§4.2), in timestamp order; empty for `unknown`.
 4. Runs a terminal loop over the selection: show the question, wait, reveal the
    answer, read a self-grade (`again`, `hard`, `good` or `easy`).
 5. Appends each grade at once, through the same validation and append code as
-   `log` (purpose `review`, grader `self`), without committing.
+   `log`, without committing.
 6. If any line was appended, commits once, at the end of the session or on
    interrupt (SIGINT), as `log` does. If that commit fails, the appended lines stay
    in the working tree and the command exits 3. If no line was appended, nothing is
@@ -169,29 +163,11 @@ recomputed from it and from the notes; nothing computed is stored.
 - **A line that does not parse** (a bad merge, a hand edit) is `learn.log` (exit 1)
   for every command that reads the log; it names the line.
 
-A line has the keys of the `log` input (§2.4) plus `t` (UTC, RFC 3339) and, for
-`grader: llm`, the derived `grade`.
-
-`purpose` is read by the M3 evaluation. The learn skill's questions on the
-material, asked at the start of a session and again at its end, are not logged here;
-the skill records them in a dated journal entry for the session, written through the
-usual workflow. `grader`,
-`verdicts` and `item` are read by the M3 evaluation: grader agreement and results by
-item.
-
-**Grades from LLM grading.** Each grader call (one array of `verdicts`) gives one
-result:
-
-- **pass** if every rubric criterion passes;
-- **fail** if none does;
-- **partial** otherwise.
-
-Pass maps to `good`, partial to `hard` and fail to `again`. If two grader calls give
-different results, the grade is `hard`.
-
-**Disputes.** The skill logs a grade only after the user has seen it. If the user
-disputes it, a fresh grader re-judges the answer, and the skill logs one line with
-that grader's single `verdicts` array.
+A line has the keys of the `log` input (§2.4) plus `t` (UTC, RFC 3339). How a grade
+was reached (self-graded or judged by the agent against a rubric) is the learn
+skill's concern and is not recorded. The learn skill's questions on the material,
+asked at the start of a session and again at its end, are recorded in a dated
+journal entry for the session, not here.
 
 **Changed or deleted notes.**
 
@@ -236,6 +212,6 @@ A concept has no FSRS state of its own. Its estimate is derived:
 | `cards` | cards in a tight list and in a loose list parse the same; a multi-line card; a card with a nested list in its answer and its id before the nested list is valid; `std::vector` and `::` inside inline code do not split; `q ::` at a line end splits; missing `::` → `learn.card-format`; a card without a block id → `learn.no-id` with the `block-ids` hint; a hand-written short id → `learn.id-form`; the same id in two notes → `learn.id-duplicate`; a second `## Cards` H2 → `learn.card-format`; all reported through `loci lint`; `lint` writes nothing and returns `data: null` |
 | `config` | without a file, `review` uses `new_per_day` 20 and `desired_retention` 0.9; a file overrides them; an unknown key, a wrong type, a negative `new_per_day` and a `desired_retention` of 0 or 1 are each `learn.config` |
 | `version` | an incompatible `LOCI_VERSION` is `plugin.version`; an unset `LOCI_VERSION` is `plugin.direct` |
-| `log` | an unknown purpose is `learn.bad-input`; the first line ever creates `plugins/learn/` and its `.gitattributes`, and the line and `.gitattributes` are committed alone; nothing outside `plugins/learn/` is written; later lines likewise; other uncommitted and intent-to-add changes stay untouched; `llm` input derives `grade` from `verdicts` and rejects a supplied `grade`; `learn.bad-input`, `learn.unknown-card`, `learn.unknown-concept` |
+| `log` | an unknown grade, or both or neither of `card` and `concept`, is `learn.bad-input`; the first line ever creates `plugins/learn/` and its `.gitattributes`, and the line and `.gitattributes` are committed alone; nothing outside `plugins/learn/` is written; later lines likewise; other uncommitted and intent-to-add changes stay untouched; `learn.bad-input`, `learn.unknown-card`, `learn.unknown-concept` |
 | `state` | each `estimate` kind; mean R over reviewed cards only; the lines behind the estimate; an unknown slug |
 | `review` | due cards by due time (a card becomes due when its predicted retrievability reaches `desired_retention`), then at most `new_per_day` new cards in note-path and position order; a line for a deleted card is ignored; grades are appended one by one and committed once at the end, and once on interrupt; a failed final commit leaves the lines and exits 3; a session with no grades commits nothing and exits 0; no note is written |

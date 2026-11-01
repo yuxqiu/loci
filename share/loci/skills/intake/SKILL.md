@@ -40,15 +40,12 @@ entries have no frontmatter; add concept links in the body only.
 
 ## Sources (`inbox/sources/`)
 
-1. Choose the type and a slug, then `loci fetch inbox/sources/<file> <type>/<slug>`.
-   Use a type the vault already has (`ls sources/`) when one fits, such as
-   `papers` (slug: the citekey), `docs` or `clippings`; otherwise agree a new one
-   with the user. Both are slugs.
+1. File it as the framework rules say ("Filing a source").
 2. For an annotated PDF, the annotations are the user's: process highlights and
    comments like a draft. If the paper is already filed, keep the filed copy,
    process only the new annotations, and delete the new copy.
-3. Extract concepts, citing `sources/<type>/<slug>#p<N>` (PDF page) or
-   `#<heading>` (markdown).
+3. Extract concepts, citing next to each claim `[[sources/<type>/<slug>.pdf#p<N>]]`
+   (PDF page) or `[[sources/<type>/<slug>#<heading>]]` (markdown).
 
 ## Finish
 

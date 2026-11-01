@@ -273,15 +273,15 @@ fn links_lists_outgoing_and_incoming() {
             "concepts/g/bfs.md",
             concept(
                 IDS[0],
-                "prereqs: [\"[[queue]]\"]\nsources: [\"sources/papers/p#p2\"]\n",
+                "prereqs: [\"[[queue]]\"]\n",
                 "d",
-                "# BFS\n\n## Proof\n\nSee [[missing]].\n\n![[concepts/g/attachments/grid.png]]\n",
+                "# BFS\n\n## Proof\n\nSee [[missing]] and [[sources/papers/p.pdf#p2]].\n\n![[concepts/g/attachments/grid.png]]\n",
             ),
         ),
         ("concepts/g/queue.md", concept(IDS[1], "", "d", "# Queue\n")),
         ("views/v.md", "# V\n\n[[bfs#Proof]] and [[concepts/g/bfs]].\n".into()),
         ("concepts/g/attachments/grid.png", "PNG".into()),
-        ("sources/papers/p/p.pdf", "%PDF".into()),
+        ("sources/papers/p.pdf", "%PDF".into()),
     ]);
     let (code, env) = v.run(&["links", "bfs"]);
     assert_eq!(code, 0, "{env:#}");
@@ -297,8 +297,8 @@ fn links_lists_outgoing_and_incoming() {
         out,
         [
             ("prereq".into(), json!("concepts/g/queue.md")),
-            ("source".into(), json!("sources/papers/p")),
             ("wiki".into(), json!(null)),
+            ("wiki".into(), json!("sources/papers/p.pdf")),
             ("embed".into(), json!("concepts/g/attachments/grid.png")),
         ]
     );
@@ -311,39 +311,16 @@ fn links_lists_outgoing_and_incoming() {
         .collect();
     assert_eq!(incoming, [("views/v.md", 3), ("views/v.md", 3)]);
 
-    // A prerequisite is an incoming link; a source file is cited through its folder; an image is embedded.
+    // A prerequisite is an incoming link; a source is cited by an ordinary link; an image is embedded.
     let (_, env) = v.run(&["links", "queue"]);
     assert_eq!(env["data"]["incoming"][0]["path"], "concepts/g/bfs.md");
     assert_eq!(env["data"]["incoming"][0]["form"], "prereq");
-    let (_, env) = v.run(&["links", "sources/papers/p/p.pdf"]);
-    assert_eq!(env["data"]["incoming"][0]["form"], "source", "{env:#}");
+    let (_, env) = v.run(&["links", "sources/papers/p.pdf"]);
+    assert_eq!(env["data"]["incoming"][0]["path"], "concepts/g/bfs.md", "{env:#}");
     let (_, env) = v.run(&["links", "concepts/g/attachments/grid.png"]);
     assert_eq!(env["data"]["incoming"][0]["form"], "embed", "{env:#}");
     assert_eq!(env["data"]["outgoing"], json!([]));
 
     let (code, env) = v.run(&["links", "views/nothing"]);
     assert_eq!((code, error_code(&env)), (1, "links.unknown"));
-}
-
-#[test]
-fn lint_links_and_mv_agree_on_sources_entries() {
-    let v = vault(&[
-        ("concepts/g/x.md", concept(IDS[0], "sources: [\"journal/r/day.md\", \"concepts/g\"]\n", "d", "# X\n")),
-        ("journal/r/day.md", "# Day\n".into()),
-    ]);
-    let (_, env) = v.run(&["lint"]);
-    let unresolved: Vec<&str> =
-        with_code(&env, "sources.unresolved").iter().map(|d| d["message"].as_str().unwrap()).collect();
-    assert_eq!(unresolved.len(), 1, "{env:#}");
-    assert!(unresolved[0].contains("concepts/g"), "a concept folder is not a source");
-    let (_, env) = v.run(&["links", "x"]);
-    let targets: Vec<&serde_json::Value> =
-        env["data"]["outgoing"].as_array().unwrap().iter().map(|l| &l["target"]).collect();
-    assert_eq!(targets, [&json!("journal/r/day.md"), &json!(null)]);
-    assert_eq!(env["data"]["incoming"], json!([]), "a note does not link to itself through its folder");
-    let (code, env) = v.run(&["mv", "journal/r/day.md", "journal/r/day2.md"]);
-    assert_eq!(code, 0, "{env:#}");
-    assert!(v.read("concepts/g/x.md").contains("\"journal/r/day2\""), "{}", v.read("concepts/g/x.md"));
-    let (_, env) = v.run(&["lint"]);
-    assert_eq!(with_code(&env, "sources.unresolved").len(), 1, "mv keeps the journal source resolving");
 }

@@ -17,6 +17,5 @@ pub mod parse;
 pub mod plugin;
 pub mod relink;
 pub mod search;
-pub mod sources;
 pub mod splice;
 pub mod vault;

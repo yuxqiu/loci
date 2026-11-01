@@ -2,23 +2,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::LazyLock;
 
-use regex::Regex;
 use unicode_normalization::is_nfc;
 
 use crate::config::Budgets;
 use crate::digest;
 use crate::envelope::{Diagnostic, sort_diagnostics};
 use crate::git;
-use crate::index::{FileIssue, Index, LinkError, SourceTarget};
-use crate::parse::{FmError, FmValue, LinkForm, Note, TopBlock, prereq_slug, verbatim};
-use crate::sources::{SourceMeta, hex_sha256};
+use crate::index::{FileIssue, Index, LinkError};
+use crate::parse::{FmError, FmValue, Note, TopBlock, prereq_item};
 use crate::vault::{self, Kind};
 
-static PAGE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^p[1-9][0-9]*$").unwrap());
-
-const CONCEPT_FIELDS: [&str; 4] = ["id", "prereqs", "sources", "digest"];
+const CONCEPT_FIELDS: [&str; 3] = ["id", "prereqs", "digest"];
 
 /// The rules over the index (§7.3). The rules that read file bytes or git are
 /// [`disk_rules`].
@@ -179,35 +174,14 @@ impl Lint<'_> {
             }
             Some(v) => out.push(ty("id", "a string", v.span())),
         }
-        // The list fields: (key, expected type, hint, whether an item is valid).
-        type ItemOk = fn(&FmValue, &str) -> bool;
-        let lists: [(&str, &str, Option<&str>, ItemOk); 2] = [
-            ("prereqs", "a list of `\"[[slug]]\"`", Some("write \"[[slug]]\""), |i, text| {
-                matches!(i, FmValue::Str { value, span, quoted: true }
-                    if prereq_slug(value).is_some() && verbatim(text, span, value, true))
-            }),
-            (
-                "sources",
-                "a list of strings without escapes",
-                None,
-                |i, text| matches!(i, FmValue::Str { value, span, quoted } if verbatim(text, span, value, *quoted)),
-            ),
-        ];
-        for (key, t, hint, item_ok) in lists {
-            let wrong = |span| {
-                let d = ty(key, t, span);
-                match hint {
-                    Some(h) => d.with_hint(h),
-                    None => d,
-                }
-            };
-            match get(key) {
-                None => {}
-                Some(FmValue::List { items, .. }) => {
-                    out.extend(items.iter().filter(|i| !item_ok(i, text)).map(|i| wrong(i.span())));
-                }
-                Some(v) => out.push(wrong(v.span())),
+        // `prereqs`: a list of `"[[slug]]"`, written verbatim.
+        let wrong = |span| ty("prereqs", "a list of `\"[[slug]]\"`", span).with_hint("write \"[[slug]]\"");
+        match get("prereqs") {
+            None => {}
+            Some(FmValue::List { items, .. }) => {
+                out.extend(items.iter().filter(|i| prereq_item(text, i).is_none()).map(|i| wrong(i.span())))
             }
+            Some(v) => out.push(wrong(v.span())),
         }
         match get("digest") {
             None => out.push(d("fm.missing-field", "concept has no `digest`".into())),
@@ -250,12 +224,6 @@ impl Lint<'_> {
             let at = |code: &str, msg: String| {
                 Diagnostic::error(code, msg).at_path(path).at(text, link.target_range.clone())
             };
-            if link.form == LinkForm::Source {
-                if !self.source_ok(link) {
-                    out.push(at("sources.unresolved", format!("source `{}` does not resolve", link.raw)));
-                }
-                continue;
-            }
             match self.index.resolve(note, link) {
                 Ok(_) => {}
                 Err(LinkError::Dangling { hint }) => {
@@ -279,21 +247,6 @@ impl Lint<'_> {
                     format!("`{}` has no block `{}`", target_name(note, link), link.fragment.as_deref().unwrap_or("")),
                 )),
             }
-        }
-    }
-
-    /// `sources:` entries (§5.5).
-    fn source_ok(&self, link: &crate::parse::Link) -> bool {
-        let Some(target) = self.index.resolve_source(link) else { return false };
-        let Some(frag) = link.fragment.as_deref() else { return true };
-        match target {
-            // `#p<N>` on the folder's single PDF; `#heading` on its single markdown file.
-            SourceTarget::Folder(folder) => match folder.original() {
-                Some(file) if PAGE.is_match(frag) => file.ends_with(".pdf"),
-                Some(file) => file.ends_with(".md") && self.index.check_fragment(&file, frag).is_ok(),
-                None => false,
-            },
-            SourceTarget::Note(note) => !frag.starts_with('^') && self.index.check_fragment(&note, frag).is_ok(),
         }
     }
 
@@ -355,24 +308,13 @@ impl Lint<'_> {
         }
     }
 
-    /// Source folder layout (§6.4): files inside `sources/<type>/<slug>/`, each folder
-    /// one file plus `source.yaml`.
+    /// Source layout (§6.4): every file under `sources/` is `sources/<type>/<slug>.<ext>`.
     fn source_layout(&self, out: &mut Vec<Diagnostic>) {
-        for f in self.index.files.iter().filter(|f| f.starts_with("sources/") && vault::source_folder(f).is_none()) {
+        for f in self.index.files.iter().filter(|f| f.starts_with("sources/") && !vault::is_source_file(f)) {
             out.push(
-                Diagnostic::error("sources.layout", format!("`{f}` is not inside a `sources/<type>/<slug>/` folder"))
+                Diagnostic::error("sources.layout", format!("`{f}` is not a `sources/<type>/<slug>.<ext>` file"))
                     .at_path(f),
             );
-        }
-        for folder in self.index.sources.values() {
-            let at =
-                |code: &str, msg: &str| Diagnostic::error(code, msg).at_path(format!("{}/source.yaml", folder.path));
-            if folder.original().is_none() {
-                out.push(at("sources.uncovered", "source folder must hold exactly one file besides `source.yaml`"));
-            }
-            if !folder.has_meta() {
-                out.push(at("sources.no-provenance", "source folder has no `source.yaml`"));
-            }
         }
     }
 }
@@ -476,59 +418,41 @@ fn prereq_cycles(index: &Index, out: &mut Vec<Diagnostic>) {
     }
 }
 
-/// The rules that read file bytes or git (§7.3): `source.yaml` and the SHA-256 of
-/// each source, and `material-dropped`. Unsorted; the caller merges them with
-/// [`Lint::run`].
-pub fn disk_rules(index: &Index, root: &Path) -> Vec<Diagnostic> {
+/// The rules that compare the working tree with HEAD (§7.3): `sources.changed` and
+/// `material-dropped`. Without a HEAD there is nothing to compare; a git failure is
+/// warning `git.failed`, and neither rule is checked. Unsorted; the caller merges them
+/// with [`Lint::run`].
+pub fn disk_rules(root: &Path) -> Vec<Diagnostic> {
     let mut out = vec![];
-    let unreadable = |path: &str, e: std::io::Error| {
-        Diagnostic::error("file.unreadable", format!("file cannot be read: {e}")).at_path(path)
-    };
-    // Folders without `source.yaml` are `sources.no-provenance` (Lint::run).
-    for folder in index.sources.values().filter(|f| f.has_meta()) {
-        let meta = format!("{}/source.yaml", folder.path);
-        let meta_text = match std::fs::read_to_string(root.join(&meta)) {
-            Ok(t) => t,
-            Err(e) => {
-                out.push(unreadable(&meta, e));
-                continue;
-            }
-        };
-        let sha = match SourceMeta::parse(&meta_text) {
-            Ok(m) => m.sha256,
-            Err(reason) => {
-                out.push(
-                    Diagnostic::error("sources.bad-meta", format!("`source.yaml` is malformed: {reason}"))
-                        .at_path(meta.as_str()),
-                );
-                continue;
-            }
-        };
-        if let Some(file) = folder.original() {
-            match std::fs::read(root.join(&file)) {
-                Ok(bytes) if hex_sha256(&bytes) != sha => out.push(
-                    Diagnostic::error("sources.hash-mismatch", format!("`{file}` does not match its recorded SHA-256"))
-                        .at_path(file.as_str()),
-                ),
-                Ok(_) => {}
-                Err(e) => out.push(unreadable(&file, e)),
-            }
+    let checked = git::has_head(root).and_then(|head| {
+        if !head {
+            return Ok(());
         }
+        let changes = git::status(root)?;
+        sources_changed(&changes, &mut out);
+        check_material(root, &changes, &mut out)
+    });
+    if let Err(e) = checked {
+        out.push(Diagnostic::warning(
+            "git.failed",
+            format!("git failed, `sources.changed` and `material-dropped` were not checked: {e}"),
+        ));
     }
-    material_dropped(root, &mut out);
     out
 }
 
-/// `material-dropped` (§7.3): compares the working tree with HEAD, if there is one. A
-/// git failure is warning `git.failed`, and the rule is not checked.
-fn material_dropped(root: &Path, out: &mut Vec<Diagnostic>) {
-    let checked = git::has_head(root).and_then(|head| if head { check_material(root, out) } else { Ok(()) });
-    if let Err(e) = checked {
-        out.push(Diagnostic::warning("git.failed", format!("git failed, `material-dropped` was not checked: {e}")));
+/// `sources.changed` (§6.4): a source's content differs from HEAD at the same path.
+fn sources_changed(changes: &git::Changes, out: &mut Vec<Diagnostic>) {
+    for p in changes.modified.iter().filter(|p| p.starts_with("sources/")) {
+        out.push(
+            Diagnostic::error("sources.changed", format!("source `{p}` differs from its committed version"))
+                .at_path(p.as_str())
+                .with_hint("sources never change; add a new source instead"),
+        );
     }
 }
 
-fn check_material(root: &Path, out: &mut Vec<Diagnostic>) -> Result<(), String> {
+fn check_material(root: &Path, changes: &git::Changes, out: &mut Vec<Diagnostic>) -> Result<(), String> {
     const CATEGORIES: [&str; 3] = ["math spans", "images", "fenced code blocks"];
     let counts = |text: &[u8], path: &str| -> [usize; 3] {
         // A file that is not UTF-8 holds no parsed material (lint reports it).
@@ -537,7 +461,6 @@ fn check_material(root: &Path, out: &mut Vec<Diagnostic>) -> Result<(), String> 
         [c.math, c.images, c.code]
     };
     let head = |p: &str| git::show(root, "HEAD", p).map(|b| counts(&b, p));
-    let changes = git::status(root)?;
     let mut deleted = [0usize; 3];
     let mut added = [0usize; 3];
     // Per category, the first deleted path that held any (§7.1: vault-level rules
@@ -606,17 +529,17 @@ mod tests {
 
     #[test]
     fn escaped_frontmatter_links_are_rejected_not_linked() {
-        let note = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nprereqs: [\"[[caf\\u00e9]]\"]\nsources: [\"views/\\x61\"]\ndigest: d\n---\n# X\n";
+        let note = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nprereqs: [\"[[caf\\u00e9]]\"]\ndigest: d\n---\n# X\n";
         let files = [("concepts/a/x.md", note), ("concepts/a/AREA.md", "# A\n\nArea.\n"), ("concepts/a/café.md", "")];
         let d = lint(&files);
         let x = |code: &str| d.iter().filter(|(p, c)| p == "concepts/a/x.md" && c == code).count();
-        assert_eq!(x("fm.field-type"), 2, "{d:?}");
+        assert_eq!(x("fm.field-type"), 1, "{d:?}");
         let index = crate::index::from_texts(&files);
         assert!(index.notes["concepts/a/x.md"].links.is_empty(), "no link from an escaped scalar");
     }
 
     const OK: &str =
-        "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nsources: [\"journal/r/2025/03/25-03-14\"]\ndigest: A thing.\n---\n# A\n";
+        "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ndigest: A thing.\n---\n# A\n\nSee [[journal/r/2025/03/25-03-14]].\n";
 
     #[test]
     fn clean_vault() {

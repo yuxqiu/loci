@@ -1,4 +1,4 @@
-//! `loci block-ids` (m0 §9.10).
+//! `loci block-ids` (m0 §9.9).
 
 use loci_core::blockids;
 use loci_core::envelope::{Outcome, Refusal, Report};

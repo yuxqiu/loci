@@ -8,7 +8,6 @@ pub mod digest;
 pub mod dispatch;
 pub mod done;
 pub mod export;
-pub mod fetch;
 pub mod find;
 pub mod init;
 pub mod links;

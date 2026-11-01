@@ -95,8 +95,7 @@ concepts/<area>/[<sub-area>/]
   AREA.md                         (top-level areas only) one paragraph on what the area holds
   <slug>.md                       concept notes
   attachments/                    images used by notes in this folder
-sources/<type>/<slug>/            type: any slug (e.g. papers, docs, clippings); the original file
-  source.yaml                     plus its provenance record
+sources/<type>/<slug>.<ext>       one original file; type: any slug (e.g. papers, docs, clippings)
 journal/<stream>/...               dated records; folders and names below the stream are free
 views/<name>.md                   a curated view: concept links in a chosen order
 views/learn/<concept>.md          a learning plan
@@ -134,14 +133,13 @@ directly in `inbox/`, outside its subfolders, is a lint warning.
 ---
 id: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV
 prereqs: ["[[priority-queue]]", "[[edge-relaxation]]"]
-sources:
-  - "sources/papers/dijkstra-1959#p2"
-  - "journal/research/2025/03/25-03-14"
 digest: One sentence that summarises the concept.
 ---
 # Dijkstra's algorithm
 
-Explanation in the user's style, linking related concepts.
+Explanation in the user's style, linking related concepts and citing evidence next to
+each claim: the greedy choice is safe for non-negative weights
+([[sources/papers/dijkstra-1959.pdf#p2]]).
 
 ## Example: shortest paths from one city
 ## Open questions
@@ -152,11 +150,12 @@ Explanation in the user's style, linking related concepts.
 - **`id`:** a ULID, permanent across renames.
 - **`prereqs`:** direct prerequisites only; the closure is computed. Cycles are
   errors.
-- **`sources`:** evidence: paths into `sources/` or `journal/`, optionally with
-  `#p<page>` or `#heading`. Never another concept. Notes written from the user's
-  own drafts may have none; where a concept came from is in git history (the
-  intake commit deletes the draft and writes the concept).
 - **`digest`:** one sentence, shown by `loci digest`.
+- **Citations:** evidence is cited with a link in the text, next to the claim it
+  supports: a page of a source (`[[sources/papers/x.pdf#p3]]`), a heading of a
+  markdown source, or a journal entry. Never another concept. Notes written from the
+  user's own drafts may cite nothing; where a concept came from is in git history
+  (the intake commit deletes the draft and writes the concept).
 - **H1:** the title. Exactly one, directly after the frontmatter.
 - **Other names** (abbreviations, spellings, a translation, the names of sub-ideas
   folded into the note) go in the H1, the digest or the text, which `loci find`
@@ -188,14 +187,16 @@ concept note.
 
 ### 4.5 Sources
 
-Every source folder holds exactly one original file and one `source.yaml`, which
-records the file's SHA-256 and, for a fetched file, its URL. The file's type comes
-from its extension.
+A source is one original file, `sources/<type>/<slug>.<ext>`. Its type comes from
+its extension. Where a downloaded source came from is not recorded: the file itself
+is enough to find it again.
 
-`loci fetch <url | inbox-path> <type>/<slug>` is the only way to add a source.
-Clippings arrive through `inbox/sources/`. Lint checks every source file against
-its SHA-256 (`sources.hash-mismatch`, an error), so sources never change. PDFs are
-committed. Their
+The agent files a source by moving an inbox file into place with `loci mv`, or by
+downloading a URL straight into place; the framework rules say how to choose the
+type and slug, and lint checks the layout (`sources.layout`). Clippings arrive
+through `inbox/sources/`. Sources never change: git holds the original, and lint
+reports a source that differs from its committed version (`sources.changed`, an
+error). PDFs are committed. Their
 extracted text (equations as LaTeX, from marker or MinerU packaged with Nix) is a
 cache in `.loci/`, tagged with the tool and version.
 
@@ -275,8 +276,8 @@ It never rewrites hand-edited text unless the request covers it.
 |---|---|
 | `inbox/drafts/` | concept text merged into existing or new notes (links to existing concepts are kept as links); an arrangement of existing concepts becomes a view; results and questions go to the journal; the draft is deleted in the same commit, so `git log -p` on the concept shows it |
 | `inbox/journal/<stream>/` | a journal entry in `journal/<stream>/`, named like the stream's other entries; concepts are extracted from it |
-| `inbox/sources/` (a clipping) | `sources/clippings/<slug>/`; concepts are extracted |
-| `inbox/sources/` (a PDF or other document) | `sources/papers/<key>/` or `sources/docs/<slug>/`; see below |
+| `inbox/sources/` (a clipping) | `sources/clippings/<slug>.md`; concepts are extracted |
+| `inbox/sources/` (a PDF or other document) | `sources/papers/<key>.pdf` or `sources/docs/<slug>.<ext>`; see below |
 
 An annotated PDF goes through four steps:
 
@@ -286,7 +287,8 @@ An annotated PDF goes through four steps:
 2. **Process the annotations as a draft.** Highlights mark the passages that
    matter. Comments become concept text or open questions. The user's opinions about
    the paper as a whole go into a journal entry.
-3. **Extract concepts.** They cite `sources/papers/<key>#p<page>`.
+3. **Extract concepts.** They cite `[[sources/papers/<key>.pdf#p<page>]]` next to
+   each claim.
 4. **Review.** The user reviews everything as one diff.
 
 ### 5.3 Rules for the agent
@@ -307,8 +309,9 @@ These are in the framework rules and the skills:
 
 - **`material-dropped` (warning):** compared with HEAD, the deleted files held more
   math, images or code blocks than were added elsewhere.
-- **`sources.hash-mismatch` (error):** a source file does not match its SHA-256.
-- A dangling link is an error. Sources are not link-checked.
+- **`sources.changed` (error):** a source differs from its committed version.
+- A dangling link, a citation included, is an error. Sources themselves are not
+  link-checked.
 
 ## 6. Learning (the `learn` plugin)
 
@@ -341,7 +344,6 @@ history, when it moves to another note. Core does not interpret `## Cards`.
 - **A concept with cards.** Its estimate is derived from its cards' R.
 - **A concept without cards.** Its estimate is the outcome and age of its last
   graded item.
-- **Purpose.** Each graded line carries one: `diagnostic`, `practice` or `review`.
 - **Storage.** Estimates are recomputed from the review log and never stored. Each
   grade is appended to the log as it happens. `loci learn log` commits per call;
   `loci learn review` commits once at the end of a session. Lines whose concept or
@@ -359,7 +361,7 @@ question.
    them before any teaching. The questions, the answers and their grades are written
    to a dated journal entry for the session (`journal/learn/`). They are asked again
    at the end (step 6), and afterwards become cards on the closest concept.
-1. **Identify.** The agent files the material with `loci fetch` and lists the
+1. **Identify.** The agent files the material as a source and lists the
    concepts it uses, with passages. Each concept is either:
    - **load-bearing:** the material cannot be understood without it;
    - **peripheral:** it gets a one-line definition where it appears.
@@ -373,7 +375,7 @@ question.
    For a concept already in the knowledge base, its stored prerequisites (from
    `loci closure`) are offered as the next level.
 3. **Expand.** For each don't-know concept:
-   - find external material that explains it, filed with `loci fetch`;
+   - find external material that explains it, filed as a source;
    - list its load-bearing prerequisites and sort them as in step 2;
    - repeat until every branch reaches the boundary, or the user stops it.
 
@@ -399,14 +401,14 @@ question.
    ask for more. A proof is split into key-step cards and why cards.
 
 **Grading** (used by steps 0, 4 and 6): the reference answer and a short rubric are
-fixed before an item is shown. Two independent grader calls each give a verdict per
-rubric criterion. If the user disputes a grade, a fresh grader that does not see the
-first verdict re-judges it, and only the final grade is recorded.
+fixed before an item is shown, and the agent grades against the rubric. If the user
+disputes a grade, the agent re-judges from scratch, and only the final grade is
+recorded. A review-log line holds only the card or concept, the grade and the time.
 
 ### 6.3 Review
 
 `loci learn review` presents due cards in FSRS order in the terminal, with LaTeX shown as
-plain text. Grades are logged to the review log with purpose `review`.
+plain text. Grades are logged to the review log.
 
 ## 7. The `loci` command
 
@@ -418,7 +420,6 @@ and `docs/specs/m1-m4.md`, the learn plugin in `docs/specs/learn-plugin.md`.
 | setup | `init` |
 | session | `status`, `skill show [<name>]` |
 | structure | `new`, `block-ids --section`, `mv` (links are rewritten), `merge` (M1) |
-| sources | `fetch` |
 | health | `lint` (also runs each installed plugin's lint), `done` (an agent's last step: lint, then a local record of its work for the `improve` skill) |
 | find | `digest`, `find`, `closure`, `links` (a note's links and the links to it) |
 | views | `export` |
@@ -532,9 +533,9 @@ Every bug found on a real vault becomes a fixture with no private content.
 | Milestone | Delivers | Done when |
 |---|---|---|
 | M0 | Cargo workspace (`loci-core`, `loci`); parser; `init`, `lint`, `find`, `digest`, `mv`; plugin dispatch; Nix package; fixture, golden and property tests | fixture, golden and property tests pass |
-| M0.5 | `status`, `skill show`, `new`, `block-ids`, `fetch`; the lint safety checks; the `AGENTS.md` stub, framework rules and first skills | the commands and skills work on a fixture vault, and lint catches a modified source and dropped material |
+| M0.5 | `status`, `skill show`, `new`, `block-ids`; the lint safety checks; the `AGENTS.md` stub, framework rules and first skills | the commands and skills work on a fixture vault, and lint catches a modified source and dropped material |
 | M1 | draft and journal intake, `merge`, the pilot area, `bench`, the sample vault | the pilot is kept, and the benchmark baseline is recorded |
 | M2 | PDF intake | an annotated paper becomes a source, concepts and a journal entry in one diff |
-| M3 | the `loci-learn` plugin (`init`, `lint`, `log`, `state`, `review`), `closure`, the learn skill | a "learn X" session runs end to end and reviews are scheduled; then the evaluation: just-in-time vs prerequisites-first teaching, whether the diagnostic changes plans, lapse rates by card type, grader agreement with the user, and estimate accuracy (Brier score) against simple baselines |
+| M3 | the `loci-learn` plugin (`init`, `lint`, `log`, `state`, `review`), `closure`, the learn skill | a "learn X" session runs end to end and reviews are scheduled |
 | M4 | full migration, `export` | every area is migrated, and views export |
 | later | projects outside the vault; a persistent search index; a phone web UI; the relation registry; exposure signals in the estimate; `learn calibrate`; reading annotations directly from a PDF reader's database | when the benchmark, usage or data justify it |

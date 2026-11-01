@@ -1,5 +1,4 @@
-//! Mutating commands on the fixture vaults (m0 §13.2): `mv`, `block-ids`, `fetch`,
-//! `init`. Goldens hold the envelope and the resulting tree with ULIDs redacted.
+//! Mutating commands on the fixture vaults (m0 §13.2): `mv`, `block-ids`, `init`. Goldens hold the envelope and the resulting tree with ULIDs redacted.
 
 mod common;
 
@@ -76,9 +75,9 @@ fn mv_refusals() {
     mv_refused(&v, "concepts/a/flow.md", "../out.md", "path.outside");
     mv_refused(&v, "plugins/learn/state.json", "views/state.json", "mv.from");
     mv_refused(&v, "views/linker.md", "plugins/learn/linker.md", "mv.to");
-    mv_refused(&v, "sources/papers/p1/p1.pdf", "sources/papers/p1/x.pdf", "mv.source-file");
-    mv_refused(&v, "sources/papers/p1/p1.pdf", "views/p1.pdf", "mv.source-file");
-    mv_refused(&v, "views/linker.md", "sources/papers/p1/linker.md", "mv.source-file");
+    mv_refused(&v, "sources/papers/p1.pdf", "sources/papers/p1/x.pdf", "mv.source-file");
+    mv_refused(&v, "sources/papers/p1.pdf", "views/p1.pdf", "mv.source-file");
+    mv_refused(&v, "views/linker.md", "sources/papers/Linker.md", "mv.source-file");
 }
 
 #[test]
@@ -93,17 +92,14 @@ fn mv_ignored_paths_are_refused() {
 }
 
 #[test]
-fn mv_source_folder_moves_as_a_unit() {
+fn mv_source_renames_citations() {
     let v = TestVault::committed(BIN, "mv-rename");
-    let env = mv(&v, "sources/papers/p1", "sources/papers/p2");
-    let moved = env["data"]["moved"].as_array().unwrap();
-    assert_eq!(moved.len(), 2);
-    assert!(v.exists("sources/papers/p2/p1.pdf") && v.exists("sources/papers/p2/source.yaml"));
-    assert!(!v.exists("sources/papers/p1"));
-    assert!(v.read("concepts/a/flow.md").contains(r#"sources: ["sources/papers/p2#p2"]"#));
-    assert!(v.read("views/linker.md").contains("![[sources/papers/p2/p1.pdf]]"));
+    mv(&v, "sources/papers/p1.pdf", "sources/papers/p2.pdf");
+    assert!(v.exists("sources/papers/p2.pdf") && !v.exists("sources/papers/p1.pdf"));
+    assert!(v.read("concepts/a/flow.md").contains("[[sources/papers/p2.pdf#p2]]"));
+    assert!(v.read("views/linker.md").contains("![[sources/papers/p2.pdf]]"));
     let (_, env) = v.run(&["lint"]);
-    assert!(with_code(&env, "sources.unresolved").is_empty(), "{}", diag_lines(&env));
+    assert!(with_code(&env, "link.dangling").is_empty(), "{}", diag_lines(&env));
 }
 
 #[test]
@@ -154,16 +150,15 @@ fn frontmatter_edge_crlf_note_moves_unchanged() {
 }
 
 #[test]
-fn frontmatter_edge_scalars_edited_inside_quotes() {
+fn frontmatter_edge_prereqs_edited_inside_quotes() {
     let v = TestVault::committed(BIN, "frontmatter-edge");
     mv(&v, "journal/r/2025/01/25-01-01.md", "journal/r/2025/01/25-01-03.md");
     mv(&v, "concepts/a/target.md", "concepts/a/target-two.md");
     let text = v.read("concepts/a/scalars.md");
     assert_eq!(
         text,
-        "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0J6\nprereqs: [\"[[target-two]]\"]\nsources:\n  \
-         - \"journal/r/2025/01/25-01-03\"\n  - 'journal/r/2025/01/25-01-03#Morning'\n  \
-         - journal/r/2025/01/25-01-03\ndigest: Quoted and plain scalars.\n---\n# Scalars\n"
+        "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0J6\nprereqs: [\"[[target-two]]\"]\ndigest: Quoted and plain scalars.\n---\n\
+         # Scalars\n\nSee [[journal/r/2025/01/25-01-03]] and [[journal/r/2025/01/25-01-03#Morning]].\n"
     );
     let (_, env) = v.run(&["lint"]);
     assert!(on_path(&env, "concepts/a/scalars.md").is_empty(), "{}", diag_lines(&env));
@@ -243,7 +238,7 @@ fn block_ids_any_managed_note_and_refusals() {
     assert!(redact_ulids(&v.read("views/v.md")).contains("- a view item ^[ulid]\n"));
 
     let before = v.tree();
-    let (code, env) = block_ids(&v, "sources/docs/guide/guide.md", "Cards");
+    let (code, env) = block_ids(&v, "sources/docs/guide.md", "Cards");
     assert_eq!((code, error_code(&env)), (1, "block-ids.kind"));
     let (code, env) = block_ids(&v, "concepts/a/cards.md", "Nope");
     assert_eq!((code, error_code(&env)), (1, "block-ids.no-section"));
@@ -253,64 +248,25 @@ fn block_ids_any_managed_note_and_refusals() {
     assert_eq!(v.tree(), before);
 }
 
-// ---------------------------------------------------------------- fetch
+// ---------------------------------------------------------------- filing sources
 
 #[test]
-fn fetch_from_inbox() {
+fn an_inbox_file_is_filed_as_a_source_with_mv() {
     let v = TestVault::committed(BIN, "sources");
     let clip = v.read("inbox/drafts/clip.md");
-    let (code, env) = v.run(&["fetch", "inbox/drafts/clip.md", "clippings/clip"]);
-    assert_eq!(code, 0, "{env:#}");
-    assert_eq!(env["command"], "fetch");
-    let sha = env["data"]["sha256"].as_str().unwrap().to_string();
-    assert_eq!(sha.len(), 64);
-    assert_eq!(
-        env["data"],
-        serde_json::json!({"path": "sources/clippings/clip", "file": "clip.md", "sha256": sha, "url": null})
-    );
-    assert!(!v.exists("inbox/drafts/clip.md"));
-    assert_eq!(v.read("sources/clippings/clip/clip.md"), clip);
-    assert_eq!(v.read("sources/clippings/clip/source.yaml"), format!("sha256: {sha}\n"));
-
-    let (code, env) = v.run(&["fetch", "inbox/drafts/paper.pdf", "papers/inbox-paper"]);
-    assert_eq!(code, 0, "{env:#}");
-    assert_eq!(env["data"]["file"], "paper.pdf");
-    assert!(v.exists("sources/papers/inbox-paper/paper.pdf"));
-    assert!(!v.read("sources/papers/inbox-paper/source.yaml").contains("url:"));
-
-    // The new folders are clean.
+    mv(&v, "inbox/drafts/clip.md", "sources/clippings/clip.md");
+    assert_eq!(v.read("sources/clippings/clip.md"), clip);
+    mv(&v, "inbox/drafts/paper.pdf", "sources/papers/inbox-paper.pdf");
     let (_, env) = v.run(&["lint"]);
-    for d in diags(&env) {
-        let p = d["path"].as_str().unwrap_or("");
-        assert!(!p.starts_with("sources/clippings/clip/") && !p.starts_with("sources/papers/inbox-paper/"), "{d}");
+    for p in ["sources/clippings/clip.md", "sources/papers/inbox-paper.pdf"] {
+        assert!(on_path(&env, p).is_empty(), "{p}: {}", diag_lines(&env));
     }
-    let mut tree = String::new();
-    for p in v
-        .paths()
-        .iter()
-        .filter(|p| p.starts_with("sources/clippings/clip/") || p.starts_with("sources/papers/inbox-paper/"))
-    {
-        tree.push_str(&format!("== {p} ==\n{}\n", String::from_utf8_lossy(&std::fs::read(v.root.join(p)).unwrap())));
-    }
-    assert_snapshot!(tree);
-}
-
-#[test]
-fn fetch_refusals() {
-    let v = TestVault::committed(BIN, "sources");
+    // The source layout holds: a type and a slug, both slugs, and an extension.
     v.write("inbox/drafts/again.md", "# Again\n");
-    let before = v.tree();
-    let (code, env) = v.run(&["fetch", "inbox/drafts/again.md", "papers/heaps"]);
-    assert_eq!((code, error_code(&env)), (1, "fetch.dest"));
-    let (code, env) = v.run(&["fetch", "inbox/drafts/again.md", "Videos/again"]);
-    assert_eq!((code, error_code(&env)), (1, "fetch.dest"), "the type is a slug");
-    let (code, env) = v.run(&["fetch", "inbox/drafts/again.md", "docs/Bad_Slug"]);
-    assert_eq!((code, error_code(&env)), (1, "fetch.dest"));
-    assert_eq!(v.tree(), before);
-    // Any slug is a type.
-    let (code, env) = v.run(&["fetch", "inbox/drafts/again.md", "books/again"]);
-    assert_eq!(code, 0, "{env:#}");
-    assert!(v.exists("sources/books/again/again.md") && v.exists("sources/books/again/source.yaml"));
+    v.commit_all("more");
+    for to in ["sources/Videos/again.md", "sources/docs/Bad_Slug.md", "sources/docs/again", "sources/again.md"] {
+        mv_refused(&v, "inbox/drafts/again.md", to, "mv.source-file");
+    }
 }
 
 // ---------------------------------------------------------------- init
@@ -396,7 +352,6 @@ fn path_arguments_outside_the_vault_are_refused() {
     for args in [
         &["new", "concepts/a/../../../escaped"][..],
         &["block-ids", "views/../../outside.md", "--section", "X"],
-        &["fetch", "inbox/../../outside.md", "papers/p"],
         &["export", "/etc/passwd"],
         &["merge", "concepts/./a/flow.md", "concepts/a/flow.md"],
         &["mv", "concepts//a/flow.md", "concepts/a/x.md"],
@@ -423,15 +378,4 @@ fn mv_never_overwrites_reserved_or_unindexed_files() {
         assert!(["mv.to", "mv.exists"].contains(&error_code(&env)), "{to}: {env:#}");
         assert_eq!(std::fs::read(v.root.join(to)).unwrap(), before, "{to} was overwritten");
     }
-}
-
-#[test]
-fn fetch_refuses_a_file_named_source_yaml() {
-    let v = TestVault::committed(BIN, "sources");
-    v.write("inbox/drafts/source.yaml", "IMPORTANT USER DATA");
-    let before = v.tree();
-    let (exit, env) = v.run(&["fetch", "inbox/drafts/source.yaml", "docs/x"]);
-    assert_eq!((exit, error_code(&env)), (1, "fetch.from"), "{env:#}");
-    assert_eq!(v.tree(), before);
-    assert_eq!(v.read("inbox/drafts/source.yaml"), "IMPORTANT USER DATA");
 }

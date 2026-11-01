@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::envelope::Refusal;
-use crate::index::{self, Index, Resolved, SourceTarget};
+use crate::index::{self, Index, Resolved};
 use crate::parse::{Link, LinkForm, Note};
 use crate::splice::{self, Edit};
 use crate::vault::{self, Kind};
@@ -51,9 +51,6 @@ pub fn link_edits(
 
 /// The new raw target for a link whose target moves, keeping its form.
 fn rewrite(index: &Index, note: &Note, link: &Link, targets: &BTreeMap<String, String>) -> Option<String> {
-    if link.form == LinkForm::Source {
-        return rewrite_source(index, link, targets);
-    }
     let resolved = index.resolve(note, link).ok()?;
     let new = targets.get(resolved.path())?;
     if link.target.is_empty() {
@@ -77,56 +74,6 @@ fn rewrite(index: &Index, note: &Note, link: &Link, targets: &BTreeMap<String, S
         }
     }
     (raw != link.raw).then_some(raw)
-}
-
-/// The new raw value of a `sources` entry whose journal note or source folder moves.
-fn rewrite_source(index: &Index, link: &Link, targets: &BTreeMap<String, String>) -> Option<String> {
-    let suffix = link.fragment.as_ref().map(|f| format!("#{f}")).unwrap_or_default();
-    let new = source_destination(&index.resolve_source(link)?, targets)??;
-    Some(format!("{}{suffix}", new.strip_suffix(".md").unwrap_or(&new)))
-}
-
-/// Where a `sources` target goes: `None` if it does not move, `Some(None)` if it moves
-/// somewhere a `sources` entry cannot name. A folder moves as a whole: its new path is
-/// the folder of any moved file.
-fn source_destination(target: &SourceTarget, targets: &BTreeMap<String, String>) -> Option<Option<String>> {
-    match target {
-        SourceTarget::Note(note) => targets.get(note).map(|new| Some(new.clone())),
-        SourceTarget::Folder(folder) => {
-            let new =
-                targets.iter().find(|(old, _)| vault::source_folder(old).is_some_and(|(f, _)| f == folder.path))?.1;
-            Some(vault::source_folder(new).map(|(f, _)| f.to_string()))
-        }
-    }
-}
-
-/// The edit that removes one item of a frontmatter list (flow or block form).
-pub fn remove_list_item(
-    note: &Note,
-    list_span: std::ops::Range<usize>,
-    item: std::ops::Range<usize>,
-    flow: bool,
-) -> Edit {
-    let text = &note.text;
-    if flow {
-        // Remove the item and one adjacent comma with its spaces.
-        let after = &text[item.end..];
-        let trailing = after.len() - after.trim_start_matches([',', ' ']).len();
-        if after.starts_with(',') || after.trim_start().starts_with(',') {
-            return Edit::replace(item.start..item.end + trailing, "");
-        }
-        let before = &text[list_span.start..item.start];
-        let leading = before.len() - before.trim_end_matches([',', ' ']).len();
-        return Edit::replace(item.start - leading..item.end, "");
-    }
-    remove_lines(text, item)
-}
-
-/// The edit that removes the whole lines spanned by `range`.
-pub fn remove_lines(text: &str, range: std::ops::Range<usize>) -> Edit {
-    let line_start = text[..range.start].rfind('\n').map_or(0, |i| i + 1);
-    let line_end = text[range.end..].find('\n').map_or(text.len(), |i| range.end + i + 1);
-    Edit::replace(line_start..line_end, "")
 }
 
 /// Applies per-file edits into `change.writes`.
@@ -182,34 +129,17 @@ pub fn verify(
             .enumerate()
             .filter(|(i, _)| !change.removed_links.contains(&(note.path.clone(), *i)))
             .map(|(_, l)| l)
-            .filter(|l| l.form != LinkForm::Source)
             .collect::<Vec<_>>();
-        let new_links: Vec<&Link> = new_note.links.iter().filter(|l| l.form != LinkForm::Source).collect();
         // Edits replace link targets only, so links keep their number and order; pairing
         // by position is sound exactly when the counts match.
+        let new_links = &new_note.links;
         if old_links.len() != new_links.len() {
             return Err(Refusal::refused(
                 code,
                 format!("{new_path} would have {} links instead of {}", new_links.len(), old_links.len()),
             ));
         }
-        let old_sources = note.links.iter().filter(|l| l.form == LinkForm::Source);
-        let new_sources: Vec<&Link> = new_note.links.iter().filter(|l| l.form == LinkForm::Source).collect();
-        for (old_link, new_link) in old_sources.zip(new_sources) {
-            let Some(before) = index.resolve_source(old_link) else { continue };
-            let expected = match source_destination(&before, targets) {
-                None => Some(before.into_path()),
-                Some(new) => new,
-            };
-            let after_path = after.resolve_source(new_link).map(SourceTarget::into_path);
-            if expected.is_none() || after_path != expected {
-                return Err(Refusal::refused(
-                    code,
-                    format!("source `{}` in {new_path} would no longer resolve", new_link.raw),
-                ));
-            }
-        }
-        for (old_link, new_link) in old_links.into_iter().zip(new_links) {
+        for (old_link, new_link) in old_links.into_iter().zip(new_links.iter()) {
             let Ok(before) = index.resolve(note, old_link) else { continue };
             let expected = targets.get(before.path()).cloned().unwrap_or_else(|| before.path().to_string());
             match after.resolve(new_note, new_link) {

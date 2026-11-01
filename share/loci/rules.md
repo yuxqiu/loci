@@ -6,9 +6,9 @@ This vault is a loci knowledge base. These rules apply to every agent working in
 
 - `concepts/<area>/<slug>.md`: one note per concept: the canonical knowledge. Each
   area has an `AREA.md` (an H1 and one paragraph).
-- `sources/<type>/<slug>/`: external material, grouped by a type the user names
-  (`papers`, `docs`, `clippings`, or any other slug), one
-  file plus `source.yaml`. Never modify a source.
+- `sources/<type>/<slug>.<ext>`: external material, one file each, grouped by a type
+  the user names (`papers`, `docs`, `clippings`, or any other slug). Never modify a
+  source.
 - `journal/<stream>/...`: dated records, in folders and with names the user
   chooses. No frontmatter. When you create an entry, follow the names already used
   in that stream. In a new stream, ask the user how entries should be named, and
@@ -37,16 +37,23 @@ This vault is a loci knowledge base. These rules apply to every agent working in
 ## Writing concept notes
 
 - Create notes with `loci new concepts/<area>/<slug>.md`; never invent ids.
-- Frontmatter holds only `id`, `prereqs`, `sources`, `digest`. Other names for a
-  concept go in its H1, digest or text.
-- `sources` cites evidence only: `sources/<type>/<slug>[#p<N>|#<heading>]` or
-  `journal/...`. Never cite another concept as evidence, and never a draft: a
-  dissolved draft stays in git history.
+- Frontmatter holds only `id`, `prereqs`, `digest`. Other names for a concept go in
+  its H1, digest or text.
+- Cite evidence with a link next to the claim it supports:
+  `[[sources/<type>/<slug>.pdf#p<N>]]`, `[[sources/<type>/<slug>#<heading>]]` or a
+  journal entry. Never cite
+  another concept as evidence, and never a draft: a dissolved draft stays in git
+  history.
 - Link concepts by bare slug (`[[slug]]`), everything else by vault path
   (`[[views/x]]`, `![[concepts/a/attachments/x.png]]`). Never use markdown links for
   vault files.
-- Move or rename with `loci mv`, which rewrites links. File sources with
-  `loci fetch`.
+- Move or rename with `loci mv`, which rewrites links.
+- **Filing a source.** A source is one file `sources/<type>/<slug>.<ext>`. Use a type
+  the vault already has (`ls sources/`) when one fits, such as `papers` (slug: the
+  citekey), `docs` or `clippings`; otherwise agree a new one with the user. Both are
+  slugs. Move an inbox file there with `loci mv`; download a URL straight there (for
+  example `curl -L -o sources/papers/<key>.pdf <url>`). Never edit a source after
+  filing it.
 - Prefer revising an existing concept to creating a near-duplicate. Propose
   merges to the user; never merge on your own.
 - Follow `STYLE.md`. Record reusable lessons in the `## Lessons` section of

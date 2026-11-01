@@ -11,13 +11,12 @@ description: Write, revise, split, merge and organise concept notes and areas. U
 ---
 id: <assigned by loci new>
 prereqs: ["[[prerequisite-slug]]"]
-sources:
-  - "sources/papers/<key>#p3"
 digest: One sentence that summarises the concept.
 ---
 # Title
 
-Explanation, linking related concepts by bare slug.
+Explanation, linking related concepts by bare slug and citing evidence next to the
+claim it supports ([[sources/papers/<key>.pdf#p3]]).
 
 ## Example: <what it shows>
 ## Open questions
