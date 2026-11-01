@@ -1,22 +1,16 @@
 //! `loci closure` (m1-m4 §2).
 
 use loci_core::closure;
-use loci_core::envelope::{Diagnostic, Outcome, Report};
+use loci_core::envelope::{Diagnostic, Outcome, Refusal, Report};
 use loci_core::index::Index;
 use serde_json::json;
 
 use super::Ctx;
 
-pub fn run(ctx: &Ctx, slug: &str, depth: Option<usize>) -> Result<Report, Report> {
+pub fn run(ctx: &Ctx, slug: &str, depth: Option<usize>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
-    let path = match index.concept(slug) {
-        Ok(n) => n.path.clone(),
-        Err(e) => {
-            let (code, message) = e.refusal("closure.unknown", slug);
-            return Err(Report::fail(Outcome::refused(code, message)));
-        }
-    };
+    let path = index.concept(slug).map_err(|e| e.refusal("closure.unknown", slug))?.path.clone();
     let c = closure::closure(&index, &path, depth);
     let mut diags = vec![];
     if c.cyclic {

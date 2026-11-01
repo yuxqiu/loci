@@ -12,20 +12,6 @@ pub struct Assigned {
     pub id: String,
 }
 
-/// The byte ranges of the sections under every H2 whose text is `heading`, each up to
-/// the next H1 or H2.
-pub fn sections(note: &Note, heading: &str) -> Vec<Range<usize>> {
-    let mut out = vec![];
-    for (i, h) in note.headings.iter().enumerate() {
-        if h.level != 2 || h.text != heading {
-            continue;
-        }
-        let end = note.headings[i + 1..].iter().find(|n| n.level <= 2).map_or(note.text.len(), |n| n.range.start);
-        out.push(h.range.end..end);
-    }
-    out
-}
-
 /// Fresh ULIDs, monotonic within one run (m0 §9.10).
 pub fn ulid_ids() -> impl FnMut() -> String {
     let mut generator = ulid::Generator::new();
@@ -34,7 +20,7 @@ pub fn ulid_ids() -> impl FnMut() -> String {
 
 /// Computes the new text and the assigned ids. Returns `None` when no section matches.
 pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> String) -> Option<(String, Vec<Assigned>)> {
-    let sections = sections(note, heading);
+    let sections: Vec<Range<usize>> = note.h2_sections(heading).into_iter().map(|(_, r)| r).collect();
     if sections.is_empty() {
         return None;
     }

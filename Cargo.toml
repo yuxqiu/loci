@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/loci-core", "crates/loci", "crates/loci-learn"]
+members = ["crates/loci-core", "crates/loci", "crates/loci-learn", "crates/loci-testkit"]
 
 [workspace.package]
 version = "0.1.0"

@@ -1,7 +1,7 @@
 //! `loci init` (m0 §9.1).
 
 use loci_core::config::{self, Config};
-use loci_core::envelope::{Outcome, Report};
+use loci_core::envelope::{Outcome, Refusal, Report};
 use loci_core::git;
 use serde_json::json;
 
@@ -10,24 +10,19 @@ use crate::assets;
 
 const GITIGNORE_LINES: [&str; 1] = ["/.loci/"];
 
-pub fn run(ctx: &Ctx) -> Result<Report, Report> {
+pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     let dir = match &ctx.explicit_vault {
         Some(d) if d.is_absolute() => d.clone(),
         Some(d) => ctx.cwd.join(d),
         None => ctx.cwd.clone(),
     };
     if dir.join(config::FILE).exists() {
-        return Err(Report::fail(Outcome::refused("init.exists", "loci.toml already exists")));
+        return Err(Refusal::refused("init.exists", "loci.toml already exists"));
     }
     if !git::in_worktree(&dir) {
-        if let Err(e) = git::run(&dir, &["init", "-q"]) {
-            return Err(Report::fail(Outcome::internal("git", e)));
-        }
+        git::run(&dir, &["init", "-q"]).map_err(Refusal::git)?;
     } else if !git::is_worktree_root(&dir) {
-        return Err(Report::fail(Outcome::refused(
-            "vault.not-git",
-            "run `loci init` at the root of the git work tree",
-        )));
+        return Err(Refusal::refused("vault.not-git", "run `loci init` at the root of the git work tree"));
     }
     let files: [(&str, String); 4] = [
         (config::FILE, Config::default_file()),
@@ -40,9 +35,8 @@ pub fn run(ctx: &Ctx) -> Result<Report, Report> {
         let path = dir.join(name);
         if path.exists() {
             skipped.push(name.to_string());
-        } else if let Err(e) = std::fs::write(&path, content) {
-            return Err(Report::fail(Outcome::internal("io", e.to_string())));
         } else {
+            std::fs::write(&path, content).map_err(Refusal::io)?;
             created.push(name.to_string());
         }
     }
@@ -51,7 +45,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Report> {
     let existing = match std::fs::read(&gi) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
-        Err(e) => return Err(Report::fail(Outcome::internal("io", format!("reading `.gitignore`: {e}")))),
+        Err(e) => return Err(Refusal::io(format!("reading `.gitignore`: {e}"))),
     };
     let has =
         |line: &str| existing.split(|b| *b == b'\n').any(|l| l.strip_suffix(b"\r").unwrap_or(l) == line.as_bytes());
@@ -67,9 +61,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Report> {
             bytes.extend_from_slice(l.as_bytes());
             bytes.push(b'\n');
         }
-        if let Err(e) = std::fs::write(&gi, bytes) {
-            return Err(Report::fail(Outcome::internal("io", e.to_string())));
-        }
+        std::fs::write(&gi, bytes).map_err(Refusal::io)?;
         created.push(".gitignore".to_string());
     }
     let human = format!("created: {}\nskipped: {}\n", created.join(", "), skipped.join(", "));

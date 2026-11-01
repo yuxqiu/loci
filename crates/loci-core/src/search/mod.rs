@@ -14,14 +14,16 @@ use tantivy::schema::{Field, IndexRecordOption, STORED, Schema, TextFieldIndexin
 use tantivy::{Index, TantivyDocument, Term};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::index::Index as VaultIndex;
+use crate::parse::Note;
 use crate::vault::Kind;
 
-pub use tokenizer::{LociTokenStream, LociTokenizer, tokenize};
+use tokenizer::{LociTokenizer, tokens};
 
 const TOKENIZER: &str = "loci";
 const SNIPPET_MAX_CHARS: usize = 200;
 
-/// One indexed file. The caller fills the fields per m0 §9.3.
+/// One indexed note (m0 §9.3).
 #[derive(Debug, Clone)]
 pub struct SearchDoc {
     /// Vault-relative path; also the tie-breaker for equal scores.
@@ -34,6 +36,29 @@ pub struct SearchDoc {
     pub digest: String,
     /// Body text with frontmatter excluded.
     pub body: String,
+    /// Lines before the body (the frontmatter), so that hit lines count from the
+    /// start of the file.
+    pub line_offset: usize,
+}
+
+impl From<&Note> for SearchDoc {
+    fn from(note: &Note) -> Self {
+        let body_start = note.body_start();
+        SearchDoc {
+            path: note.path.clone(),
+            kind: note.kind,
+            title: note.title().to_string(),
+            aliases: note.fm_strings("aliases").into_iter().map(str::to_string).collect(),
+            digest: note.fm_str("digest").unwrap_or_default().to_string(),
+            body: note.text[body_start..].to_string(),
+            line_offset: note.text[..body_start].matches('\n').count(),
+        }
+    }
+}
+
+/// The search documents for every note core reads.
+pub fn docs(index: &VaultIndex) -> Vec<SearchDoc> {
+    index.notes.values().map(SearchDoc::from).collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -42,8 +67,7 @@ pub struct Hit {
     pub kind: Kind,
     pub title: String,
     pub score: f32,
-    /// 1-based line in [`SearchDoc::body`] of the first line containing a query
-    /// token. The caller adds the frontmatter's line count for a file line number.
+    /// 1-based line in the file of the first body line containing a query token.
     pub line: Option<usize>,
     /// That line (NFC), trimmed to at most 200 characters around the first match.
     pub snippet: Option<String>,
@@ -64,6 +88,12 @@ impl std::error::Error for SearchError {
     }
 }
 
+impl From<SearchError> for crate::envelope::Refusal {
+    fn from(e: SearchError) -> Self {
+        crate::envelope::Refusal::internal("find.index", e.to_string())
+    }
+}
+
 impl From<tantivy::TantivyError> for SearchError {
     fn from(e: tantivy::TantivyError) -> Self {
         SearchError(e)
@@ -72,7 +102,6 @@ impl From<tantivy::TantivyError> for SearchError {
 
 /// Returns the top `k` of `docs` for `query`. An empty `kinds` keeps every kind.
 pub fn search(docs: &[SearchDoc], query: &str, k: usize, kinds: &[Kind]) -> Result<Vec<Hit>, SearchError> {
-    let tokenizer = LociTokenizer::new();
     let docs: Vec<&SearchDoc> = docs.iter().filter(|d| kinds.is_empty() || kinds.contains(&d.kind)).collect();
 
     let mut sb = Schema::builder();
@@ -92,7 +121,7 @@ pub fn search(docs: &[SearchDoc], query: &str, k: usize, kinds: &[Kind]) -> Resu
     let [title, aliases, digest, path, body] = boosted.map(|(f, _)| f);
     let id = sb.add_u64_field("id", STORED);
     let index = Index::create_in_ram(sb.build());
-    index.tokenizers().register(TOKENIZER, tokenizer.clone());
+    index.tokenizers().register(TOKENIZER, LociTokenizer);
 
     // One thread keeps doc ids deterministic.
     let mut writer = index.writer_with_num_threads(1, 15_000_000)?;
@@ -111,7 +140,7 @@ pub fn search(docs: &[SearchDoc], query: &str, k: usize, kinds: &[Kind]) -> Resu
     writer.commit()?;
 
     let mut terms: Vec<String> = Vec::new();
-    for t in tokenize_with(&tokenizer, query).into_iter().map(|t| t.text) {
+    for t in tokens(query).into_iter().map(|t| t.text) {
         if !terms.contains(&t) {
             terms.push(t);
         }
@@ -142,8 +171,8 @@ pub fn search(docs: &[SearchDoc], query: &str, k: usize, kinds: &[Kind]) -> Resu
         hits = scored
             .into_iter()
             .map(|(score, d)| {
-                let (line, snippet) = match first_match(&tokenizer, &d.body, &term_set) {
-                    Some((line, snippet)) => (Some(line), Some(snippet)),
+                let (line, snippet) = match first_match(&d.body, &term_set) {
+                    Some((line, snippet)) => (Some(line + d.line_offset), Some(snippet)),
                     None => (None, None),
                 };
                 Hit { path: d.path.clone(), kind: d.kind, title: d.title.clone(), score, line, snippet }
@@ -153,23 +182,12 @@ pub fn search(docs: &[SearchDoc], query: &str, k: usize, kinds: &[Kind]) -> Resu
     Ok(hits)
 }
 
-fn tokenize_with(tokenizer: &LociTokenizer, text: &str) -> Vec<tantivy::tokenizer::Token> {
-    use tantivy::tokenizer::{TokenStream, Tokenizer};
-    let mut t = tokenizer.clone();
-    let mut stream = t.token_stream(text);
-    let mut out = Vec::new();
-    while stream.advance() {
-        out.push(stream.token().clone());
-    }
-    out
-}
-
 /// The first body line containing a query token: its 1-based number and snippet.
-fn first_match(tokenizer: &LociTokenizer, body: &str, terms: &HashSet<&str>) -> Option<(usize, String)> {
+fn first_match(body: &str, terms: &HashSet<&str>) -> Option<(usize, String)> {
     body.lines().enumerate().find_map(|(n, line)| {
         let line: String = line.nfc().collect();
         let line = line.trim();
-        let tok = tokenize_with(tokenizer, line).into_iter().find(|t| terms.contains(t.text.as_str()))?;
+        let tok = tokens(line).into_iter().find(|t| terms.contains(t.text.as_str()))?;
         Some((n + 1, snippet(line, tok.offset_from)))
     })
 }
@@ -197,6 +215,7 @@ mod tests {
             aliases: vec![],
             digest: String::new(),
             body: body.into(),
+            line_offset: 0,
         }
     }
 

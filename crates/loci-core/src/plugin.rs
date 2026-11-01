@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::envelope::{Diagnostic, Envelope};
+use crate::envelope::{Diagnostic, Envelope, Refusal};
 
 pub const ENV_VAULT: &str = "LOCI_VAULT";
 pub const ENV_VERSION: &str = "LOCI_VERSION";
@@ -84,7 +84,7 @@ pub fn command(plugin: &Plugin, vault_root: &Path, version: &str) -> Command {
 
 /// Runs a hook (`lint` or `skills`) with `--json` and validates the reply (§2.3 item 5).
 /// On failure returns the reason for `plugin.failed`.
-pub fn run_hook(plugin: &Plugin, hook: &str, vault_root: &Path, version: &str) -> Result<Envelope, String> {
+fn run_hook(plugin: &Plugin, hook: &str, vault_root: &Path, version: &str) -> Result<Envelope, String> {
     let out = command(plugin, vault_root, version)
         .args([hook, "--json"])
         .stdin(Stdio::null())
@@ -136,33 +136,32 @@ pub fn failed(plugin: &Plugin, command: &str, reason: &str) -> Diagnostic {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginEnv {
     pub vault: PathBuf,
-    pub core_version: String,
 }
 
 /// Checks `LOCI_VERSION` and `LOCI_VAULT`. `built_with` is the workspace version the
-/// plugin was compiled with. Errors are (code, message) for the plugin's envelope.
+/// plugin was compiled with; the refusal goes into the plugin's envelope.
 pub fn check_env(
     version: Option<String>,
     vault: Option<String>,
     name: &str,
     built_with: &str,
-) -> Result<PluginEnv, (&'static str, String)> {
+) -> Result<PluginEnv, Refusal> {
     let Some(version) = version else {
-        return Err(("plugin.direct", format!("run as `loci {name}`")));
+        return Err(Refusal::refused("plugin.direct", format!("run as `loci {name}`")));
     };
     let Some(vault) = vault else {
-        return Err(("vault.not-found", "LOCI_VAULT is not set".into()));
+        return Err(Refusal::refused("vault.not-found", "LOCI_VAULT is not set"));
     };
-    let core = semver::Version::parse(&version).map_err(|e| ("plugin.version", format!("bad LOCI_VERSION: {e}")))?;
-    let req = semver::VersionReq::parse(&format!("^{built_with}"))
-        .map_err(|e| ("plugin.version", format!("bad build version: {e}")))?;
+    let bad = |m: String| Refusal::refused("plugin.version", m);
+    let core = semver::Version::parse(&version).map_err(|e| bad(format!("bad LOCI_VERSION: {e}")))?;
+    let req =
+        semver::VersionReq::parse(&format!("^{built_with}")).map_err(|e| bad(format!("bad build version: {e}")))?;
     if !req.matches(&core) {
-        return Err((
-            "plugin.version",
-            format!("loci {version} is not compatible with the loci-core {built_with} this plugin was built with"),
-        ));
+        return Err(bad(format!(
+            "loci {version} is not compatible with the loci-core {built_with} this plugin was built with"
+        )));
     }
-    Ok(PluginEnv { vault: PathBuf::from(vault), core_version: version })
+    Ok(PluginEnv { vault: PathBuf::from(vault) })
 }
 
 #[cfg(test)]
@@ -173,11 +172,11 @@ mod tests {
     fn version_rules() {
         let ok = |v: &str, b: &str| check_env(Some(v.into()), Some("/v".into()), "learn", b);
         assert!(ok("0.1.3", "0.1.0").is_ok());
-        assert_eq!(ok("0.2.0", "0.1.0").unwrap_err().0, "plugin.version");
+        assert_eq!(ok("0.2.0", "0.1.0").unwrap_err().code(), "plugin.version");
         assert!(ok("1.4.0", "1.2.0").is_ok());
-        assert_eq!(ok("2.0.0", "1.2.0").unwrap_err().0, "plugin.version");
-        assert_eq!(check_env(None, Some("/v".into()), "learn", "0.1.0").unwrap_err().0, "plugin.direct");
-        assert_eq!(check_env(Some("0.1.0".into()), None, "learn", "0.1.0").unwrap_err().0, "vault.not-found");
+        assert_eq!(ok("2.0.0", "1.2.0").unwrap_err().code(), "plugin.version");
+        assert_eq!(check_env(None, Some("/v".into()), "learn", "0.1.0").unwrap_err().code(), "plugin.direct");
+        assert_eq!(check_env(Some("0.1.0".into()), None, "learn", "0.1.0").unwrap_err().code(), "vault.not-found");
     }
 
     #[test]

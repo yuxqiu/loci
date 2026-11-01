@@ -4,20 +4,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use crate::index::{self, Index, Resolved};
+use crate::envelope::Refusal;
+use crate::index::{self, Index, Resolved, SourceTarget};
 use crate::parse::{FmValue, Link, LinkForm, Note};
 use crate::splice::{self, Edit};
 use crate::vault::{self, Kind};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChangeError {
-    pub code: &'static str,
-    pub message: String,
-}
-
-pub fn err(code: &'static str, message: impl Into<String>) -> ChangeError {
-    ChangeError { code, message: message.into() }
-}
 
 /// A computed change to the vault.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -63,7 +54,7 @@ pub fn link_edits(
 /// The new raw target for a link whose target moves, keeping its form.
 fn rewrite(index: &Index, note: &Note, link: &Link, targets: &BTreeMap<String, String>) -> Option<String> {
     if link.form == LinkForm::Source {
-        return rewrite_source(link, targets);
+        return rewrite_source(index, link, targets);
     }
     let resolved = index.resolve(note, link).ok()?;
     let new = targets.get(resolved.path())?;
@@ -90,28 +81,30 @@ fn rewrite(index: &Index, note: &Note, link: &Link, targets: &BTreeMap<String, S
     (raw != link.raw).then_some(raw)
 }
 
-fn rewrite_source(link: &Link, targets: &BTreeMap<String, String>) -> Option<String> {
-    let target = &link.target;
+/// The new raw value of a `sources` entry whose journal note or source folder moves.
+fn rewrite_source(index: &Index, link: &Link, targets: &BTreeMap<String, String>) -> Option<String> {
     let suffix = link.fragment.as_ref().map(|f| format!("#{f}")).unwrap_or_default();
-    if let Some(new) = targets.get(&format!("{target}.md")) {
-        return Some(format!("{}{suffix}", new.strip_suffix(".md").unwrap_or(new)));
+    match index.resolve_source(link)? {
+        SourceTarget::Note(note) => {
+            let new = targets.get(&note)?;
+            Some(format!("{}{suffix}", new.strip_suffix(".md").unwrap_or(new)))
+        }
+        // A folder moves as a whole: its new path is any moved file's new folder.
+        SourceTarget::Folder { path, .. } => {
+            let prefix = format!("{path}/");
+            let (old, new) = targets.iter().find(|(o, _)| o.starts_with(&prefix))?;
+            let new_folder = new.strip_suffix(&format!("/{}", &old[prefix.len()..]))?;
+            Some(format!("{new_folder}{suffix}"))
+        }
     }
-    if target.starts_with("sources/") {
-        let prefix = format!("{target}/");
-        let (old, new) = targets.iter().find(|(o, _)| o.starts_with(&prefix))?;
-        let rest = &old[prefix.len()..];
-        let new_folder = new.strip_suffix(&format!("/{rest}"))?;
-        return Some(format!("{new_folder}{suffix}"));
-    }
-    None
 }
 
 /// The frontmatter edit that appends `aliases` to a concept's `aliases` (m0 §9.5 step 3).
 /// Refuses with `code` if the frontmatter is missing or invalid, or `aliases` is not a
 /// list.
-pub fn alias_edit(note: &Note, aliases: &[String], code: &'static str) -> Result<Edit, ChangeError> {
+pub fn alias_edit(note: &Note, aliases: &[String], code: &'static str) -> Result<Edit, Refusal> {
     let text = &note.text;
-    let refuse = |why: &str| Err(err(code, format!("cannot add aliases to `{}`: {why}", note.path)));
+    let refuse = |why: &str| Err(Refusal::refused(code, format!("cannot add aliases to `{}`: {why}", note.path)));
     let Some(fm) = note.frontmatter.as_ref().filter(|_| note.fm_error.is_none()) else {
         return refuse("it has no valid frontmatter");
     };
@@ -181,11 +174,12 @@ fn line_ending(text: &str, line_end: usize) -> &'static str {
 }
 
 /// Applies per-file edits into `change.writes`.
-pub fn add_writes(index: &Index, change: &mut Change, edits: BTreeMap<String, Vec<Edit>>) -> Result<(), ChangeError> {
+pub fn add_writes(index: &Index, change: &mut Change, edits: BTreeMap<String, Vec<Edit>>) -> Result<(), Refusal> {
     for (path, file_edits) in edits {
         let note = &index.notes[&path];
         let count = file_edits.len();
-        let text = splice::apply(&note.text, file_edits).map_err(|e| err("change.overlap", e.to_string()))?;
+        let text =
+            splice::apply(&note.text, file_edits).map_err(|e| Refusal::internal("change.overlap", e.to_string()))?;
         let dest = change.final_path(&path);
         change.edit_counts.insert(dest.clone(), count);
         change.writes.insert(dest, text);
@@ -203,7 +197,7 @@ pub fn verify(
     change: &Change,
     code: &'static str,
     fragments_may_dangle: bool,
-) -> Result<(), ChangeError> {
+) -> Result<(), Refusal> {
     let mut files: Vec<String> =
         index.files.iter().filter(|f| !change.deleted.contains(*f)).map(|f| change.final_path(f)).collect();
     files.sort();
@@ -223,10 +217,10 @@ pub fn verify(
     for note in index.notes.values().filter(|n| n.kind != Kind::Source && !change.deleted.contains(&n.path)) {
         let new_path = change.final_path(&note.path);
         let Some(new_note) = after.notes.get(&new_path) else {
-            return Err(err(code, format!("{new_path} would no longer parse as a note")));
+            return Err(Refusal::refused(code, format!("{new_path} would no longer parse as a note")));
         };
         if note.fm_error.is_none() && new_note.fm_error.is_some() {
-            return Err(err(code, format!("{new_path} would get invalid frontmatter")));
+            return Err(Refusal::refused(code, format!("{new_path} would get invalid frontmatter")));
         }
         let old_links = note
             .links
@@ -240,7 +234,7 @@ pub fn verify(
         // Edits replace link targets only, so links keep their number and order; pairing
         // by position is sound exactly when the counts match.
         if old_links.len() != new_links.len() {
-            return Err(err(
+            return Err(Refusal::refused(
                 code,
                 format!("{new_path} would have {} links instead of {}", new_links.len(), old_links.len()),
             ));
@@ -255,7 +249,7 @@ pub fn verify(
                 Err(index::LinkError::Heading | index::LinkError::Block)
                     if fragments_may_dangle && expected != before.path() => {}
                 _ => {
-                    return Err(err(
+                    return Err(Refusal::refused(
                         code,
                         format!("`{}` in {new_path} would no longer resolve to {expected}", new_link.raw),
                     ));

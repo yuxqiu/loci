@@ -7,7 +7,7 @@ use common::*;
 use serde_json::{Value, json};
 
 fn vault_with(stub: Stub) -> TestVault {
-    let v = TestVault::committed("dispatch");
+    let v = TestVault::committed(BIN, "dispatch");
     v.install_stub(&stub);
     v
 }

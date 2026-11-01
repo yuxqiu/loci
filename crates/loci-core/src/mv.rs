@@ -2,8 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::envelope::Refusal;
 use crate::index::Index;
-use crate::relink::{self, Change, ChangeError, err};
+use crate::relink::{self, Change};
 use crate::vault::{self, Kind};
 
 /// Computes the move of `from` to `to` without writing. Both are vault paths
@@ -15,21 +16,21 @@ pub fn plan(
     to: &str,
     to_ignored: bool,
     exists: impl Fn(&str) -> bool,
-) -> Result<Change, ChangeError> {
+) -> Result<Change, Refusal> {
     if from.starts_with("plugins/") || from == "plugins" {
-        return Err(err("mv.from", format!("`{from}` cannot be moved")));
+        return Err(Refusal::refused("mv.from", format!("`{from}` cannot be moved")));
     }
     if to.starts_with("plugins/") || to == "plugins" || vault::is_reserved(to) || to_ignored {
-        return Err(err("mv.to", format!("`{to}` is not a valid destination")));
+        return Err(Refusal::refused("mv.to", format!("`{to}` is not a valid destination")));
     }
     let is_file = index.files.binary_search(&from.to_string()).is_ok();
     let prefix = format!("{from}/");
     let dir_files: Vec<&String> = index.files.iter().filter(|f| f.starts_with(&prefix)).collect();
     if !is_file && dir_files.is_empty() {
-        return Err(err("mv.from", format!("`{from}` does not exist or is ignored")));
+        return Err(Refusal::refused("mv.from", format!("`{from}` does not exist or is ignored")));
     }
     if exists(to) || index.files.iter().any(|f| f == to || f.starts_with(&format!("{to}/"))) {
-        return Err(err("mv.exists", format!("`{to}` already exists")));
+        return Err(Refusal::refused("mv.exists", format!("`{to}` already exists")));
     }
     // Sources move only as whole folders.
     if from.starts_with("sources/") || to.starts_with("sources/") {
@@ -39,7 +40,10 @@ pub fn plan(
             && from.split('/').count() == 3
             && to.split('/').count() == 3;
         if !whole_folder {
-            return Err(err("mv.source-file", "only a whole source folder `sources/<type>/<slug>` can move"));
+            return Err(Refusal::refused(
+                "mv.source-file",
+                "only a whole source folder `sources/<type>/<slug>` can move",
+            ));
         }
     }
     let mut map: BTreeMap<String, String> = BTreeMap::new();
@@ -53,7 +57,7 @@ pub fn plan(
     // A destination that exists on disk (a file the index does not hold) is never
     // overwritten.
     if let Some(new) = map.values().find(|n| exists(n)) {
-        return Err(err("mv.exists", format!("`{new}` already exists")));
+        return Err(Refusal::refused("mv.exists", format!("`{new}` already exists")));
     }
     // Moved concepts must stay concepts; new slugs must not collide.
     let mut renames: Vec<(String, String)> = vec![]; // (old path, old slug)
@@ -62,13 +66,11 @@ pub fn plan(
             continue;
         }
         if vault::kind_of(new) != Some(Kind::Concept) {
-            return Err(err("mv.no-area", format!("`{new}` is not inside an area")));
+            return Err(Refusal::refused("mv.no-area", format!("`{new}` is not inside an area")));
         }
         let (old_slug, new_slug) = (vault::stem(old), vault::stem(new));
-        let key = new_slug.to_lowercase();
-        let taken_by_other = index.slugs.get(&key).is_some_and(|ps| ps.iter().any(|p| !map.contains_key(p)));
-        if taken_by_other || index.aliases.contains_key(&key) {
-            return Err(err("mv.collision", format!("slug `{new_slug}` is already a slug or alias")));
+        if index.name_taken(new_slug, |p| map.contains_key(p)) {
+            return Err(Refusal::refused("mv.collision", format!("slug `{new_slug}` is already a slug or alias")));
         }
         if old_slug != new_slug {
             renames.push((old.clone(), old_slug.to_string()));
@@ -91,16 +93,14 @@ pub fn plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn idx(files: &[(&str, &str)]) -> Index {
-        crate::index::from_texts(files)
-    }
+    use crate::index::from_texts;
 
     const C: &str = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ndigest: d\n---\n# T\n";
 
     #[test]
     fn rename_rewrites_bare_and_adds_alias() {
-        let i = idx(&[("concepts/a/old.md", C), ("views/v.md", "# V\n\n[[old]] [[old#T|x]] [[concepts/a/old]]\n")]);
+        let i =
+            from_texts(&[("concepts/a/old.md", C), ("views/v.md", "# V\n\n[[old]] [[old#T|x]] [[concepts/a/old]]\n")]);
         let p = plan(&i, "concepts/a/old.md", "concepts/a/new.md", false, |_| false).unwrap();
         assert_eq!(p.writes["views/v.md"], "# V\n\n[[new]] [[new#T|x]] [[concepts/a/new]]\n");
         assert!(p.writes["concepts/a/new.md"].contains("aliases: [old]\n"));
@@ -110,11 +110,11 @@ mod tests {
     #[test]
     fn alias_appended_to_flow_and_block_lists() {
         let flow = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\naliases: [x]\ndigest: d\n---\n# T\n";
-        let i = idx(&[("concepts/a/old.md", flow)]);
+        let i = from_texts(&[("concepts/a/old.md", flow)]);
         let p = plan(&i, "concepts/a/old.md", "concepts/a/new.md", false, |_| false).unwrap();
         assert!(p.writes["concepts/a/new.md"].contains("aliases: [x, old]\n"));
         let block = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\naliases:\n  - x\ndigest: d\n---\n# T\n";
-        let i = idx(&[("concepts/a/old.md", block)]);
+        let i = from_texts(&[("concepts/a/old.md", block)]);
         let p = plan(&i, "concepts/a/old.md", "concepts/a/new.md", false, |_| false).unwrap();
         assert!(p.writes["concepts/a/new.md"].contains("aliases:\n  - x\n  - old\n"));
     }
@@ -125,7 +125,7 @@ mod tests {
             |aliases: &str| format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\naliases: {aliases}\ndigest: d\n---\n# T\n");
         for (before, after) in [("[x, ]", "[x, old, ]"), ("[x,\n  y\n]", "[x,\n  y, old\n]"), ("[ ]", "[ old]")] {
             let text = fm(before);
-            let i = idx(&[("concepts/a/old.md", &text)]);
+            let i = from_texts(&[("concepts/a/old.md", &text)]);
             let p = plan(&i, "concepts/a/old.md", "concepts/a/new.md", false, |_| false).unwrap();
             assert!(p.writes["concepts/a/new.md"].contains(&format!("aliases: {after}\n")), "{before:?}");
         }
@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn crlf_alias_line() {
         let crlf = "---\r\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\r\ndigest: d\r\n---\r\n# T\r\n";
-        let i = idx(&[("concepts/a/old.md", crlf)]);
+        let i = from_texts(&[("concepts/a/old.md", crlf)]);
         let p = plan(&i, "concepts/a/old.md", "concepts/a/new.md", false, |_| false).unwrap();
         assert!(p.writes["concepts/a/new.md"].contains("TV\r\naliases: [old]\r\ndigest"));
     }
@@ -142,13 +142,13 @@ mod tests {
     #[test]
     fn collisions_and_refusals() {
         let with_alias = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\naliases: [taken]\ndigest: d\n---\n# T\n";
-        let i = idx(&[
+        let i = from_texts(&[
             ("concepts/a/x.md", C),
             ("concepts/a/y.md", with_alias),
             ("sources/papers/p/paper.pdf", ""),
             ("sources/papers/p/source.yaml", "sha256: x\n"),
         ]);
-        let e = |f: &str, t: &str| plan(&i, f, t, false, |_| false).unwrap_err().code;
+        let e = |f: &str, t: &str| plan(&i, f, t, false, |_| false).unwrap_err().code().to_string();
         assert_eq!(e("concepts/a/x.md", "concepts/a/y.md"), "mv.exists");
         assert_eq!(e("concepts/a/x.md", "concepts/a/taken.md"), "mv.collision");
         assert_eq!(e("concepts/a/x.md", "views/x.md"), "mv.no-area");
@@ -160,7 +160,7 @@ mod tests {
     #[test]
     fn source_folder_citations_follow() {
         let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nsources: [\"sources/papers/p#p3\"]\ndigest: d\n---\n# T\n";
-        let i = idx(&[
+        let i = from_texts(&[
             ("concepts/a/x.md", c),
             ("sources/papers/p/paper.pdf", ""),
             ("sources/papers/p/source.yaml", "sha256: x\n"),
@@ -171,14 +171,14 @@ mod tests {
 
     #[test]
     fn table_pipe_kept() {
-        let i = idx(&[("concepts/a/old.md", C), ("views/v.md", "# V\n\n| a |\n|---|\n| [[old\\|x]] |\n")]);
+        let i = from_texts(&[("concepts/a/old.md", C), ("views/v.md", "# V\n\n| a |\n|---|\n| [[old\\|x]] |\n")]);
         let p = plan(&i, "concepts/a/old.md", "concepts/a/new.md", false, |_| false).unwrap();
         assert!(p.writes["views/v.md"].contains("[[new\\|x]]"));
     }
 
     #[test]
     fn directory_move() {
-        let i = idx(&[
+        let i = from_texts(&[
             ("concepts/a/AREA.md", "# A\n\nP.\n"),
             ("concepts/a/g/x.md", C),
             ("views/v.md", "# V\n\n[[x]] ![[concepts/a/g/p.png]]\n"),

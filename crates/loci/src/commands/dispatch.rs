@@ -2,7 +2,7 @@
 
 use std::process::ExitCode;
 
-use loci_core::envelope::{Outcome, Report};
+use loci_core::envelope::{Refusal, Report};
 use loci_core::plugin;
 
 use super::{Ctx, plugins};
@@ -18,11 +18,11 @@ pub fn run(ctx: &Ctx, args: Vec<String>) -> ExitCode {
             CORE_COMMANDS.join(", "),
             if names.is_empty() { "none".to_string() } else { names.join(", ") }
         );
-        return fail(ctx, name, Outcome::refused("cmd.unknown", msg));
+        return fail(ctx, name, Refusal::refused("cmd.unknown", msg));
     };
     let vault = match ctx.vault() {
         Ok(v) => v,
-        Err(r) => return fail(ctx, name, r.outcome),
+        Err(r) => return fail(ctx, name, r),
     };
     let mut cmd = plugin::command(p, &vault.root, VERSION);
     cmd.args(rest);
@@ -31,12 +31,11 @@ pub fn run(ctx: &Ctx, args: Vec<String>) -> ExitCode {
     }
     match cmd.status() {
         Ok(status) => ExitCode::from(status.code().map_or(3, |c| c.clamp(0, 255) as u8)),
-        Err(e) => fail(ctx, name, Outcome::internal("plugin.failed", format!("cannot run {}: {e}", p.path.display()))),
+        Err(e) => fail(ctx, name, Refusal::internal("plugin.failed", format!("cannot run {}: {e}", p.path.display()))),
     }
 }
 
-fn fail(ctx: &Ctx, name: &str, outcome: Outcome) -> ExitCode {
-    let exit = outcome.exit();
-    Report::fail(outcome).print(ctx.json, VERSION, name);
+fn fail(ctx: &Ctx, name: &str, refusal: Refusal) -> ExitCode {
+    let exit = Report::from(refusal).print(ctx.json, VERSION, name);
     ExitCode::from(exit as u8)
 }

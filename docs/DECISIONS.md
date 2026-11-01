@@ -182,3 +182,10 @@ Append-only log of decisions about loci, newest last, with their reasons. `DESIG
   - **Shape.** One ref per base commit, replaced by later runs: an agent often runs it several times in one task. Records are built in a private index, never pushed by default, pruned after 90 days, and deleted by `improve` once reviewed.
   - **Not adopted.** Agent hooks (not general across agents); the `check.relaxed` warning (the user's decision).
   - **Limits.** Uncommitted user work at the start of a task, or between two tasks, is counted as the agent's. The "commit first" rule covers it.
+- D111. Code-quality pass after an independent review (20 findings):
+  - **One error type, `envelope::Refusal`** (exit code plus error). Every command in both binaries returns `Result<Report, Refusal>`, and core plans, vault opening, concept lookup and plugin checks return it too. This replaces about eight ad-hoc shapes.
+  - **`sources` entries** are normalised like other links and resolved in one place, `Index::resolve_source`, for lint, `links` and `mv`. A concept folder is not a source.
+  - **A slug shared by several concepts** resolves to none of them: `link.dangling`, with a hint to link by path. Before, it silently picked one.
+  - **`Lint::run` covers the index rules only.** Rules that read file bytes or git are `lint::disk_rules`.
+  - **Search builds documents and file line numbers in core.** The tokenizer is crate-private.
+  - **Test helpers** live in the dev-only crate `crates/loci-testkit`, shared by the `loci` and `loci-learn` tests.

@@ -6,7 +6,7 @@ use common::*;
 use insta::{assert_json_snapshot, assert_snapshot};
 
 fn lint(name: &str) -> (TestVault, i32, serde_json::Value) {
-    let v = TestVault::committed(name);
+    let v = TestVault::committed(BIN, name);
     let (code, env) = v.run(&["lint"]);
     assert_eq!(env["command"], "lint");
     (v, code, env)
@@ -56,7 +56,7 @@ fn names() {
 
 #[test]
 fn lint_output_is_byte_identical_across_runs() {
-    let v = TestVault::committed("names");
+    let v = TestVault::committed(BIN, "names");
     let a = v.run_raw(&["--json", "lint"]);
     let b = v.run_raw(&["--json", "lint"]);
     assert_eq!(a, b);
@@ -228,7 +228,7 @@ fn code_hash() {
 #[test]
 fn code_hash_find_body_excludes_nothing_but_frontmatter() {
     // Hashtags are text: `find` finds them as words.
-    let v = TestVault::committed("code-hash");
+    let v = TestVault::committed(BIN, "code-hash");
     let (_, env) = v.run(&["find", "another"]);
     let hits = env["data"]["hits"].as_array().unwrap();
     assert_eq!(hits[0]["path"], "concepts/a/code.md");
@@ -268,7 +268,7 @@ fn hit_paths(env: &serde_json::Value) -> Vec<String> {
 
 #[test]
 fn cjk_find_hits_words_inside_longer_runs() {
-    let v = TestVault::committed("cjk");
+    let v = TestVault::committed(BIN, "cjk");
     assert!(hit_paths(&find(&v, "数组")).contains(&"views/zh.md".to_string()));
     assert_eq!(hit_paths(&find(&v, "アルゴリズム")), ["views/ja.md"]);
     // A kanji-only query is split like the same word inside Japanese text (m0 §9.3).
@@ -284,7 +284,7 @@ fn cjk_find_hits_words_inside_longer_runs() {
 
 #[test]
 fn find_without_diagnostics_filters_and_limits() {
-    let v = TestVault::committed("names");
+    let v = TestVault::committed(BIN, "names");
     let env = find(&v, "bfs");
     assert!(diags(&env).is_empty(), "{}", diag_lines(&env));
     let hits = hit_paths(&env);
@@ -300,7 +300,7 @@ fn find_without_diagnostics_filters_and_limits() {
 
 #[test]
 fn kinds() {
-    let v = TestVault::fixture("kinds");
+    let v = TestVault::fixture(BIN, "kinds");
     // Gitignored `.md` files are never read.
     v.write(".gitignore", "/secret/\n/.loci/\n");
     v.write("secret/s.md", "no heading [[ignored-dangling]] zanzibar\n");
@@ -380,7 +380,7 @@ fn area_digest_lint() {
 
 #[test]
 fn area_digest_root_output() {
-    let v = TestVault::committed("area-digest");
+    let v = TestVault::committed(BIN, "area-digest");
     let (code, out, _) = v.run_raw(&["digest"]);
     assert_eq!(code, 0);
     assert_eq!(
@@ -400,7 +400,7 @@ fn area_digest_root_output() {
 
 #[test]
 fn area_digest_area_output() {
-    let v = TestVault::committed("area-digest");
+    let v = TestVault::committed(BIN, "area-digest");
     let (code, out, _) = v.run_raw(&["digest", "--area", "algorithms"]);
     assert_eq!(code, 0);
     assert_eq!(
@@ -426,7 +426,7 @@ fn area_digest_area_output() {
 
 #[test]
 fn empty_vault_digest() {
-    let v = TestVault::committed("dispatch");
+    let v = TestVault::committed(BIN, "dispatch");
     std::fs::remove_dir_all(v.root.join("concepts")).unwrap();
     let (_, out, _) = v.run_raw(&["digest"]);
     assert_eq!(out, "# Index\n");
@@ -471,7 +471,7 @@ fn sources_lint() {
 
 #[test]
 fn sources_hash_mismatch_after_edit() {
-    let v = TestVault::committed("sources");
+    let v = TestVault::committed(BIN, "sources");
     v.write("sources/papers/heaps/heaps.pdf", "%PDF-1.4\nedited\n");
     let (_, env) = v.run(&["lint"]);
     let mm = with_code(&env, "sources.hash-mismatch");
@@ -483,7 +483,7 @@ fn sources_hash_mismatch_after_edit() {
 
 #[test]
 fn vault_not_git_and_config_invalid() {
-    let v = TestVault::fixture("dispatch");
+    let v = TestVault::fixture(BIN, "dispatch");
     let (code, env) = v.run(&["lint"]);
     assert_eq!((code, error_code(&env)), (1, "vault.not-git"));
     v.git(&["init", "-q", "-b", "main"]);
@@ -497,7 +497,7 @@ fn vault_not_git_and_config_invalid() {
 
 #[test]
 fn vault_found_from_a_subdirectory_and_by_flag() {
-    let v = TestVault::committed("names");
+    let v = TestVault::committed(BIN, "names");
     let (code, env) = v.run_in(&v.root.join("concepts/algo"), &["lint"]);
     assert_eq!(code, 1);
     assert_eq!(env["data"]["errors"], 7);
@@ -510,7 +510,7 @@ fn vault_found_from_a_subdirectory_and_by_flag() {
 
 #[test]
 fn usage_error_exits_2_without_envelope() {
-    let v = TestVault::committed("names");
+    let v = TestVault::committed(BIN, "names");
     let (code, out, _) = v.run_raw(&["--json", "mv", "only-one-arg"]);
     assert_eq!(code, 2);
     assert!(out.is_empty());
@@ -519,7 +519,7 @@ fn usage_error_exits_2_without_envelope() {
 #[test]
 fn unreadable_files_and_folders_are_errors() {
     use std::os::unix::fs::PermissionsExt;
-    let v = TestVault::committed("kinds");
+    let v = TestVault::committed(BIN, "kinds");
     v.write("views/locked.md", "# Locked\n");
     v.write("views/closed/inner.md", "# Inner\n");
     let mode = |p: &str, m: u32| std::fs::set_permissions(v.root.join(p), std::fs::Permissions::from_mode(m)).unwrap();

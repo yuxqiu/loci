@@ -4,14 +4,15 @@ use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use loci_core::envelope::{Outcome, Report};
+use loci_core::envelope::{Outcome, Refusal, Report};
 use loci_core::index::Index;
+use loci_core::search;
 use loci_core::vault::{self, Kind};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{Ctx, find};
+use super::Ctx;
 
 pub const FILE: &str = "bench/retrieval.jsonl";
 const AGENT_TIMEOUT: Duration = Duration::from_secs(600);
@@ -90,31 +91,32 @@ fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::R
     Ok(Some(String::from_utf8_lossy(&out).into_owned()))
 }
 
-pub fn run(ctx: &Ctx, agent: Option<&str>, k: usize) -> Result<Report, Report> {
+pub fn run(ctx: &Ctx, agent: Option<&str>, k: usize) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
-    let text = std::fs::read_to_string(vault.abs(FILE))
-        .map_err(|_| Report::fail(Outcome::refused("bench.none", format!("`{FILE}` does not exist"))))?;
+    let text = match std::fs::read_to_string(vault.abs(FILE)) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(Refusal::refused("bench.none", format!("`{FILE}` does not exist")));
+        }
+        Err(e) => return Err(Refusal::io(format!("reading `{FILE}`: {e}"))),
+    };
     let mut cases = vec![];
     for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
-        match serde_json::from_str::<Case>(line) {
-            Ok(c) => cases.push(c),
-            Err(e) => return Err(Report::fail(Outcome::refused("bench.case", format!("{FILE} line {}: {e}", n + 1)))),
-        }
+        let case = serde_json::from_str::<Case>(line)
+            .map_err(|e| Refusal::refused("bench.case", format!("{FILE} line {}: {e}", n + 1)))?;
+        cases.push(case);
     }
     let index = Index::open(&vault);
-    let docs = find::docs(&index);
+    let docs = search::docs(&index);
     let (mut ranked, mut rr_sum) = (0usize, 0f64);
     let mut latencies = vec![];
     let (mut agent_passes, mut agent_times) = (0usize, vec![]);
     let mut results = vec![];
     for case in &cases {
         let start = Instant::now();
-        let hits = match find::query(&index, &docs, &case.q, k, &[]) {
-            Ok(h) => h,
-            Err(e) => return Err(Report::fail(Outcome::internal("find.index", e))),
-        };
+        let hits = search::search(&docs, &case.q, k, &[])?;
         latencies.push(start.elapsed().as_secs_f64() * 1000.0);
-        let rank = hits.iter().position(|h| matches(&case.expect, &h.hit.path)).map(|i| i + 1);
+        let rank = hits.iter().position(|h| matches(&case.expect, &h.path)).map(|i| i + 1);
         if let Some(r) = rank {
             ranked += 1;
             rr_sum += 1.0 / r as f64;
@@ -126,10 +128,10 @@ pub fn run(ctx: &Ctx, agent: Option<&str>, k: usize) -> Result<Report, Report> {
                 let out = match run_agent(cmd, &case.q, &vault.root) {
                     Ok(out) => out,
                     Err(e) => {
-                        return Err(Report::fail(Outcome::internal(
+                        return Err(Refusal::internal(
                             "bench.agent",
                             format!("cannot run the agent through `sh`: {e}"),
-                        )));
+                        ));
                     }
                 };
                 agent_times.push(start.elapsed().as_secs_f64());

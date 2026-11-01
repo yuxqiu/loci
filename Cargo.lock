@@ -1103,11 +1103,11 @@ dependencies = [
  "clap",
  "insta",
  "loci-core",
+ "loci-testkit",
  "proptest",
  "regex",
  "serde",
  "serde_json",
- "tempfile",
  "ureq",
 ]
 
@@ -1142,10 +1142,20 @@ dependencies = [
  "fsrs",
  "jiff",
  "loci-core",
+ "loci-testkit",
  "serde",
  "serde_json",
- "tempfile",
  "toml",
+]
+
+[[package]]
+name = "loci-testkit"
+version = "0.1.0"
+dependencies = [
+ "loci-core",
+ "regex",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

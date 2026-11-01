@@ -1,6 +1,6 @@
 //! `loci skill show` (m0 §9.9).
 
-use loci_core::envelope::{Diagnostic, Outcome, Report};
+use loci_core::envelope::{Diagnostic, Outcome, Refusal, Report};
 use loci_core::plugin::{self, Skill};
 use serde_json::json;
 
@@ -21,7 +21,7 @@ fn all_skills(vault_root: &std::path::Path) -> (Vec<(Skill, Option<String>)>, Ve
     (out, diags)
 }
 
-pub fn run(ctx: &Ctx, name: Option<&str>) -> Result<Report, Report> {
+pub fn run(ctx: &Ctx, name: Option<&str>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let (skills, diags) = all_skills(&vault.root);
     match name {
@@ -40,7 +40,8 @@ pub fn run(ctx: &Ctx, name: Option<&str>) -> Result<Report, Report> {
             None => {
                 let names: Vec<&str> = skills.iter().map(|(s, _)| s.name.as_str()).collect();
                 let msg = format!("no skill `{name}`; skills: {}", names.join(", "));
-                Err(Report::fail(Outcome::refused("skill.unknown", msg).with_diagnostics(diags)))
+                // A report, not a bare refusal, so the diagnostics are kept.
+                Ok(Report::new(Outcome::from(Refusal::refused("skill.unknown", msg)).with_diagnostics(diags), ""))
             }
         },
     }

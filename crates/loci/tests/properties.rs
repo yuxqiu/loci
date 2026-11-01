@@ -155,7 +155,7 @@ proptest! {
             Ok(p) => p,
             Err(e) => {
                 // A rename onto a slug in use is a legitimate refusal; anything else is not.
-                prop_assert_eq!(e.code, "mv.collision", "mv {} {}: {}", from, to, e.message);
+                prop_assert_eq!(e.code(), "mv.collision", "mv {} {}: {}", from, to, e.error.message);
                 return Ok(());
             }
         };
@@ -181,7 +181,7 @@ proptest! {
         }
         // Lint finds no new link errors.
         let budgets = Budgets::default();
-        let link_errors = |i: &Index| Lint { index: i, budgets: &budgets, root: None }
+        let link_errors = |i: &Index| Lint { index: i, budgets: &budgets }
             .run()
             .into_iter()
             .filter(|d| d.code.starts_with("link.") || d.code == "prereqs.cycle")
@@ -194,7 +194,7 @@ proptest! {
         let budgets = Budgets::default();
         let run = || {
             let i = build(&g.files);
-            let diags = Lint { index: &i, budgets: &budgets, root: None }.run();
+            let diags = Lint { index: &i, budgets: &budgets }.run();
             let areas = digest::areas(&i);
             let areas_text: Vec<String> = areas.iter().map(digest::render_area).collect();
             (serde_json::to_string(&diags).unwrap(), digest::render_root(&areas), areas_text)

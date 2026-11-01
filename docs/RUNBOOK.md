@@ -15,6 +15,7 @@ toolchain (cargo, clippy, rustfmt, cargo-insta).
 New source files must be known to git (`git add -N <file>`) before Nix can see
 them.
 
+Test helpers shared by both crates' integration tests are in `crates/loci-testkit`.
 Integration tests run the built binaries against fixture vaults in
 `tests/fixtures/`, with `PATH` holding only `git` (and `loci-stub` in the plugin
 tests).

@@ -7,65 +7,18 @@ use tantivy::tokenizer::{Token, TokenStream, Tokenizer};
 use unicode_normalization::UnicodeNormalization;
 
 /// The `loci` tokenizer, registered under that name in the search index.
-#[derive(Clone, Default)]
-pub struct LociTokenizer;
+#[derive(Clone)]
+pub(crate) struct LociTokenizer;
 
-impl LociTokenizer {
-    pub fn new() -> Self {
-        Self
-    }
-
-    /// Tokenizes `text`. Offsets refer to the NFC form of `text`.
-    fn tokens(&self, text: &str) -> Vec<Token> {
-        let text: String = text.nfc().collect();
-        let mut out = Vec::new();
-        let mut push = |from: usize, to: usize, text: String| {
-            let position = out.len();
-            out.push(Token { offset_from: from, offset_to: to, position, text, position_length: 1 });
-        };
-        let mut i = 0;
-        while let Some(c) = text[i..].chars().next() {
-            // A run of one script class: Hangul, Han and kana, or other letters and digits.
-            let class: Option<fn(char) -> bool> = if is_hangul(c) {
-                Some(is_hangul)
-            } else if is_han(c) || is_kana(c) {
-                Some(|ch| is_han(ch) || is_kana(ch))
-            } else if c.is_alphanumeric() {
-                Some(|ch: char| ch.is_alphanumeric() && !is_cjk(ch))
-            } else {
-                None
-            };
-            let Some(in_run) = class else {
-                i += c.len_utf8();
-                continue;
-            };
-            let len: usize = text[i..].chars().take_while(|&ch| in_run(ch)).map(char::len_utf8).sum();
-            let run = &text[i..i + len];
-            if is_hangul(c) {
-                for (s, e) in hangul_bigrams(run) {
-                    push(i + s, i + e, run[s..e].to_string());
-                }
-            } else if is_cjk(c) {
-                for (s, e) in chinese_japanese_words(run) {
-                    push(i + s, i + e, run[s..e].to_string());
-                }
-            } else {
-                push(i, i + len, run.to_lowercase());
-            }
-            i += len;
-        }
-        out
+impl Tokenizer for LociTokenizer {
+    type TokenStream<'a> = LociTokenStream;
+    fn token_stream<'a>(&'a mut self, text: &'a str) -> LociTokenStream {
+        LociTokenStream { tokens: tokens(text), next: 0 }
     }
 }
 
-/// Tokenizes `text` with the `loci` tokenizer and returns the token texts.
-pub fn tokenize(text: &str) -> Vec<String> {
-    LociTokenizer::new().tokens(text).into_iter().map(|t| t.text).collect()
-}
-
-/// Owned token stream: CJK segmenters return tokens borrowing their input, so the
-/// tokenizer collects owned tokens first.
-pub struct LociTokenStream {
+/// The tokens of one text, handed to tantivy one at a time.
+pub(crate) struct LociTokenStream {
     tokens: Vec<Token>,
     next: usize,
 }
@@ -83,11 +36,55 @@ impl TokenStream for LociTokenStream {
     }
 }
 
-impl Tokenizer for LociTokenizer {
-    type TokenStream<'a> = LociTokenStream;
-    fn token_stream<'a>(&'a mut self, text: &'a str) -> LociTokenStream {
-        LociTokenStream { tokens: self.tokens(text), next: 0 }
+/// The script class of a run (§9.3 step 1).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Run {
+    Hangul,
+    HanKana,
+    /// Other letters and digits.
+    Word,
+}
+
+impl Run {
+    fn of(c: char) -> Option<Run> {
+        if is_hangul(c) {
+            Some(Run::Hangul)
+        } else if is_han(c) || is_kana(c) {
+            Some(Run::HanKana)
+        } else if c.is_alphanumeric() {
+            Some(Run::Word)
+        } else {
+            None
+        }
     }
+}
+
+/// Tokenizes `text`. Offsets refer to the NFC form of `text`.
+pub(crate) fn tokens(text: &str) -> Vec<Token> {
+    let text: String = text.nfc().collect();
+    let mut out = Vec::new();
+    let mut push = |from: usize, to: usize, text: String| {
+        let position = out.len();
+        out.push(Token { offset_from: from, offset_to: to, position, text, position_length: 1 });
+    };
+    let mut i = 0;
+    while let Some(c) = text[i..].chars().next() {
+        let Some(class) = Run::of(c) else {
+            i += c.len_utf8();
+            continue;
+        };
+        let len: usize = text[i..].chars().take_while(|&ch| Run::of(ch) == Some(class)).map(char::len_utf8).sum();
+        let run = &text[i..i + len];
+        match class {
+            Run::Hangul => hangul_bigrams(run).into_iter().for_each(|(s, e)| push(i + s, i + e, run[s..e].to_string())),
+            Run::HanKana => {
+                chinese_japanese_words(run).into_iter().for_each(|(s, e)| push(i + s, i + e, run[s..e].to_string()))
+            }
+            Run::Word => push(i, i + len, run.to_lowercase()),
+        }
+        i += len;
+    }
+    out
 }
 
 fn is_hangul(c: char) -> bool {
@@ -107,10 +104,6 @@ fn is_han(c: char) -> bool {
     matches!(c,
         '\u{3005}' | '\u{3007}' | '\u{3021}'..='\u{3029}' | '\u{3400}'..='\u{4DBF}'
         | '\u{4E00}'..='\u{9FFF}' | '\u{F900}'..='\u{FAFF}' | '\u{20000}'..='\u{323AF}')
-}
-
-fn is_cjk(c: char) -> bool {
-    is_han(c) || is_kana(c) || is_hangul(c)
 }
 
 /// Words of a run of Han and kana, as byte ranges in `run`: ICU4X's dictionary
@@ -138,6 +131,10 @@ fn hangul_bigrams(run: &str) -> Vec<(usize, usize)> {
 mod tests {
     use super::*;
 
+    fn tokenize(text: &str) -> Vec<String> {
+        tokens(text).into_iter().map(|t| t.text).collect()
+    }
+
     #[test]
     fn latin_lowercased_and_split() {
         assert_eq!(tokenize("Graph-Search_v2.md, BM25!"), ["graph", "search", "v2", "md", "bm25"]);
@@ -151,7 +148,7 @@ mod tests {
 
     #[test]
     fn positions_increase_per_token() {
-        let mut t = LociTokenizer::new();
+        let mut t = LociTokenizer;
         let mut stream = t.token_stream("alpha 学习 공부했다 beta");
         let mut positions = Vec::new();
         while stream.advance() {

@@ -9,7 +9,7 @@ mod schedule;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use loci_core::envelope::{Outcome, Report};
+use loci_core::envelope::{Refusal, Report};
 use loci_core::plugin;
 use loci_core::vault::Vault;
 
@@ -48,25 +48,18 @@ fn main() -> ExitCode {
         Cmd::State { .. } => "learn state",
         Cmd::Review => "learn review",
     };
-    let exit = run(cli.command).print(cli.json, VERSION, command);
+    let exit = run(cli.command).unwrap_or_else(Report::from).print(cli.json, VERSION, command);
     ExitCode::from(exit as u8)
 }
 
-fn run(cmd: Cmd) -> Report {
+fn run(cmd: Cmd) -> Result<Report, Refusal> {
     let env = plugin::check_env(
         std::env::var(plugin::ENV_VERSION).ok(),
         std::env::var(plugin::ENV_VAULT).ok(),
         NAME,
         VERSION,
-    );
-    let env = match env {
-        Ok(e) => e,
-        Err((code, msg)) => return Report::fail(Outcome::refused(code, msg)),
-    };
-    let vault = match Vault::open(Some(&env.vault), &env.vault) {
-        Ok(v) => v,
-        Err(e) => return Report::fail(Outcome::refused(e.code(), e.message())),
-    };
+    )?;
+    let vault = Vault::open(Some(&env.vault), &env.vault)?;
     match cmd {
         Cmd::Lint => commands::lint(&vault),
         Cmd::Skills => commands::skills(),

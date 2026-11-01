@@ -1,7 +1,7 @@
 //! `loci status` (m0 §9.6).
 
 use loci_core::digest;
-use loci_core::envelope::{Diagnostic, Outcome, Report};
+use loci_core::envelope::{Diagnostic, Outcome, Refusal, Report};
 use loci_core::git;
 use loci_core::index::Index;
 use serde_json::json;
@@ -9,7 +9,7 @@ use serde_json::json;
 use super::{Ctx, plugins};
 use crate::assets;
 
-pub fn run(ctx: &Ctx) -> Result<Report, Report> {
+pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let root = &vault.root;
     let mut diags: Vec<Diagnostic> = vec![];

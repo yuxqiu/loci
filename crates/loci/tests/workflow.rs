@@ -11,7 +11,7 @@ use serde_json::json;
 
 #[test]
 fn status_change_counts_and_inbox() {
-    let v = TestVault::committed("agent-workflow");
+    let v = TestVault::committed(BIN, "agent-workflow");
     v.write("concepts/a/x.md", v.read("concepts/a/x.md") + "\nMore.\n");
     std::fs::remove_file(v.root.join("concepts/a/y.md")).unwrap();
     v.write("views/staged.md", "# Staged\n");
@@ -35,7 +35,7 @@ fn status_change_counts_and_inbox() {
 
 #[test]
 fn status_envelope() {
-    let v = TestVault::committed("agent-workflow");
+    let v = TestVault::committed(BIN, "agent-workflow");
     let (code, env) = v.run(&["status"]);
     assert_eq!(code, 0);
     assert!(diags(&env).is_empty(), "{}", diag_lines(&env));
@@ -55,7 +55,7 @@ fn status_envelope() {
 
 #[test]
 fn status_reports_every_part_when_one_fails() {
-    let v = TestVault::committed("agent-workflow");
+    let v = TestVault::committed(BIN, "agent-workflow");
     std::fs::remove_file(v.root.join("STYLE.md")).unwrap();
     std::fs::write(v.root.join(".git/index"), "corrupt").unwrap();
     let (code, env) = v.run(&["status"]);
@@ -73,7 +73,7 @@ fn status_reports_every_part_when_one_fails() {
 #[test]
 fn status_checks_agents_md_but_not_skills() {
     // Skills are managed outside loci: a vault without skill folders gets no warning.
-    let v = TestVault::committed("agent-workflow");
+    let v = TestVault::committed(BIN, "agent-workflow");
     let (_, env) = v.run(&["status"]);
     assert!(with_code(&env, "install.missing").is_empty(), "{}", diag_lines(&env));
     std::fs::remove_file(v.root.join("AGENTS.md")).unwrap();
@@ -91,7 +91,7 @@ fn dropped(env: &serde_json::Value) -> Vec<String> {
 
 #[test]
 fn material_dropped_when_a_deleted_draft_is_not_absorbed() {
-    let v = TestVault::committed("agent-workflow");
+    let v = TestVault::committed(BIN, "agent-workflow");
     std::fs::remove_file(v.root.join("inbox/drafts/draft.md")).unwrap();
     let (code, env) = v.run(&["lint"]);
     assert_eq!(code, 0, "warnings only: {}", diag_lines(&env));
@@ -103,7 +103,7 @@ fn material_dropped_when_a_deleted_draft_is_not_absorbed() {
 
 #[test]
 fn material_dropped_silent_when_absorbed() {
-    let v = TestVault::committed("agent-workflow");
+    let v = TestVault::committed(BIN, "agent-workflow");
     let draft = v.read("inbox/drafts/draft.md");
     std::fs::remove_file(v.root.join("inbox/drafts/draft.md")).unwrap();
     let body = draft.strip_prefix("# Draft\n").unwrap();
@@ -111,7 +111,7 @@ fn material_dropped_silent_when_absorbed() {
     let (_, env) = v.run(&["lint"]);
     assert!(dropped(&env).is_empty(), "{}", diag_lines(&env));
     // Partly absorbed: only the code block is kept.
-    let v = TestVault::committed("agent-workflow");
+    let v = TestVault::committed(BIN, "agent-workflow");
     std::fs::remove_file(v.root.join("inbox/drafts/draft.md")).unwrap();
     v.write("views/kept.md", "# Kept\n\n```python\nprint(\"hi\")\n```\n");
     let (_, env) = v.run(&["lint"]);
@@ -122,7 +122,7 @@ fn material_dropped_silent_when_absorbed() {
 
 #[test]
 fn material_dropped_skipped_without_head() {
-    let v = TestVault::git_no_head("agent-workflow");
+    let v = TestVault::git_no_head(BIN, "agent-workflow");
     std::fs::remove_file(v.root.join("inbox/drafts/draft.md")).unwrap();
     let (code, env) = v.run(&["lint"]);
     assert_eq!(code, 0, "{}", diag_lines(&env));
@@ -133,7 +133,7 @@ fn material_dropped_skipped_without_head() {
 
 #[test]
 fn new_writes_the_skeleton() {
-    let v = TestVault::committed("agent-workflow");
+    let v = TestVault::committed(BIN, "agent-workflow");
     let (code, env) = v.run(&["new", "concepts/a/sub/fresh"]);
     assert_eq!(code, 0, "{env:#}");
     assert_eq!(env["command"], "new");
@@ -155,7 +155,7 @@ fn new_writes_the_skeleton() {
 
 #[test]
 fn new_refusals() {
-    let v = TestVault::committed("agent-workflow");
+    let v = TestVault::committed(BIN, "agent-workflow");
     let before = v.tree();
     for (path, code) in [
         ("concepts/a/x.md", "new.exists"),
@@ -175,7 +175,7 @@ fn new_refusals() {
 
 #[test]
 fn material_dropped_reports_on_the_deleted_path() {
-    let v = TestVault::committed("agent-workflow");
+    let v = TestVault::committed(BIN, "agent-workflow");
     std::fs::remove_file(v.root.join("inbox/drafts/draft.md")).unwrap();
     let (_, env) = v.run(&["lint"]);
     let d = with_code(&env, "material-dropped");
@@ -187,7 +187,7 @@ fn material_dropped_reports_on_the_deleted_path() {
 
 #[test]
 fn done_records_the_agent_work_without_touching_the_index() {
-    let v = TestVault::committed("agent-workflow");
+    let v = TestVault::committed(BIN, "agent-workflow");
     let head = v.git(&["rev-parse", "HEAD"]).trim().to_string();
     let reference = format!("refs/loci/agent/{head}");
     // Nothing changed: nothing recorded.
@@ -222,7 +222,7 @@ fn done_records_the_agent_work_without_touching_the_index() {
 
 #[test]
 fn done_prunes_old_records() {
-    let v = TestVault::committed("agent-workflow");
+    let v = TestVault::committed(BIN, "agent-workflow");
     // The test git is dated 2025-01-01, long before now.
     let old = v.git(&["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "old"]).trim().to_string();
     v.git(&["update-ref", "refs/loci/agent/old", &old]);

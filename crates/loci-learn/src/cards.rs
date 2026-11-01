@@ -2,7 +2,6 @@
 
 use std::ops::Range;
 
-use loci_core::blockids;
 use loci_core::index::Index;
 use loci_core::parse::{BlockKind, Note, TopBlock};
 use loci_core::vault::Kind;
@@ -42,13 +41,12 @@ pub fn all(index: &Index) -> (Vec<Card>, Vec<FormatIssue>) {
 }
 
 pub fn of_note(note: &Note) -> (Vec<Card>, Vec<FormatIssue>) {
-    let sections = blockids::sections(note, SECTION);
+    let found = note.h2_sections(SECTION);
     let mut issues = vec![];
-    if sections.len() > 1 {
-        let second = note.headings.iter().filter(|h| h.level == 2 && h.text == SECTION).nth(1);
-        let range = second.expect("two sections have two headings").range.clone();
-        issues.push(FormatIssue { path: note.path.clone(), range });
+    if let Some((second, _)) = found.get(1) {
+        issues.push(FormatIssue { path: note.path.clone(), range: second.range.clone() });
     }
+    let sections: Vec<Range<usize>> = found.into_iter().map(|(_, r)| r).collect();
     let inside = |r: &Range<usize>| sections.iter().any(|s| s.start <= r.start && r.end <= s.end);
     // Anything at the top level of the section other than a list is a format issue.
     for (block, range) in &note.top_blocks {
@@ -79,7 +77,7 @@ pub fn of_note(note: &Note) -> (Vec<Card>, Vec<FormatIssue>) {
 /// Splits an item's raw text at the first `::` outside inline code that is preceded by
 /// whitespace and followed by whitespace or a line end (§1.1). Returns the question and
 /// the answer, trimmed, with the list marker removed from the question.
-pub fn split(raw: &str) -> Option<(String, String)> {
+fn split(raw: &str) -> Option<(String, String)> {
     let bytes = raw.as_bytes();
     let mut i = 0;
     let mut code_ticks: Option<usize> = None; // backtick run length of an open code span

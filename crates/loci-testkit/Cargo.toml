@@ -1,0 +1,14 @@
+[package]
+name = "loci-testkit"
+description = "Test helpers for the loci integration tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+loci-core = { path = "../loci-core" }
+regex = "1.13.1"
+serde_json = "1.0.154"
+tempfile = "3.27.0"

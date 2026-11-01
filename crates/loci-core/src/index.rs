@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use unicode_normalization::UnicodeNormalization;
 
+use crate::envelope::Refusal;
 use crate::parse::{self, Link, LinkForm, Note};
 use crate::vault::{self, Kind};
 
@@ -16,6 +17,23 @@ pub enum FileIssue {
     Unreadable(String),
 }
 
+/// What a `sources` entry names ([`Index::resolve_source`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceTarget {
+    /// A source folder and its files other than `source.yaml`.
+    Folder { path: String, files: Vec<String> },
+    /// A journal note.
+    Note(String),
+}
+
+impl SourceTarget {
+    pub fn into_path(self) -> String {
+        match self {
+            SourceTarget::Folder { path, .. } | SourceTarget::Note(path) => path,
+        }
+    }
+}
+
 /// Why [`Index::concept`] found no single concept.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConceptLookup {
@@ -25,12 +43,12 @@ pub enum ConceptLookup {
 }
 
 impl ConceptLookup {
-    /// The refusal code and message for argument `arg`: `unknown_code` when no concept
-    /// matches, `concept.ambiguous` when several do.
-    pub fn refusal(&self, unknown_code: &'static str, arg: &str) -> (&'static str, String) {
+    /// The refusal for argument `arg`: `unknown_code` when no concept matches,
+    /// `concept.ambiguous` when several do.
+    pub fn refusal(&self, unknown_code: &str, arg: &str) -> Refusal {
         match self {
-            ConceptLookup::Unknown => (unknown_code, format!("no concept `{arg}`")),
-            ConceptLookup::Ambiguous(paths) => (
+            ConceptLookup::Unknown => Refusal::refused(unknown_code, format!("no note named `{arg}`")),
+            ConceptLookup::Ambiguous(paths) => Refusal::refused(
                 "concept.ambiguous",
                 format!("`{arg}` names several concepts ({}); name one by path", paths.join(", ")),
             ),
@@ -78,8 +96,8 @@ pub enum LinkError {
 }
 
 /// An index of in-memory files: `.md` texts are parsed, other contents are unused.
-pub fn from_texts(files: &[(&str, &str)]) -> Index {
-    let map: BTreeMap<&str, &str> = files.iter().copied().collect();
+pub fn from_texts(files: &[(impl AsRef<str>, impl AsRef<str>)]) -> Index {
+    let map: BTreeMap<&str, &str> = files.iter().map(|(p, t)| (p.as_ref(), t.as_ref())).collect();
     build(map.keys().map(|p| p.to_string()).collect(), |p| {
         map.get(p).map(|t| t.as_bytes().to_vec()).ok_or_else(|| std::io::Error::other("not in memory"))
     })
@@ -141,6 +159,17 @@ impl Index {
         index
     }
 
+    /// The note a user argument names: a vault path to any note (`.md` optional), or
+    /// a concept ([`Index::concept`]).
+    pub fn note(&self, arg: &str) -> Result<&Note, ConceptLookup> {
+        let arg = vault::nfc(arg);
+        let path = if arg.ends_with(".md") { arg.clone() } else { format!("{arg}.md") };
+        match self.notes.get(&path) {
+            Some(n) => Ok(n),
+            None => self.concept(&arg),
+        }
+    }
+
     /// The concept a user argument names: a concept path (`.md` optional) or a slug
     /// (case-insensitive). The argument is put in NFC. A slug shared by several
     /// concepts is ambiguous.
@@ -183,19 +212,31 @@ impl Index {
     /// Where `link` in note `from` points, ignoring its fragment: a note or file path,
     /// a source folder (`sources/<type>/<slug>`), or `None` when it does not resolve.
     pub fn link_target(&self, from: &Note, link: &Link) -> Option<String> {
-        if link.form != LinkForm::Source {
-            let whole = Link { fragment: None, ..link.clone() };
-            return self.resolve(from, &whole).ok().map(|r| r.path().to_string());
+        if link.form == LinkForm::Source {
+            return self.resolve_source(link).map(SourceTarget::into_path);
         }
-        let note = format!("{}.md", link.target);
-        let folder = format!("{}/", link.target);
-        if self.notes.contains_key(&note) {
-            Some(note)
-        } else if self.files.iter().any(|f| f.starts_with(&folder)) {
-            Some(link.target.clone())
-        } else {
-            None
+        let whole = Link { fragment: None, ..link.clone() };
+        self.resolve(from, &whole).ok().map(|r| r.path().to_string())
+    }
+
+    /// What a `sources` entry names (§5.5), ignoring its fragment: a source folder
+    /// `sources/<type>/<slug>` that exists, or a journal note. Anything else is `None`.
+    pub fn resolve_source(&self, link: &Link) -> Option<SourceTarget> {
+        let target = &link.target;
+        if let Some(folder) = target.strip_prefix("sources/") {
+            if folder.split('/').count() != 2 {
+                return None;
+            }
+            let prefix = format!("{target}/");
+            let in_folder: Vec<&String> = self.files.iter().filter(|f| f.starts_with(&prefix)).collect();
+            if in_folder.is_empty() {
+                return None;
+            }
+            let files = in_folder.into_iter().filter(|f| !f.ends_with("/source.yaml")).cloned().collect();
+            return Some(SourceTarget::Folder { path: target.clone(), files });
         }
+        let note = format!("{target}.md");
+        (target.starts_with("journal/") && self.notes.contains_key(&note)).then_some(SourceTarget::Note(note))
     }
 
     /// Every link that points at `path`, or at the source folder holding it, as
@@ -213,6 +254,14 @@ impl Index {
         out
     }
 
+    /// Whether `slug` is already a concept's slug (other than paths `moving` accepts,
+    /// which are being renamed) or any concept's alias (§9.5, §9.8).
+    pub fn name_taken(&self, slug: &str, moving: impl Fn(&str) -> bool) -> bool {
+        let key = slug.to_lowercase();
+        let slug_taken = self.slugs.get(&key).is_some_and(|ps| ps.iter().any(|p| !moving(p)));
+        slug_taken || self.aliases.contains_key(&key)
+    }
+
     pub fn concepts(&self) -> impl Iterator<Item = &Note> {
         self.notes.values().filter(|n| n.kind == Kind::Concept)
     }
@@ -226,9 +275,14 @@ impl Index {
             Resolved::Note(from.path.clone())
         } else if !target.contains('/') {
             let key = target.to_lowercase();
-            match self.slugs.get(&key) {
-                Some(paths) => Resolved::Note(paths[0].clone()),
-                None => {
+            match self.slugs.get(&key).map(Vec::as_slice) {
+                Some([path]) => Resolved::Note(path.clone()),
+                // A slug shared by several concepts (`slug.duplicate`) names none of them.
+                Some(paths @ [_, _, ..]) => {
+                    let hint = format!("several concepts are named `{key}` ({}); link by path", paths.join(", "));
+                    return Err(LinkError::Dangling { hint: Some(hint) });
+                }
+                Some([]) | None => {
                     let hint = match self.aliases.get(&key) {
                         Some(paths) => Some(format!("alias of [[{}]]", vault::stem(&paths[0]))),
                         None => Some("link non-concepts by path".to_string()),
@@ -277,10 +331,6 @@ pub fn heading_key(s: &str) -> String {
 mod tests {
     use super::*;
 
-    fn idx(files: &[(&str, &str)]) -> Index {
-        crate::index::from_texts(files)
-    }
-
     fn first_link(i: &Index, path: &str) -> (Note, Link) {
         let n = i.notes[path].clone();
         let l = n.links[0].clone();
@@ -289,7 +339,7 @@ mod tests {
 
     #[test]
     fn bare_names_resolve_to_concepts_only() {
-        let i = idx(&[
+        let i = from_texts(&[
             ("concepts/a/bfs.md", "---\naliases: [breadth]\n---\n# BFS\n"),
             ("views/learn/bfs.md", "# Plan\n\n[[bfs]] [[plan]] [[breadth]]\n"),
             ("views/plan.md", "# P\n"),
@@ -301,8 +351,21 @@ mod tests {
     }
 
     #[test]
+    fn a_shared_slug_resolves_to_no_concept() {
+        let i = from_texts(&[
+            ("concepts/a/bfs.md", "# A\n"),
+            ("concepts/b/bfs.md", "# B\n"),
+            ("views/v.md", "# V\n\n[[bfs]] [[concepts/b/bfs]]\n"),
+        ]);
+        let n = i.notes["views/v.md"].clone();
+        let Err(LinkError::Dangling { hint: Some(hint) }) = i.resolve(&n, &n.links[0]) else { panic!("resolved") };
+        assert!(hint.contains("link by path"), "{hint}");
+        assert_eq!(i.resolve(&n, &n.links[1]), Ok(Resolved::Note("concepts/b/bfs.md".into())));
+    }
+
+    #[test]
     fn paths_and_fragments() {
-        let i = idx(&[
+        let i = from_texts(&[
             ("views/v.md", "# V\n\n## Steps\n\n- one ^abc\n"),
             (
                 "journal/r/2025/03/25-03-14.md",
@@ -320,7 +383,7 @@ mod tests {
 
     #[test]
     fn embeds_of_files() {
-        let i = idx(&[
+        let i = from_texts(&[
             ("concepts/a/x.md", "---\nid: X\n---\n# X\n\n![[concepts/a/attachments/p.png|300]]\n"),
             ("concepts/a/attachments/p.png", ""),
         ]);

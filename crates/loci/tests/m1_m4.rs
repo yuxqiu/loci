@@ -12,20 +12,8 @@ const IDS: [&str; 4] = [
     "01JB9XQ7Z3K4M5N6P7Q8R9S0A4",
 ];
 
-fn concept(id: &str, extra: &str, digest: &str, body: &str) -> String {
-    format!("---\nid: {id}\n{extra}digest: {digest}\n---\n{body}")
-}
-
-/// A committed vault holding `loci.toml` and `files`.
 fn vault(files: &[(&str, String)]) -> TestVault {
-    let v = TestVault::empty();
-    v.write("loci.toml", "schema = 1\n");
-    for (p, t) in files {
-        v.write(p, t);
-    }
-    v.git(&["init", "-q", "-b", "main"]);
-    v.commit_all("init");
-    v
+    TestVault::with_files(BIN, files)
 }
 
 fn strs(v: &serde_json::Value) -> Vec<&str> {
@@ -340,4 +328,27 @@ fn links_lists_outgoing_and_incoming() {
 
     let (code, env) = v.run(&["links", "views/nothing"]);
     assert_eq!((code, error_code(&env)), (1, "links.unknown"));
+}
+
+#[test]
+fn lint_links_and_mv_agree_on_sources_entries() {
+    let v = vault(&[
+        ("concepts/g/x.md", concept(IDS[0], "sources: [\"journal/r/day.md\", \"concepts/g\"]\n", "d", "# X\n")),
+        ("journal/r/day.md", "# Day\n".into()),
+    ]);
+    let (_, env) = v.run(&["lint"]);
+    let unresolved: Vec<&str> =
+        with_code(&env, "sources.unresolved").iter().map(|d| d["message"].as_str().unwrap()).collect();
+    assert_eq!(unresolved.len(), 1, "{env:#}");
+    assert!(unresolved[0].contains("concepts/g"), "a concept folder is not a source");
+    let (_, env) = v.run(&["links", "x"]);
+    let targets: Vec<&serde_json::Value> =
+        env["data"]["outgoing"].as_array().unwrap().iter().map(|l| &l["target"]).collect();
+    assert_eq!(targets, [&json!("journal/r/day.md"), &json!(null)]);
+    assert_eq!(env["data"]["incoming"], json!([]), "a note does not link to itself through its folder");
+    let (code, env) = v.run(&["mv", "journal/r/day.md", "journal/r/day2.md"]);
+    assert_eq!(code, 0, "{env:#}");
+    assert!(v.read("concepts/g/x.md").contains("\"journal/r/day2\""), "{}", v.read("concepts/g/x.md"));
+    let (_, env) = v.run(&["lint"]);
+    assert_eq!(with_code(&env, "sources.unresolved").len(), 1, "mv keeps the journal source resolving");
 }

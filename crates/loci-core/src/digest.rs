@@ -151,14 +151,11 @@ pub fn area_json(a: &Area) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn idx(files: &[(&str, &str)]) -> Index {
-        crate::index::from_texts(files)
-    }
+    use crate::index::from_texts;
 
     #[test]
     fn areas_hold_a_concept_or_area_md() {
-        let i = idx(&[
+        let i = from_texts(&[
             ("concepts/a/x.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ndigest: d\n---\n# X\n"),
             ("concepts/b/AREA.md", "# B\n\nEmpty so far.\n"),
             ("concepts/img/figure.png", ""),
@@ -169,7 +166,7 @@ mod tests {
 
     #[test]
     fn root_and_area() {
-        let i = idx(&[
+        let i = from_texts(&[
             ("concepts/algorithms/AREA.md", "# Algorithms\n\nTechniques for searching.\n"),
             ("concepts/algorithms/merge-sort.md", "---\ndigest: Stable sort.\n---\n# M\n"),
             ("concepts/algorithms/Binary-search.md", "---\ndigest: Find a key.\n---\n# B\n"),

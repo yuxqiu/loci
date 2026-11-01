@@ -136,11 +136,45 @@ pub enum Exit {
     Internal = 3,
 }
 
-/// The outcome of a command: data on success, or an error with its exit code. Diagnostics
-/// travel separately so that warnings accompany both.
+/// Why a command could not do its work (m0 §8): the exit code and the envelope's
+/// `error`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refusal {
+    pub exit: Exit,
+    pub error: CmdError,
+}
+
+impl Refusal {
+    /// A refused precondition (exit 1).
+    pub fn refused(code: &str, message: impl Into<String>) -> Self {
+        Self { exit: Exit::Refused, error: CmdError { code: code.to_string(), message: message.into() } }
+    }
+
+    /// An I/O, git or internal failure (exit 3).
+    pub fn internal(code: &str, message: impl Into<String>) -> Self {
+        Self { exit: Exit::Internal, error: CmdError { code: code.to_string(), message: message.into() } }
+    }
+
+    /// An I/O failure (`io`, exit 3).
+    pub fn io(e: impl std::fmt::Display) -> Self {
+        Self::internal("io", e.to_string())
+    }
+
+    /// A git failure (`git`, exit 3).
+    pub fn git(e: impl std::fmt::Display) -> Self {
+        Self::internal("git", e.to_string())
+    }
+
+    pub fn code(&self) -> &str {
+        &self.error.code
+    }
+}
+
+/// The outcome of a command: data on success, or a refusal. Diagnostics travel
+/// separately so that warnings accompany both.
 #[derive(Debug)]
 pub struct Outcome {
-    pub data: Result<serde_json::Value, (Exit, CmdError)>,
+    pub data: Result<serde_json::Value, Refusal>,
     pub diagnostics: Vec<Diagnostic>,
     /// Exit code when `data` is `Ok` (1 for a lint with errors).
     exit_ok: Exit,
@@ -157,22 +191,6 @@ impl Outcome {
         Self { data: Ok(data), diagnostics, exit_ok }
     }
 
-    pub fn refused(code: &str, message: impl Into<String>) -> Self {
-        Self::fail(Exit::Refused, code, message)
-    }
-
-    pub fn internal(code: &str, message: impl Into<String>) -> Self {
-        Self::fail(Exit::Internal, code, message)
-    }
-
-    pub fn fail(exit: Exit, code: &str, message: impl Into<String>) -> Self {
-        Self {
-            data: Err((exit, CmdError { code: code.to_string(), message: message.into() })),
-            diagnostics: vec![],
-            exit_ok: Exit::Ok,
-        }
-    }
-
     pub fn with_diagnostics(mut self, diags: Vec<Diagnostic>) -> Self {
         self.diagnostics = diags;
         self
@@ -181,7 +199,7 @@ impl Outcome {
     pub fn exit(&self) -> Exit {
         match &self.data {
             Ok(_) => self.exit_ok,
-            Err((e, _)) => *e,
+            Err(r) => r.exit,
         }
     }
 
@@ -189,7 +207,7 @@ impl Outcome {
         let exit = self.exit();
         let (data, error) = match &self.data {
             Ok(d) => (d.clone(), None),
-            Err((_, e)) => (serde_json::Value::Null, Some(e.clone())),
+            Err(r) => (serde_json::Value::Null, Some(r.error.clone())),
         };
         Envelope {
             schema: SCHEMA,
@@ -203,6 +221,18 @@ impl Outcome {
     }
 }
 
+impl From<Refusal> for Outcome {
+    fn from(r: Refusal) -> Self {
+        Self { data: Err(r), diagnostics: vec![], exit_ok: Exit::Ok }
+    }
+}
+
+impl From<Refusal> for Report {
+    fn from(r: Refusal) -> Self {
+        Self { outcome: r.into(), human: String::new() }
+    }
+}
+
 /// What a command produced: the envelope content and its human rendering.
 pub struct Report {
     pub outcome: Outcome,
@@ -212,10 +242,6 @@ pub struct Report {
 impl Report {
     pub fn new(outcome: Outcome, human: impl Into<String>) -> Self {
         Self { outcome, human: human.into() }
-    }
-
-    pub fn fail(outcome: Outcome) -> Self {
-        Self { outcome, human: String::new() }
     }
 
     /// Prints the report: the envelope on stdout with `json`; otherwise the human text
@@ -235,8 +261,8 @@ impl Report {
             for d in &outcome.diagnostics {
                 eprintln!("{}", d.human());
             }
-            if let Err((_, e)) = &outcome.data {
-                eprintln!("error[{}]: {}", e.code, e.message);
+            if let Err(r) = &outcome.data {
+                eprintln!("error[{}]: {}", r.error.code, r.error.message);
             }
         }
         outcome.exit()

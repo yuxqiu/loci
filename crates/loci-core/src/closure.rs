@@ -93,20 +93,16 @@ pub fn closure(index: &Index, root: &str, max_depth: Option<usize>) -> Closure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::from_texts;
 
     fn c(prereqs: &[&str]) -> String {
         let list: Vec<String> = prereqs.iter().map(|p| format!("\"[[{p}]]\"")).collect();
         format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nprereqs: [{}]\ndigest: d\n---\n# T\n", list.join(", "))
     }
 
-    fn idx(files: &[(&str, String)]) -> Index {
-        let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (*p, t.as_str())).collect();
-        crate::index::from_texts(&files)
-    }
-
     #[test]
     fn order_depths_and_unresolved() {
-        let i = idx(&[
+        let i = from_texts(&[
             ("concepts/a/dijkstra.md", c(&["heap", "graph", "nope"])),
             ("concepts/a/heap.md", c(&["array"])),
             ("concepts/a/graph.md", c(&[])),
@@ -123,7 +119,11 @@ mod tests {
 
     #[test]
     fn cycle_is_broken() {
-        let i = idx(&[("concepts/a/x.md", c(&["y"])), ("concepts/a/y.md", c(&["z"])), ("concepts/a/z.md", c(&["y"]))]);
+        let i = from_texts(&[
+            ("concepts/a/x.md", c(&["y"])),
+            ("concepts/a/y.md", c(&["z"])),
+            ("concepts/a/z.md", c(&["y"])),
+        ]);
         let cl = closure(&i, "concepts/a/x.md", None);
         assert!(cl.cyclic);
         assert_eq!(cl.members.len(), 2);

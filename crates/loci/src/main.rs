@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+use loci_core::envelope::Report;
 use loci_core::vault::Kind;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -155,6 +156,23 @@ fn main() -> ExitCode {
         }
         Cmd::External(args) => return commands::dispatch::run(&ctx, args),
     };
-    let exit = report.unwrap_or_else(|refusal| refusal).print(ctx.json, VERSION, name);
+    let exit = report.unwrap_or_else(Report::from).print(ctx.json, VERSION, name);
     ExitCode::from(exit as u8)
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::*;
+
+    #[test]
+    fn core_commands_match_the_cli() {
+        let mut cli: Vec<String> = Cli::command().get_subcommands().map(|c| c.get_name().to_string()).collect();
+        cli.push("help".to_string());
+        cli.sort();
+        let mut listed: Vec<String> = CORE_COMMANDS.iter().map(|c| c.to_string()).collect();
+        listed.sort();
+        assert_eq!(listed, cli, "CORE_COMMANDS must list every subcommand, so plugins cannot shadow one");
+    }
 }

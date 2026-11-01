@@ -112,7 +112,7 @@ fn call_grade(verdicts: &[bool]) -> Grade {
 }
 
 /// The grade from one or two grader calls; disagreement gives `hard` (§3).
-pub fn derive_grade(calls: &[Vec<bool>]) -> Grade {
+fn derive_grade(calls: &[Vec<bool>]) -> Grade {
     let grades: Vec<Grade> = calls.iter().map(|c| call_grade(c)).collect();
     if grades.windows(2).any(|w| w[0] != w[1]) { Grade::Hard } else { grades[0] }
 }
@@ -186,7 +186,11 @@ pub fn append(vault: &Path, line: &Line) -> std::io::Result<u64> {
         std::fs::write(&attrs, ATTRS_LINE)?;
     }
     let path = vault.join(LOG);
-    let before = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let before = match std::fs::metadata(&path) {
+        Ok(m) => m.len(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(e) => return Err(e),
+    };
     let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
     let json = serde_json::to_string(line).expect("a line always serialises");
     writeln!(f, "{json}")?;

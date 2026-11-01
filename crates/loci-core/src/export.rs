@@ -147,7 +147,7 @@ pub struct Export {
 }
 
 /// Pandoc's automatic identifier for a heading text.
-pub fn pandoc_id(text: &str) -> String {
+fn pandoc_id(text: &str) -> String {
     let mut s: String = text
         .chars()
         .filter_map(|c| {
@@ -171,13 +171,11 @@ fn is_image(path: &str) -> bool {
     [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"].iter().any(|e| lower.ends_with(e))
 }
 
-/// The byte range of the section under heading `frag` in `note` (the heading through the
-/// next heading of the same or a higher level).
+/// The section under the heading `frag` names in `note` ([`Note::section`]).
 fn section_range(note: &Note, frag: &str) -> Option<Range<usize>> {
     let key = heading_key(frag);
-    let (i, h) = note.headings.iter().enumerate().find(|(_, h)| heading_key(&h.text) == key)?;
-    let end = note.headings[i + 1..].iter().find(|n| n.level <= h.level).map_or(note.text.len(), |n| n.range.start);
-    Some(h.range.start..end)
+    let i = note.headings.iter().position(|h| heading_key(&h.text) == key)?;
+    Some(note.section(i))
 }
 
 /// The note links of `note` within `range`, resolved, in order.
@@ -356,10 +354,7 @@ fn unique_name(path: &str, taken: &mut BTreeSet<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn idx(files: &[(&str, &str)]) -> Index {
-        crate::index::from_texts(files)
-    }
+    use crate::index::from_texts;
 
     fn concept(title: &str, body: &str) -> String {
         format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ndigest: About {title}.\n---\n# {title}\n\n{body}")
@@ -374,7 +369,7 @@ mod tests {
 
     #[test]
     fn reading_path_export() {
-        let i = idx(&[
+        let i = from_texts(&[
             ("views/algo.md", "# Algorithms\n\n## Part 1\n\n[[bfs]] and [[dfs|depth-first]].\n"),
             (
                 "concepts/a/bfs.md",
@@ -403,7 +398,7 @@ mod tests {
 
     #[test]
     fn section_links_and_depth() {
-        let i = idx(&[
+        let i = from_texts(&[
             ("views/v.md", "# V\n\n[[bfs#Proof]]\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Intro.\n\n## Proof\n\nBy induction.\n\n## Other\n\nX.\n")),
         ]);
@@ -418,7 +413,7 @@ mod tests {
 
     #[test]
     fn each_note_once_at_first_appearance() {
-        let i = idx(&[
+        let i = from_texts(&[
             ("views/v.md", "# V\n\n[[bfs]], then [[bfs#Proof]].\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Intro.\n\n## Proof\n\nBy induction.\n")),
         ]);
@@ -431,7 +426,7 @@ mod tests {
     #[test]
     fn block_links_include_only_the_block() {
         let id = "01JB9XQ7Z3K4M5N6P7Q8R9S0B1";
-        let i = idx(&[
+        let i = from_texts(&[
             ("views/v.md", &format!("# V\n\nSee [[bfs#^{id}]].\n")),
             ("concepts/a/bfs.md", &concept("BFS", &format!("Intro.\n\nThe key step. ^{id}\n\nOther.\n"))),
         ]);
@@ -444,7 +439,7 @@ mod tests {
 
     #[test]
     fn headings_with_links_and_setext_headings() {
-        let i = idx(&[
+        let i = from_texts(&[
             ("views/v.md", "# V\n\n## Read [[bfs]] first ##\n\nSetext [[bfs]]\ntwo lines\n---\n\nText.\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Body.\n")),
         ]);
@@ -455,14 +450,14 @@ mod tests {
 
     #[test]
     fn anchors_follow_pandoc_uniqueness() {
-        let i = idx(&[
+        let i = from_texts(&[
             ("views/v.md", "# BFS notes\n\n## BFS\n\n[[bfs]]\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Body.\n")),
             ("concepts/a/untitled.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\ndigest: d\n---\nNo heading.\n"),
         ]);
         let e = export(&i, "views/v.md", 1);
         assert!(e.markdown.contains("[BFS](#bfs-1)"), "{}", e.markdown);
-        let i = idx(&[
+        let i = from_texts(&[
             ("views/v.md", "# V\n\n[[untitled]]\n"),
             ("concepts/a/untitled.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\ndigest: d\n---\nNo heading.\n"),
         ]);

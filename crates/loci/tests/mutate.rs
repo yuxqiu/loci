@@ -26,7 +26,7 @@ fn mv_refused(v: &TestVault, from: &str, to: &str, code: &str) {
 
 #[test]
 fn mv_rename_flow_aliases() {
-    let v = TestVault::committed("mv-rename");
+    let v = TestVault::committed(BIN, "mv-rename");
     let env = mv(&v, "concepts/a/flow.md", "concepts/a/flow-new.md");
     assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
     // Old slug appended to a flow list; links by bare slug stay bare; markdown links
@@ -42,7 +42,7 @@ fn mv_rename_flow_aliases() {
 
 #[test]
 fn mv_rename_block_aliases() {
-    let v = TestVault::committed("mv-rename");
+    let v = TestVault::committed(BIN, "mv-rename");
     let env = mv(&v, "concepts/a/block.md", "concepts/a/block-new.md");
     assert_eq!(
         env["data"]["aliases_added"],
@@ -55,7 +55,7 @@ fn mv_rename_block_aliases() {
 
 #[test]
 fn mv_rename_absent_and_empty_aliases() {
-    let v = TestVault::committed("mv-rename");
+    let v = TestVault::committed(BIN, "mv-rename");
     mv(&v, "concepts/a/absent.md", "concepts/a/absent-new.md");
     assert!(
         v.read("concepts/a/absent-new.md")
@@ -72,7 +72,7 @@ fn mv_rename_absent_and_empty_aliases() {
 
 #[test]
 fn mv_refusals() {
-    let v = TestVault::committed("mv-rename");
+    let v = TestVault::committed(BIN, "mv-rename");
     mv_refused(&v, "concepts/a/flow.md", "concepts/a/block.md", "mv.exists");
     mv_refused(&v, "concepts/a/flow.md", "concepts/a/sub/block.md", "mv.collision");
     mv_refused(&v, "concepts/a/flow.md", "concepts/a/b1.md", "mv.collision");
@@ -89,7 +89,7 @@ fn mv_refusals() {
 
 #[test]
 fn mv_ignored_paths_are_refused() {
-    let v = TestVault::fixture("mv-rename");
+    let v = TestVault::fixture(BIN, "mv-rename");
     v.write(".gitignore", "/.loci/\n/ignored/\n");
     v.write("ignored/x.md", "# X\n");
     v.git(&["init", "-q", "-b", "main"]);
@@ -100,7 +100,7 @@ fn mv_ignored_paths_are_refused() {
 
 #[test]
 fn mv_source_folder_moves_as_a_unit() {
-    let v = TestVault::committed("mv-rename");
+    let v = TestVault::committed(BIN, "mv-rename");
     let env = mv(&v, "sources/papers/p1", "sources/papers/p2");
     let moved = env["data"]["moved"].as_array().unwrap();
     assert_eq!(moved.len(), 2);
@@ -114,7 +114,7 @@ fn mv_source_folder_moves_as_a_unit() {
 
 #[test]
 fn mv_directory() {
-    let v = TestVault::committed("mv-rename");
+    let v = TestVault::committed(BIN, "mv-rename");
     let env = mv(&v, "views/sub", "views/other");
     assert_eq!(env["data"]["moved"], serde_json::json!([["views/sub/inner.md", "views/other/inner.md"]]));
     assert!(v.read("views/linker.md").contains("- [[views/other/inner]]\n"));
@@ -124,7 +124,7 @@ fn mv_directory() {
 
 #[test]
 fn mv_area_directory_renames_nothing_but_paths() {
-    let v = TestVault::committed("mv-rename");
+    let v = TestVault::committed(BIN, "mv-rename");
     let env = mv(&v, "concepts/a", "concepts/b");
     assert_eq!(env["data"]["aliases_added"], serde_json::json!([]));
     let linker = v.read("views/linker.md");
@@ -137,7 +137,7 @@ fn mv_area_directory_renames_nothing_but_paths() {
 
 #[test]
 fn table_pipe_mv_keeps_escaped_pipe() {
-    let v = TestVault::committed("table-pipe");
+    let v = TestVault::committed(BIN, "table-pipe");
     mv(&v, "concepts/a/target.md", "concepts/a/renamed.md");
     mv(&v, "views/v.md", "views/w.md");
     let t = v.read("concepts/a/table.md");
@@ -152,7 +152,7 @@ fn table_pipe_mv_keeps_escaped_pipe() {
 
 #[test]
 fn frontmatter_edge_crlf_alias_line() {
-    let v = TestVault::committed("frontmatter-edge");
+    let v = TestVault::committed(BIN, "frontmatter-edge");
     mv(&v, "concepts/a/crlf.md", "concepts/a/crlf-two.md");
     assert_eq!(
         v.read("concepts/a/crlf-two.md"),
@@ -162,7 +162,7 @@ fn frontmatter_edge_crlf_alias_line() {
 
 #[test]
 fn frontmatter_edge_scalars_edited_inside_quotes() {
-    let v = TestVault::committed("frontmatter-edge");
+    let v = TestVault::committed(BIN, "frontmatter-edge");
     mv(&v, "journal/r/2025/01/25-01-01.md", "journal/r/2025/01/25-01-03.md");
     mv(&v, "concepts/a/target.md", "concepts/a/target-two.md");
     let text = v.read("concepts/a/scalars.md");
@@ -180,7 +180,7 @@ fn frontmatter_edge_scalars_edited_inside_quotes() {
 
 #[test]
 fn cjk_mv_edits_frontmatter_at_the_right_offset() {
-    let v = TestVault::committed("cjk");
+    let v = TestVault::committed(BIN, "cjk");
     let env = mv(&v, "concepts/algo/排序.md", "concepts/algo/排序算法.md");
     assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
     assert_eq!(
@@ -206,21 +206,16 @@ fn block_ids(v: &TestVault, note: &str, section: &str) -> (i32, serde_json::Valu
     (code, env)
 }
 
-/// Removes every ` ^<ULID>` the command inserted.
-fn strip_ulid_ids(s: &str) -> String {
-    regex::Regex::new(r" \^[0-9A-HJKMNP-TV-Z]{26}").unwrap().replace_all(s, "").into_owned()
-}
-
 #[test]
 fn block_ids_assigns_top_level_blocks_of_the_section() {
-    let v = TestVault::committed("block-ids");
+    let v = TestVault::committed(BIN, "block-ids");
     let note = "concepts/a/cards.md";
     let before = v.read(note);
     let (code, env) = block_ids(&v, note, "Cards");
     assert_eq!(code, 0, "{env:#}");
     let after = v.read(note);
     // Only insertions of ` ^<ULID>`, all ids distinct ULIDs.
-    assert_eq!(strip_ulid_ids(&after), before);
+    assert_eq!(strip_block_ids(&after), before);
     let assigned = env["data"]["assigned"].as_array().unwrap();
     let ids: Vec<&str> = assigned.iter().map(|a| a["id"].as_str().unwrap()).collect();
     assert!(ids.iter().all(|i| is_ulid(i)), "{ids:?}");
@@ -248,7 +243,7 @@ fn block_ids_assigns_top_level_blocks_of_the_section() {
 
 #[test]
 fn block_ids_any_managed_note_and_refusals() {
-    let v = TestVault::committed("block-ids");
+    let v = TestVault::committed(BIN, "block-ids");
     let (code, env) = block_ids(&v, "views/v.md", "Cards");
     assert_eq!(code, 0, "{env:#}");
     assert_eq!(env["data"]["assigned"].as_array().unwrap().len(), 1);
@@ -269,7 +264,7 @@ fn block_ids_any_managed_note_and_refusals() {
 
 #[test]
 fn fetch_from_inbox() {
-    let v = TestVault::committed("sources");
+    let v = TestVault::committed(BIN, "sources");
     let clip = v.read("inbox/drafts/clip.md");
     let (code, env) = v.run(&["fetch", "inbox/drafts/clip.md", "clippings/clip"]);
     assert_eq!(code, 0, "{env:#}");
@@ -309,7 +304,7 @@ fn fetch_from_inbox() {
 
 #[test]
 fn fetch_refusals() {
-    let v = TestVault::committed("sources");
+    let v = TestVault::committed(BIN, "sources");
     v.write("inbox/drafts/again.md", "# Again\n");
     let before = v.tree();
     let (code, env) = v.run(&["fetch", "inbox/drafts/again.md", "papers/heaps"]);
@@ -335,7 +330,7 @@ fn init_in(dir: &std::path::Path, v: &TestVault) -> (i32, serde_json::Value) {
 
 #[test]
 fn init_creates_a_vault_without_committing() {
-    let v = TestVault::empty();
+    let v = TestVault::empty(BIN);
     let (code, env) = init_in(&v.root, &v);
     assert_eq!(code, 0, "{env:#}");
     assert!(v.root.join(".git").is_dir());
@@ -358,7 +353,7 @@ fn init_creates_a_vault_without_committing() {
 
 #[test]
 fn init_skips_existing_files() {
-    let v = TestVault::fixture("init");
+    let v = TestVault::fixture(BIN, "init");
     let (code, env) = init_in(&v.root, &v);
     assert_eq!((code, error_code(&env)), (1, "init.exists"));
     std::fs::remove_file(v.root.join("loci.toml")).unwrap();
@@ -377,7 +372,7 @@ fn init_skips_existing_files() {
 
 #[test]
 fn init_keeps_a_non_utf8_gitignore() {
-    let v = TestVault::empty();
+    let v = TestVault::empty(BIN);
     let original = b"# caf\xe9 build outputs\nsecrets.env\n";
     std::fs::write(v.root.join(".gitignore"), original).unwrap();
     let (code, env) = init_in(&v.root, &v);
@@ -389,7 +384,7 @@ fn init_keeps_a_non_utf8_gitignore() {
 
 #[test]
 fn init_inside_a_work_tree_but_not_at_its_root_is_refused() {
-    let v = TestVault::empty();
+    let v = TestVault::empty(BIN);
     v.git(&["init", "-q", "-b", "main"]);
     let sub = v.root.join("sub");
     std::fs::create_dir_all(&sub).unwrap();
@@ -402,7 +397,7 @@ fn init_inside_a_work_tree_but_not_at_its_root_is_refused() {
 
 #[test]
 fn path_arguments_outside_the_vault_are_refused() {
-    let v = TestVault::committed("mv-rename");
+    let v = TestVault::committed(BIN, "mv-rename");
     std::fs::write(v.tmp.path().join("outside.md"), "# Outside\n").unwrap();
     let before = v.tree();
     for args in [
@@ -423,7 +418,7 @@ fn path_arguments_outside_the_vault_are_refused() {
 
 #[test]
 fn mv_rename_needs_valid_frontmatter() {
-    let v = TestVault::committed("mv-rename");
+    let v = TestVault::committed(BIN, "mv-rename");
     v.write("concepts/a/bare.md", "# Bare\n");
     v.write("concepts/a/scalar.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0Z1\naliases: one\ndigest: d\n---\n# S\n");
     v.commit_all("more");
@@ -433,7 +428,7 @@ fn mv_rename_needs_valid_frontmatter() {
 
 #[test]
 fn mv_never_overwrites_reserved_or_unindexed_files() {
-    let v = TestVault::committed("mv-rename");
+    let v = TestVault::committed(BIN, "mv-rename");
     v.write("views/x.png", "garbage");
     v.write(".gitignore", "*.log\n");
     v.write("views/old.log", "ignored but real");
@@ -449,7 +444,7 @@ fn mv_never_overwrites_reserved_or_unindexed_files() {
 
 #[test]
 fn fetch_refuses_a_file_named_source_yaml() {
-    let v = TestVault::committed("sources");
+    let v = TestVault::committed(BIN, "sources");
     v.write("inbox/drafts/source.yaml", "IMPORTANT USER DATA");
     let before = v.tree();
     let (exit, env) = v.run(&["fetch", "inbox/drafts/source.yaml", "docs/x"]);

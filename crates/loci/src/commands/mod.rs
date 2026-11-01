@@ -1,4 +1,5 @@
-//! Core commands. Each returns a [`Report`](crate::Report).
+//! Core commands. Each `run` returns its report, or the refusal that stopped it;
+//! `dispatch` runs a plugin instead.
 
 pub mod bench;
 pub mod blockids;
@@ -20,7 +21,7 @@ pub mod status;
 
 use std::path::PathBuf;
 
-use loci_core::envelope::{Outcome, Report};
+use loci_core::envelope::Refusal;
 use loci_core::plugin::{self, Plugin};
 use loci_core::vault::{self, Vault};
 
@@ -33,10 +34,9 @@ pub struct Ctx {
 }
 
 impl Ctx {
-    /// Opens the vault, or returns the refusal report (m0 §8, global options).
-    pub fn vault(&self) -> Result<Vault, Report> {
-        Vault::open(self.explicit_vault.as_deref(), &self.cwd)
-            .map_err(|e| Report::fail(Outcome::refused(e.code(), e.message())))
+    /// Opens the vault, or refuses (m0 §8, global options).
+    pub fn vault(&self) -> Result<Vault, Refusal> {
+        Ok(Vault::open(self.explicit_vault.as_deref(), &self.cwd)?)
     }
 }
 
@@ -46,6 +46,6 @@ pub fn plugins() -> Vec<Plugin> {
 }
 
 /// A user-given vault path (m0 §8), or the `path.outside` refusal.
-pub fn vault_path(p: &str) -> Result<String, Report> {
-    vault::user_path(p).map_err(|m| Report::fail(Outcome::refused("path.outside", m)))
+pub fn vault_path(p: &str) -> Result<String, Refusal> {
+    vault::user_path(p).map_err(|m| Refusal::refused("path.outside", m))
 }

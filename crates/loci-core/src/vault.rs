@@ -7,10 +7,10 @@ use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::config::{self, Config};
+use crate::envelope::Refusal;
 
 /// Serialized as its [`Kind::name`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Kind {
     Concept,
     Area,
@@ -43,6 +43,12 @@ impl Kind {
     /// The managed kinds (m0 §3): C, A, V, J, R.
     pub fn is_managed(self) -> bool {
         matches!(self, Kind::Concept | Kind::Area | Kind::View | Kind::Journal | Kind::Rules)
+    }
+}
+
+impl serde::Serialize for Kind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
     }
 }
 
@@ -161,6 +167,12 @@ impl OpenError {
     }
 }
 
+impl From<OpenError> for Refusal {
+    fn from(e: OpenError) -> Self {
+        Refusal::refused(e.code(), e.message())
+    }
+}
+
 impl Vault {
     /// Finds the vault: `explicit`, or the nearest ancestor of `cwd` containing
     /// `loci.toml`. The root must be the root of a git work tree.
@@ -215,7 +227,7 @@ pub struct Walk {
     pub unreadable: Vec<(String, String)>,
 }
 
-pub fn walk(root: &Path) -> Walk {
+fn walk(root: &Path) -> Walk {
     let mut out = Walk::default();
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)

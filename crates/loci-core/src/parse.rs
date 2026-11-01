@@ -195,6 +195,23 @@ impl Note {
         self.h1().unwrap_or_else(|| crate::vault::stem(&self.path))
     }
 
+    /// The section under `self.headings[i]`: the heading through the next heading of the
+    /// same or a higher level.
+    pub fn section(&self, i: usize) -> Range<usize> {
+        let h = &self.headings[i];
+        let end = self.headings[i + 1..].iter().find(|n| n.level <= h.level).map_or(self.text.len(), |n| n.range.start);
+        h.range.start..end
+    }
+
+    /// Every H2 whose text is `text`, with the content of its section (after the
+    /// heading, up to the next H1 or H2).
+    pub fn h2_sections(&self, text: &str) -> Vec<(&Heading, Range<usize>)> {
+        (0..self.headings.len())
+            .filter(|&i| self.headings[i].level == 2 && self.headings[i].text == text)
+            .map(|i| (&self.headings[i], self.headings[i].range.end..self.section(i).end))
+            .collect()
+    }
+
     /// Byte offset where the body starts: after the frontmatter block, or after a BOM.
     pub fn body_start(&self) -> usize {
         match &self.frontmatter {
@@ -474,12 +491,9 @@ fn frontmatter_links(text: &str, fm: &Frontmatter) -> Vec<Link> {
     for item in items("sources") {
         if let FmValue::Str { value, span, quoted } = item
             && verbatim(text, span, value, *quoted)
+            && let Some((target, fragment)) = normalize_target(value)
         {
             let q = usize::from(*quoted);
-            let (target, fragment) = match value.split_once('#') {
-                Some((t, f)) => (t.to_string(), Some(f.to_string())),
-                None => (value.clone(), None),
-            };
             out.push(Link {
                 form: LinkForm::Source,
                 range: span.clone(),
@@ -525,7 +539,7 @@ fn handle_link(b: &mut Body, text: &str, link_type: LinkType, dest: &str, range:
 
 /// Heading text (§4.6): raw content, ATX markers and closing `#`s removed, setext
 /// underline excluded, trimmed.
-pub fn heading_text(raw: &str) -> String {
+fn heading_text(raw: &str) -> String {
     let raw = raw.trim_end_matches(['\n', '\r']);
     if raw.trim_start().starts_with('#') {
         let s = raw.trim_start().trim_start_matches('#');

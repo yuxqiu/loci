@@ -9,14 +9,20 @@ fn git(root: &Path) -> Command {
     c
 }
 
-/// Runs git and returns stdout, or an error message including stderr.
-pub fn run(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let out = git(root).args(args).stdin(Stdio::null()).output().map_err(|e| e.to_string())?;
+/// Runs a prepared git command and returns stdout, or an error message naming `what`
+/// and including stderr.
+fn exec(cmd: &mut Command, what: &str) -> Result<Vec<u8>, String> {
+    let out = cmd.stdin(Stdio::null()).output().map_err(|e| format!("git {what}: {e}"))?;
     if out.status.success() {
         Ok(out.stdout)
     } else {
-        Err(format!("git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()))
+        Err(format!("git {what}: {}", String::from_utf8_lossy(&out.stderr).trim()))
     }
+}
+
+/// Runs git and returns stdout, or an error message including stderr.
+pub fn run(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+    exec(git(root).args(args), &args.join(" "))
 }
 
 /// Prefix of the local refs that record an agent's finished work (`loci done`).
@@ -39,15 +45,7 @@ pub fn record_agent_tree(root: &Path, now: u64) -> Result<Option<String>, String
     let git_dir = trimmed(run(root, &["rev-parse", "--absolute-git-dir"])?);
     // A private index, so the user's staging is untouched.
     let index = Path::new(&git_dir).join(format!("loci-agent-index-{}", std::process::id()));
-    let with_index = |args: &[&str]| -> Result<Vec<u8>, String> {
-        let out = git(root).env("GIT_INDEX_FILE", &index).args(args).stdin(Stdio::null()).output();
-        let out = out.map_err(|e| e.to_string())?;
-        if out.status.success() {
-            Ok(out.stdout)
-        } else {
-            Err(format!("git {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()))
-        }
-    };
+    let with_index = |args: &[&str]| exec(git(root).env("GIT_INDEX_FILE", &index).args(args), &args.join(" "));
     let tree = with_index(&["read-tree", &head])
         .and_then(|_| with_index(&["add", "-A"]))
         .and_then(|_| with_index(&["write-tree"]).map(trimmed));
@@ -60,22 +58,19 @@ pub fn record_agent_tree(root: &Path, now: u64) -> Result<Option<String>, String
         return Ok(None);
     }
     let date = format!("@{now} +0000");
-    let out = git(root)
-        .env("GIT_AUTHOR_NAME", "loci")
-        .env("GIT_AUTHOR_EMAIL", "loci@localhost")
-        .env("GIT_AUTHOR_DATE", &date)
-        .env("GIT_COMMITTER_NAME", "loci")
-        .env("GIT_COMMITTER_EMAIL", "loci@localhost")
-        .env("GIT_COMMITTER_DATE", &date)
-        .args(["commit-tree", &tree, "-p", &head, "--no-gpg-sign", "-m", "loci done: the agent's work"])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(format!("git commit-tree: {}", String::from_utf8_lossy(&out.stderr).trim()));
-    }
+    let commit = exec(
+        git(root)
+            .env("GIT_AUTHOR_NAME", "loci")
+            .env("GIT_AUTHOR_EMAIL", "loci@localhost")
+            .env("GIT_AUTHOR_DATE", &date)
+            .env("GIT_COMMITTER_NAME", "loci")
+            .env("GIT_COMMITTER_EMAIL", "loci@localhost")
+            .env("GIT_COMMITTER_DATE", &date)
+            .args(["commit-tree", &tree, "-p", &head, "--no-gpg-sign", "-m", "loci done: the agent's work"]),
+        "commit-tree",
+    )?;
     let name = format!("{AGENT_REFS}{head}");
-    run(root, &["update-ref", &name, &trimmed(out.stdout)])?;
+    run(root, &["update-ref", &name, &trimmed(commit)])?;
     Ok(Some(name))
 }
 
