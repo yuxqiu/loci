@@ -5,7 +5,6 @@
 mod tokenizer;
 
 use std::collections::HashSet;
-use std::fmt;
 
 use serde::Serialize;
 use tantivy::collector::TopDocs;
@@ -14,6 +13,7 @@ use tantivy::schema::{Field, IndexRecordOption, STORED, Schema, TextFieldIndexin
 use tantivy::{Index, TantivyDocument, Term};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::envelope::Refusal;
 use crate::index::Index as VaultIndex;
 use crate::parse::Note;
 use crate::vault::Kind;
@@ -73,35 +73,10 @@ pub struct Hit {
     pub snippet: Option<String>,
 }
 
-#[derive(Debug)]
-pub struct SearchError(tantivy::TantivyError);
-
-impl fmt::Display for SearchError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "search index: {}", self.0)
-    }
-}
-
-impl std::error::Error for SearchError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.0)
-    }
-}
-
-impl From<SearchError> for crate::envelope::Refusal {
-    fn from(e: SearchError) -> Self {
-        crate::envelope::Refusal::internal("find.index", e.to_string())
-    }
-}
-
-impl From<tantivy::TantivyError> for SearchError {
-    fn from(e: tantivy::TantivyError) -> Self {
-        SearchError(e)
-    }
-}
-
 /// Returns the top `k` of `docs` for `query`. An empty `kinds` keeps every kind.
-pub fn search(docs: &[SearchDoc], query: &str, k: usize, kinds: &[Kind]) -> Result<Vec<Hit>, SearchError> {
+/// A tantivy failure is `search.index` (exit 3).
+pub fn search(docs: &[SearchDoc], query: &str, k: usize, kinds: &[Kind]) -> Result<Vec<Hit>, Refusal> {
+    let failed = |e: tantivy::TantivyError| Refusal::internal("search.index", e.to_string());
     let docs: Vec<&SearchDoc> = docs.iter().filter(|d| kinds.is_empty() || kinds.contains(&d.kind)).collect();
 
     let mut sb = Schema::builder();
@@ -124,7 +99,7 @@ pub fn search(docs: &[SearchDoc], query: &str, k: usize, kinds: &[Kind]) -> Resu
     index.tokenizers().register(TOKENIZER, LociTokenizer);
 
     // One thread keeps doc ids deterministic.
-    let mut writer = index.writer_with_num_threads(1, 15_000_000)?;
+    let mut writer = index.writer_with_num_threads(1, 15_000_000).map_err(failed)?;
     for (i, d) in docs.iter().enumerate() {
         let mut doc = TantivyDocument::default();
         doc.add_text(title, &d.title);
@@ -135,9 +110,9 @@ pub fn search(docs: &[SearchDoc], query: &str, k: usize, kinds: &[Kind]) -> Resu
         doc.add_text(path, &d.path);
         doc.add_text(body, &d.body);
         doc.add_u64(id, i as u64);
-        writer.add_document(doc)?;
+        writer.add_document(doc).map_err(failed)?;
     }
-    writer.commit()?;
+    writer.commit().map_err(failed)?;
 
     let mut terms: Vec<String> = Vec::new();
     for t in tokens(query).into_iter().map(|t| t.text) {
@@ -156,12 +131,14 @@ pub fn search(docs: &[SearchDoc], query: &str, k: usize, kinds: &[Kind]) -> Resu
                 })
             })
             .collect();
-        let searcher = index.reader()?.searcher();
+        let searcher = index.reader().map_err(failed)?.searcher();
         // Collect every match so ties at the k-th place are broken by path.
-        let top = searcher.search(&BooleanQuery::new(clauses), &TopDocs::with_limit(docs.len()).order_by_score())?;
+        let top = searcher
+            .search(&BooleanQuery::new(clauses), &TopDocs::with_limit(docs.len()).order_by_score())
+            .map_err(failed)?;
         let mut scored = Vec::with_capacity(top.len());
         for (score, addr) in top {
-            let stored: TantivyDocument = searcher.doc(addr)?;
+            let stored: TantivyDocument = searcher.doc(addr).map_err(failed)?;
             let i = stored.get_first(id).and_then(|v| v.as_u64()).expect("stored id") as usize;
             scored.push((score, docs[i]));
         }

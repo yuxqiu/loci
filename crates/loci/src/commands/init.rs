@@ -19,10 +19,13 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     if dir.join(config::FILE).exists() {
         return Err(Refusal::refused("init.exists", "loci.toml already exists"));
     }
-    if !git::in_worktree(&dir) {
-        git::run(&dir, &["init", "-q"]).map_err(Refusal::git)?;
-    } else if !git::is_worktree_root(&dir) {
-        return Err(Refusal::refused("vault.not-git", "run `loci init` at the root of the git work tree"));
+    match git::toplevel(&dir) {
+        // Not in a work tree (or git cannot tell): `git init` creates one or fails loudly.
+        Err(_) => {
+            git::run(&dir, &["init", "-q"]).map_err(Refusal::git)?;
+        }
+        Ok(top) if dir.canonicalize().is_ok_and(|d| d == top) => {}
+        Ok(_) => return Err(Refusal::refused("vault.not-git", "run `loci init` at the root of the git work tree")),
     }
     let files: [(&str, String); 4] = [
         (config::FILE, Config::default_file()),

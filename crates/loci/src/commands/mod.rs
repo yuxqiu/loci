@@ -23,7 +23,7 @@ use std::path::PathBuf;
 
 use loci_core::envelope::Refusal;
 use loci_core::plugin::{self, Plugin};
-use loci_core::vault::{self, Vault};
+use loci_core::vault::Vault;
 
 use crate::CORE_COMMANDS;
 
@@ -36,16 +36,11 @@ pub struct Ctx {
 impl Ctx {
     /// Opens the vault, or refuses (m0 §8, global options).
     pub fn vault(&self) -> Result<Vault, Refusal> {
-        Ok(Vault::open(self.explicit_vault.as_deref(), &self.cwd)?)
+        Vault::open(self.explicit_vault.as_deref(), &self.cwd)
     }
 }
 
 /// Installed plugins (m0 §2.2).
 pub fn plugins() -> Vec<Plugin> {
     plugin::discover(std::env::var_os("PATH").as_deref(), CORE_COMMANDS)
-}
-
-/// A user-given vault path (m0 §8), or the `path.outside` refusal.
-pub fn vault_path(p: &str) -> Result<String, Refusal> {
-    vault::user_path(p).map_err(|m| Refusal::refused("path.outside", m))
 }

@@ -48,8 +48,7 @@ fn main() -> ExitCode {
         Cmd::State { .. } => "learn state",
         Cmd::Review => "learn review",
     };
-    let exit = run(cli.command).unwrap_or_else(Report::from).print(cli.json, VERSION, command);
-    ExitCode::from(exit as u8)
+    run(cli.command).unwrap_or_else(Report::from).print(cli.json, VERSION, command).into()
 }
 
 fn run(cmd: Cmd) -> Result<Report, Refusal> {

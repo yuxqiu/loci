@@ -17,11 +17,39 @@ pub enum FileIssue {
     Unreadable(String),
 }
 
+/// A note argument as a note path: `.md` added when missing.
+fn note_path(arg: &str) -> String {
+    if arg.ends_with(".md") { arg.to_string() } else { format!("{arg}.md") }
+}
+
+/// A source folder `sources/<type>/<slug>` and its files (m0 §6.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceFolder {
+    pub path: String,
+    /// Paths inside the folder, `source.yaml` included.
+    pub files: Vec<String>,
+}
+
+impl SourceFolder {
+    pub fn has_meta(&self) -> bool {
+        self.files.iter().any(|f| f == "source.yaml")
+    }
+
+    /// The source file: the folder's one file besides `source.yaml`, as a vault path.
+    /// `None` when there is not exactly one (`sources.uncovered`).
+    pub fn original(&self) -> Option<String> {
+        let mut others = self.files.iter().filter(|f| f.as_str() != "source.yaml");
+        match (others.next(), others.next()) {
+            (Some(f), None) => Some(format!("{}/{f}", self.path)),
+            _ => None,
+        }
+    }
+}
+
 /// What a `sources` entry names ([`Index::resolve_source`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceTarget {
-    /// A source folder and its files other than `source.yaml`.
-    Folder { path: String, files: Vec<String> },
+    Folder(SourceFolder),
     /// A journal note.
     Note(String),
 }
@@ -29,7 +57,7 @@ pub enum SourceTarget {
 impl SourceTarget {
     pub fn into_path(self) -> String {
         match self {
-            SourceTarget::Folder { path, .. } | SourceTarget::Note(path) => path,
+            SourceTarget::Folder(SourceFolder { path, .. }) | SourceTarget::Note(path) => path,
         }
     }
 }
@@ -160,28 +188,24 @@ impl Index {
     }
 
     /// The note a user argument names: a vault path to any note (`.md` optional), or
-    /// a concept ([`Index::concept`]).
+    /// a concept ([`Index::concept`]). `arg` is a [`vault::path_arg`] result.
     pub fn note(&self, arg: &str) -> Result<&Note, ConceptLookup> {
-        let arg = vault::nfc(arg);
-        let path = if arg.ends_with(".md") { arg.clone() } else { format!("{arg}.md") };
-        match self.notes.get(&path) {
+        match self.notes.get(&note_path(arg)) {
             Some(n) => Ok(n),
-            None => self.concept(&arg),
+            None => self.concept(arg),
         }
     }
 
     /// The concept a user argument names: a concept path (`.md` optional) or a slug
-    /// (case-insensitive). The argument is put in NFC. A slug shared by several
-    /// concepts is ambiguous.
+    /// (case-insensitive). A slug shared by several concepts is ambiguous. `arg` is a
+    /// [`vault::path_arg`] result.
     pub fn concept(&self, arg: &str) -> Result<&Note, ConceptLookup> {
-        let arg = vault::nfc(arg);
-        let path = if arg.ends_with(".md") { arg.clone() } else { format!("{arg}.md") };
-        if let Some(n) = self.notes.get(&path).filter(|n| n.kind == Kind::Concept) {
+        if let Some(n) = self.notes.get(&note_path(arg)).filter(|n| n.kind == Kind::Concept) {
             return Ok(n);
         }
         match self.slugs.get(&arg.to_lowercase()).map(Vec::as_slice) {
             None | Some([]) => Err(ConceptLookup::Unknown),
-            Some([p]) => self.notes.get(p).ok_or(ConceptLookup::Unknown),
+            Some([p]) => Ok(self.notes.get(p).expect("slugs are taken from parsed notes")),
             Some(ps) => Err(ConceptLookup::Ambiguous(ps.to_vec())),
         }
     }
@@ -223,20 +247,24 @@ impl Index {
     /// `sources/<type>/<slug>` that exists, or a journal note. Anything else is `None`.
     pub fn resolve_source(&self, link: &Link) -> Option<SourceTarget> {
         let target = &link.target;
-        if let Some(folder) = target.strip_prefix("sources/") {
-            if folder.split('/').count() != 2 {
-                return None;
-            }
-            let prefix = format!("{target}/");
-            let in_folder: Vec<&String> = self.files.iter().filter(|f| f.starts_with(&prefix)).collect();
-            if in_folder.is_empty() {
-                return None;
-            }
-            let files = in_folder.into_iter().filter(|f| !f.ends_with("/source.yaml")).cloned().collect();
-            return Some(SourceTarget::Folder { path: target.clone(), files });
+        if vault::is_source_folder(target) {
+            return self.source_folders().remove(target).map(SourceTarget::Folder);
         }
         let note = format!("{target}.md");
         (target.starts_with("journal/") && self.notes.contains_key(&note)).then_some(SourceTarget::Note(note))
+    }
+
+    /// Every source folder that holds a file, by path.
+    pub fn source_folders(&self) -> BTreeMap<String, SourceFolder> {
+        let mut folders: BTreeMap<String, SourceFolder> = BTreeMap::new();
+        for (folder, file) in self.files.iter().filter_map(|f| vault::source_folder(f)) {
+            folders
+                .entry(folder.to_string())
+                .or_insert_with(|| SourceFolder { path: folder.to_string(), files: vec![] })
+                .files
+                .push(file.to_string());
+        }
+        folders
     }
 
     /// Every link that points at `path`, or at the source folder holding it, as

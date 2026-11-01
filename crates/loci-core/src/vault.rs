@@ -78,15 +78,30 @@ pub fn nfc(s: &str) -> String {
 /// A path argument given by the user, as a vault path: `/` separators, no leading `./`
 /// or trailing `/`, NFC. Refuses a path that could leave the vault: an absolute path,
 /// or a `.`, `..` or empty segment (`path.outside`, m0 §8).
-pub fn user_path(p: &str) -> Result<String, String> {
+pub fn path_arg(p: &str) -> Result<String, Refusal> {
     let trimmed = p.trim_start_matches("./").trim_end_matches('/');
     if trimmed.is_empty()
         || trimmed.starts_with('/')
         || trimmed.split('/').any(|s| s.is_empty() || s == "." || s == "..")
     {
-        return Err(format!("`{p}` is not a path inside the vault"));
+        return Err(Refusal::refused("path.outside", format!("`{p}` is not a path inside the vault")));
     }
     Ok(nfc(trimmed))
+}
+
+/// Whether `path` is a source folder `sources/<type>/<slug>` (m0 §6.4).
+pub fn is_source_folder(path: &str) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    parts.len() == 3 && parts[0] == "sources" && is_slug(parts[1]) && is_slug(parts[2])
+}
+
+/// The source folder holding `path`, and the path inside it, when `path` lies inside
+/// one (m0 §6.4).
+pub fn source_folder(path: &str) -> Option<(&str, &str)> {
+    let mut slashes = path.match_indices('/').map(|(i, _)| i);
+    let end = slashes.nth(2)?;
+    let (folder, rest) = (&path[..end], &path[end + 1..]);
+    (is_source_folder(folder) && !rest.is_empty()).then_some((folder, rest))
 }
 
 /// The kind of a vault-relative, `/`-separated path. `None` for paths core never reads
@@ -144,44 +159,17 @@ pub struct Vault {
     pub config: Config,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OpenError {
-    NotFound(String),
-    NotGit(String),
-    Config(String),
-}
-
-impl OpenError {
-    pub fn code(&self) -> &'static str {
-        match self {
-            OpenError::NotFound(_) => "vault.not-found",
-            OpenError::NotGit(_) => "vault.not-git",
-            OpenError::Config(_) => "config.invalid",
-        }
-    }
-
-    pub fn message(&self) -> &str {
-        match self {
-            OpenError::NotFound(m) | OpenError::NotGit(m) | OpenError::Config(m) => m,
-        }
-    }
-}
-
-impl From<OpenError> for Refusal {
-    fn from(e: OpenError) -> Self {
-        Refusal::refused(e.code(), e.message())
-    }
-}
-
 impl Vault {
     /// Finds the vault: `explicit`, or the nearest ancestor of `cwd` containing
     /// `loci.toml`. The root must be the root of a git work tree.
-    pub fn open(explicit: Option<&Path>, cwd: &Path) -> Result<Self, OpenError> {
+    /// Refuses with `vault.not-found`, `vault.not-git` or `config.invalid` (m0 §8).
+    pub fn open(explicit: Option<&Path>, cwd: &Path) -> Result<Self, Refusal> {
+        let not_found = |m: String| Refusal::refused("vault.not-found", m);
         let root = match explicit {
             Some(dir) => {
                 let dir = if dir.is_absolute() { dir.to_path_buf() } else { cwd.join(dir) };
                 if !dir.join(config::FILE).is_file() {
-                    return Err(OpenError::NotFound(format!("{} has no loci.toml", dir.display())));
+                    return Err(not_found(format!("{} has no loci.toml", dir.display())));
                 }
                 dir
             }
@@ -189,14 +177,27 @@ impl Vault {
                 .ancestors()
                 .find(|d| d.join(config::FILE).is_file())
                 .map(Path::to_path_buf)
-                .ok_or_else(|| OpenError::NotFound("no loci.toml in this directory or any parent".into()))?,
+                .ok_or_else(|| not_found("no loci.toml in this directory or any parent".into()))?,
         };
-        let root = root.canonicalize().map_err(|e| OpenError::NotFound(e.to_string()))?;
-        if !crate::git::is_worktree_root(&root) {
-            return Err(OpenError::NotGit(format!("{} is not the root of a git work tree", root.display())));
+        let root = root.canonicalize().map_err(|e| not_found(e.to_string()))?;
+        match crate::git::toplevel(&root) {
+            Ok(top) if top == root => {}
+            Ok(_) => {
+                return Err(Refusal::refused(
+                    "vault.not-git",
+                    format!("{} is not the root of a git work tree", root.display()),
+                ));
+            }
+            Err(e) => {
+                return Err(Refusal::refused(
+                    "vault.not-git",
+                    format!("{} is not in a git work tree: {e}", root.display()),
+                ));
+            }
         }
-        let text = std::fs::read_to_string(root.join(config::FILE)).map_err(|e| OpenError::Config(e.to_string()))?;
-        let config = Config::parse(&text).map_err(OpenError::Config)?;
+        let invalid = |m: String| Refusal::refused("config.invalid", m);
+        let text = std::fs::read_to_string(root.join(config::FILE)).map_err(|e| invalid(e.to_string()))?;
+        let config = Config::parse(&text).map_err(invalid)?;
         Ok(Self { root, config })
     }
 
@@ -305,10 +306,20 @@ mod tests {
     }
 
     #[test]
+    fn source_folders() {
+        assert!(is_source_folder("sources/papers/dijkstra-1959"));
+        assert!(!is_source_folder("sources/Papers/x") && !is_source_folder("sources/papers"));
+        assert_eq!(source_folder("sources/papers/p/p.pdf"), Some(("sources/papers/p", "p.pdf")));
+        assert_eq!(source_folder("sources/papers/p/a/b.md"), Some(("sources/papers/p", "a/b.md")));
+        assert_eq!(source_folder("sources/papers/p"), None);
+        assert_eq!(source_folder("sources/stray.md"), None);
+    }
+
+    #[test]
     fn user_paths() {
-        assert_eq!(user_path("./views/x.md/").unwrap(), "views/x.md");
+        assert_eq!(path_arg("./views/x.md/").unwrap(), "views/x.md");
         for bad in ["", "/etc", "a/../b", "a/./b", "a//b", "..", "./"] {
-            assert!(user_path(bad).is_err(), "{bad}");
+            assert!(path_arg(bad).is_err(), "{bad}");
         }
     }
 

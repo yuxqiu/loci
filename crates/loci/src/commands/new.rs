@@ -6,11 +6,11 @@ use loci_core::vault::is_slug;
 use loci_core::vault::{self, Kind};
 use serde_json::json;
 
-use super::{Ctx, vault_path};
+use super::Ctx;
 
 pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
-    let mut path = vault_path(path)?;
+    let mut path = vault::path_arg(path)?;
     if !path.ends_with(".md") {
         path.push_str(".md");
     }

@@ -166,6 +166,8 @@ recomputed from it and from the notes; nothing computed is stored.
   on its own (per call for `log`, per session for `review`).
 - **`plugins/learn/.gitattributes` marks the file `merge=union`,** so appends from
   two machines merge cleanly. Lines are processed in timestamp order.
+- **A line that does not parse** (a bad merge, a hand edit) is `learn.log` (exit 1)
+  for every command that reads the log; it names the line.
 
 A line has the keys of the `log` input (§2.4) plus `t` (UTC, RFC 3339) and, for
 `grader: llm`, the derived `grade`.

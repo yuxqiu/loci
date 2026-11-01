@@ -3,7 +3,7 @@
 use std::ops::Range;
 
 use loci_core::index::Index;
-use loci_core::parse::{BlockKind, Note, TopBlock};
+use loci_core::parse::{BlockKind, Note, TopBlock, strip_list_marker};
 use loci_core::vault::Kind;
 
 pub const SECTION: &str = "Cards";
@@ -46,27 +46,28 @@ pub fn of_note(note: &Note) -> (Vec<Card>, Vec<FormatIssue>) {
     if let Some((second, _)) = found.get(1) {
         issues.push(FormatIssue { path: note.path.clone(), range: second.range.clone() });
     }
-    let sections: Vec<Range<usize>> = found.into_iter().map(|(_, r)| r).collect();
-    let inside = |r: &Range<usize>| sections.iter().any(|s| s.start <= r.start && r.end <= s.end);
+    let (items, blocks) = note.section_top_level(SECTION);
     // Anything at the top level of the section other than a list is a format issue.
-    for (block, range) in &note.top_blocks {
-        if inside(range) && !matches!(block, TopBlock::List) {
-            issues.push(FormatIssue { path: note.path.clone(), range: range.clone() });
-        }
+    for (_, range) in blocks.into_iter().filter(|(b, _)| !matches!(b, TopBlock::List)) {
+        issues.push(FormatIssue { path: note.path.clone(), range: range.clone() });
     }
     let mut cards = vec![];
-    for item in note.items.iter().filter(|i| i.depth == 1 && inside(&i.range)) {
-        let id =
-            note.block_ids.iter().find(|b| b.kind == BlockKind::Item && b.block == item.range).map(|b| b.id.clone());
-        let raw = &note.text[item.range.clone()];
-        match split(raw) {
-            Some((q, a)) => cards.push(Card {
+    for item in items {
+        let id = note.block_ids.iter().find(|b| b.kind == BlockKind::Item && b.block == item.range);
+        // The item's text without its block id (cut by its byte range).
+        let mut raw = note.text[item.range.clone()].to_string();
+        if let Some(b) = id {
+            let (start, end) = (b.range.start - item.range.start, b.range.end - item.range.start);
+            raw = format!("{}{}", raw[..start].trim_end(), &raw[end..]);
+        }
+        match split(&raw) {
+            Some((question, answer)) => cards.push(Card {
                 path: note.path.clone(),
                 range: item.range.clone(),
                 position: cards.len(),
-                id: id.clone(),
-                question: q,
-                answer: strip_id(&a, id.as_deref()),
+                id: id.map(|b| b.id.clone()),
+                question,
+                answer,
             }),
             None => issues.push(FormatIssue { path: note.path.clone(), range: item.range.clone() }),
         }
@@ -97,7 +98,7 @@ fn split(raw: &str) -> Option<(String, String)> {
             let after = bytes.get(i + 2);
             let after_ok = after.is_none_or(|b| b.is_ascii_whitespace());
             if before_ws && after_ok {
-                let q = strip_marker(raw[..i].trim());
+                let q = strip_list_marker(raw[..i].trim());
                 let a = raw[i + 2..].trim();
                 return Some((q.to_string(), a.to_string()));
             }
@@ -105,26 +106,6 @@ fn split(raw: &str) -> Option<(String, String)> {
         i += 1;
     }
     None
-}
-
-fn strip_marker(s: &str) -> &str {
-    let s = s.trim_start();
-    if let Some(rest) = s.strip_prefix(['-', '*', '+']) {
-        return rest.trim_start();
-    }
-    let digits = s.bytes().take_while(u8::is_ascii_digit).count();
-    if digits > 0
-        && let Some(rest) = s[digits..].strip_prefix(['.', ')'])
-    {
-        return rest.trim_start();
-    }
-    s
-}
-
-/// Removes the trailing ` ^id` from the answer's leading text for display.
-fn strip_id(answer: &str, id: Option<&str>) -> String {
-    let Some(id) = id else { return answer.to_string() };
-    answer.replacen(&format!(" ^{id}"), "", 1).replacen(&format!("^{id}"), "", 1).trim().to_string()
 }
 
 #[cfg(test)]

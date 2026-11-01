@@ -136,6 +136,12 @@ pub enum Exit {
     Internal = 3,
 }
 
+impl From<Exit> for std::process::ExitCode {
+    fn from(e: Exit) -> Self {
+        Self::from(e as u8)
+    }
+}
+
 /// Why a command could not do its work (m0 §8): the exit code and the envelope's
 /// `error`.
 #[derive(Debug, Clone, PartialEq, Eq)]

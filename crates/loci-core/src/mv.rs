@@ -8,7 +8,7 @@ use crate::relink::{self, Change};
 use crate::vault::{self, Kind};
 
 /// Computes the move of `from` to `to` without writing. Both are vault paths
-/// ([`vault::user_path`]). `to_ignored` tells whether `to` is gitignored and `exists`
+/// ([`vault::path_arg`]). `to_ignored` tells whether `to` is gitignored and `exists`
 /// whether a vault path exists on disk (including files the index does not hold).
 pub fn plan(
     index: &Index,
@@ -34,11 +34,7 @@ pub fn plan(
     }
     // Sources move only as whole folders.
     if from.starts_with("sources/") || to.starts_with("sources/") {
-        let whole_folder = !is_file
-            && from.starts_with("sources/")
-            && to.starts_with("sources/")
-            && from.split('/').count() == 3
-            && to.split('/').count() == 3;
+        let whole_folder = !is_file && vault::is_source_folder(from) && vault::is_source_folder(to);
         if !whole_folder {
             return Err(Refusal::refused(
                 "mv.source-file",
@@ -80,13 +76,19 @@ pub fn plan(
     let mut change = Change { moves: map.clone(), ..Change::default() };
     let mut edits = relink::link_edits(index, &map, &BTreeSet::new());
     for (old_path, old_slug) in &renames {
-        let note = &index.notes[old_path];
+        // An unreadable concept (`file.*`) is not in the notes; its aliases cannot be edited.
+        let Some(note) = index.notes.get(old_path) else {
+            return Err(Refusal::refused(
+                "mv.frontmatter",
+                format!("cannot add aliases to `{old_path}`: it is not readable"),
+            ));
+        };
         let edit = relink::alias_edit(note, std::slice::from_ref(old_slug), "mv.frontmatter")?;
         edits.entry(old_path.clone()).or_default().push(edit);
         change.aliases_added.push((map[old_path].clone(), old_slug.clone()));
     }
     relink::add_writes(index, &mut change, edits)?;
-    relink::verify(index, &map, &change, "mv.verify", false)?;
+    relink::verify(index, &map, &change, "mv.verify")?;
     Ok(change)
 }
 
@@ -137,6 +139,13 @@ mod tests {
         let i = from_texts(&[("concepts/a/old.md", crlf)]);
         let p = plan(&i, "concepts/a/old.md", "concepts/a/new.md", false, |_| false).unwrap();
         assert!(p.writes["concepts/a/new.md"].contains("TV\r\naliases: [old]\r\ndigest"));
+    }
+
+    #[test]
+    fn renaming_an_unreadable_concept_is_refused() {
+        let i = crate::index::build(vec!["concepts/a/bad.md".to_string()], |_| Ok(vec![0xff]));
+        let e = plan(&i, "concepts/a/bad.md", "concepts/a/good.md", false, |_| false).err().unwrap();
+        assert_eq!(e.code(), "mv.frontmatter");
     }
 
     #[test]

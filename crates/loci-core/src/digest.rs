@@ -95,10 +95,11 @@ pub fn area(index: &Index, name: &str) -> Area {
     Area { name: name.to_string(), title, paragraph: parts.map(|(_, p)| p), groups }
 }
 
-fn concept_line(e: &Entry) -> String {
-    match &e.digest {
-        Some(d) => format!("- [[{}]]: {d}\n", e.slug),
-        None => format!("- [[{}]]\n", e.slug),
+/// One concept line of a digest listing: `- [[slug]]: digest` (m0 §10).
+pub fn concept_line(slug: &str, digest: Option<&str>) -> String {
+    match digest {
+        Some(d) => format!("- [[{slug}]]: {d}\n"),
+        None => format!("- [[{slug}]]\n"),
     }
 }
 
@@ -110,7 +111,7 @@ pub fn render_area(a: &Area) -> String {
             out.push_str(&format!("## {dir}\n\n"));
         }
         for e in concepts {
-            out.push_str(&concept_line(e));
+            out.push_str(&concept_line(&e.slug, e.digest.as_deref()));
         }
     }
     out

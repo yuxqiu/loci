@@ -189,3 +189,14 @@ Append-only log of decisions about loci, newest last, with their reasons. `DESIG
   - **`Lint::run` covers the index rules only.** Rules that read file bytes or git are `lint::disk_rules`.
   - **Search builds documents and file line numbers in core.** The tokenizer is crate-private.
   - **Test helpers** live in the dev-only crate `crates/loci-testkit`, shared by the `loci` and `loci-learn` tests.
+- D112. Fixes from the confirming review of D111:
+  - **`Refusal` everywhere,** including `Vault::open` and search (`search.index` when the index cannot be built).
+  - **Source folders** are one type, `index::SourceFolder`, used by lint, `links` and `mv`.
+  - **Path arguments** go through `vault::path_arg` in every command that takes one (`closure`, `merge`, `export`, `learn state`), which refuses paths outside the vault (`path.outside`).
+  - **Small cleanups.** Section scanning is `parse::section_top_level`; a concept's digest line is `digest::concept_line`; `export` reports a pandoc failure before a failure to remove its temporary file; skill descriptions are read with the frontmatter parser.
+- D113. Fixes from the final code-quality review (8 findings):
+  - **Git yes/no queries fail loudly.** `has_head` and `is_ignored` exit 0 for yes, 1 for no, and any other exit is an error (`git::answer`). `git::toplevel` replaces `is_worktree_root`/`in_worktree`; `vault.not-git` carries git's message. Before, a missing or broken git read as "no", which skipped `material-dropped` silently and made `loci done` record nothing.
+  - **Path arguments are normalized once,** by `vault::path_arg`; `Index::note`/`concept` take its result and only add `.md`. `links` calls it first, like every other command.
+  - **`relink::verify` has no mode flag:** a fragment may dangle exactly when it points into a note the change deletes (the absorbed note of a merge).
+  - **loci-learn** config and log readers return `Refusal`: an I/O error is `io` (exit 3), an invalid config `learn.config` and an unparsable log line `learn.log` (both exit 1). The unused serde derive on `Config` is gone.
+  - **Small cleanups.** `Note::fm(key)`; `bench` builds its summary from numbers, not from its own JSON; `fetch` returns the inbox file with the other values; `Exit` converts to `ExitCode`; `learn review`'s card prompt is `ask`.

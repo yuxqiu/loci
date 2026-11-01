@@ -156,8 +156,7 @@ fn main() -> ExitCode {
         }
         Cmd::External(args) => return commands::dispatch::run(&ctx, args),
     };
-    let exit = report.unwrap_or_else(Report::from).print(ctx.json, VERSION, name);
-    ExitCode::from(exit as u8)
+    report.unwrap_or_else(Report::from).print(ctx.json, VERSION, name).into()
 }
 
 #[cfg(test)]

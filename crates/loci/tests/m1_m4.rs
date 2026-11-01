@@ -105,6 +105,11 @@ fn closure_orders_prerequisites_first() {
 
     let (code, env) = v.run(&["closure", "missing"]);
     assert_eq!((code, error_code(&env)), (1, "closure.unknown"));
+    // A concept path is accepted in the same forms as elsewhere (`./`, `.md`).
+    let (code, env) = v.run(&["closure", "./concepts/g/top.md"]);
+    assert_eq!(code, 0, "{env:#}");
+    let (code, env) = v.run(&["closure", "../top"]);
+    assert_eq!((code, error_code(&env)), (1, "path.outside"));
 }
 
 #[test]

@@ -89,11 +89,11 @@ fn rewrite_source(index: &Index, link: &Link, targets: &BTreeMap<String, String>
             let new = targets.get(&note)?;
             Some(format!("{}{suffix}", new.strip_suffix(".md").unwrap_or(new)))
         }
-        // A folder moves as a whole: its new path is any moved file's new folder.
-        SourceTarget::Folder { path, .. } => {
-            let prefix = format!("{path}/");
-            let (old, new) = targets.iter().find(|(o, _)| o.starts_with(&prefix))?;
-            let new_folder = new.strip_suffix(&format!("/{}", &old[prefix.len()..]))?;
+        // A folder moves as a whole: its new path is the folder of any moved file.
+        SourceTarget::Folder(folder) => {
+            let new =
+                targets.iter().find(|(old, _)| vault::source_folder(old).is_some_and(|(f, _)| f == folder.path))?.1;
+            let (new_folder, _) = vault::source_folder(new)?;
             Some(format!("{new_folder}{suffix}"))
         }
     }
@@ -189,14 +189,12 @@ pub fn add_writes(index: &Index, change: &mut Change, edits: BTreeMap<String, Ve
 
 /// Builds the changed tree in memory and checks that every link outside `sources/` that
 /// resolved before resolves to `targets`' image of its old target (m0 §9.5 step 4).
-/// With `fragments_may_dangle` (merge), a fragment into a retargeted note may stop
-/// resolving.
+/// A fragment into a deleted note (the absorbed note of a merge) may stop resolving.
 pub fn verify(
     index: &Index,
     targets: &BTreeMap<String, String>,
     change: &Change,
     code: &'static str,
-    fragments_may_dangle: bool,
 ) -> Result<(), Refusal> {
     let mut files: Vec<String> =
         index.files.iter().filter(|f| !change.deleted.contains(*f)).map(|f| change.final_path(f)).collect();
@@ -245,9 +243,8 @@ pub fn verify(
             match after.resolve(new_note, new_link) {
                 Ok(r) if r.path() == expected => {}
                 // A fragment into the absorbed note of a merge may now dangle; lint
-                // reports it. A move keeps note contents, so it never may.
-                Err(index::LinkError::Heading | index::LinkError::Block)
-                    if fragments_may_dangle && expected != before.path() => {}
+                // reports it. A move deletes no note, so it never may.
+                Err(index::LinkError::Heading | index::LinkError::Block) if change.deleted.contains(before.path()) => {}
                 _ => {
                     return Err(Refusal::refused(
                         code,

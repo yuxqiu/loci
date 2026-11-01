@@ -27,7 +27,7 @@ pub fn skills() -> Result<Report, Refusal> {
 pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
     let index = Index::open(vault);
     let (all, issues) = cards::all(&index);
-    let text_of = |path: &str| index.notes.get(path).map(|n| n.text.as_str()).unwrap_or("");
+    let text_of = |path: &str| index.notes.get(path).map(|n| n.text.as_str()).expect("cards come from parsed notes");
     let mut diags = vec![];
     for i in &issues {
         diags.push(
@@ -105,12 +105,13 @@ pub fn log(vault: &Vault, mut stdin: impl Read) -> Result<Report, Refusal> {
 
 pub fn state(vault: &Vault, slug: &str) -> Result<Report, Refusal> {
     let index = Index::open(vault);
-    let note = index.concept(slug).map_err(|e| e.refusal("learn.unknown-concept", slug))?;
+    let slug = loci_core::vault::path_arg(slug)?;
+    let note = index.concept(&slug).map_err(|e| e.refusal("learn.unknown-concept", &slug))?;
     let Some(concept) = note.fm_str("id").map(str::to_string) else {
         return Err(Refusal::refused("learn.unknown-concept", format!("`{slug}` has no valid id")));
     };
-    let config = Config::load(&vault.root).map_err(|e| Refusal::refused("learn.config", e))?;
-    let lines = reviewlog::read(&vault.root).map_err(|e| Refusal::internal("learn.log", e))?;
+    let config = Config::load(&vault.root)?;
+    let lines = reviewlog::read(&vault.root)?;
     let (note_cards, _) = cards::of_note(note);
     let (estimate, used) =
         schedule::estimate(&note_cards, &concept, &lines, &Scheduler::new(config.desired_retention), Timestamp::now());
@@ -128,8 +129,8 @@ pub fn state(vault: &Vault, slug: &str) -> Result<Report, Refusal> {
 }
 
 pub fn review(vault: &Vault) -> Result<Report, Refusal> {
-    let config = Config::load(&vault.root).map_err(|e| Refusal::refused("learn.config", e))?;
-    let lines = reviewlog::read(&vault.root).map_err(|e| Refusal::internal("learn.log", e))?;
+    let config = Config::load(&vault.root)?;
+    let lines = reviewlog::read(&vault.root)?;
     let index = Index::open(vault);
     let (all, _) = cards::all(&index);
     let scheduler = Scheduler::new(config.desired_retention);
@@ -160,29 +161,8 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
     // The session stops at the end, on `q` or end of input (`Ok`), or on an I/O error.
     let stopped: std::io::Result<()> = (|| {
         for (i, card) in session.iter().enumerate() {
-            writeln!(
-                err,
-                "\n[{}/{}] {}\n\n{}\n\n(press Enter to show the answer)",
-                i + 1,
-                session.len(),
-                card.path,
-                card.question
-            )?;
-            let mut buf = String::new();
-            if input.read_line(&mut buf)? == 0 {
-                return Ok(());
-            }
-            writeln!(err, "{}\n\ngrade: again/hard/good/easy (1-4), q to stop", card.answer)?;
-            let grade = loop {
-                buf.clear();
-                if input.read_line(&mut buf)? == 0 || buf.trim() == "q" {
-                    return Ok(());
-                }
-                match Grade::parse(&buf) {
-                    Some(g) => break g,
-                    None => writeln!(err, "type again, hard, good, easy, 1-4 or q")?,
-                }
-            };
+            let progress = format!("{}/{}", i + 1, session.len());
+            let Some(grade) = ask(card, &progress, &mut input, &mut err)? else { return Ok(()) };
             let line = Line {
                 t: Timestamp::now(),
                 card: card.id.clone(),
@@ -193,15 +173,22 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
                 grade,
                 verdicts: None,
             };
+            // The interrupt handler takes this lock, so it waits for a line being written
+            // and always sees whole lines.
+            let mut n = appended.lock().expect("the counter lock is never poisoned");
             reviewlog::append(&vault.root, &line)?;
-            *appended.lock().expect("the counter lock is never poisoned") += 1;
+            *n += 1;
         }
         Ok(())
     })();
-    let reviewed = *appended.lock().expect("the counter lock is never poisoned");
+    let mut pending = appended.lock().expect("the counter lock is never poisoned");
+    let reviewed = *pending;
     // Lines already appended are committed even when the session stopped on an error.
     let commit =
         if reviewed > 0 { Some(reviewlog::commit(&vault.root, "review").map_err(Refusal::git)?) } else { None };
+    // Committed: a later interrupt has nothing to commit.
+    *pending = 0;
+    drop(pending);
     if let Err(e) = stopped {
         let committed = commit.map_or(String::new(), |sha| format!(" ({reviewed} grades committed in {sha})"));
         return Err(Refusal::io(format!("the session stopped: {e}{committed}")));
@@ -209,4 +196,25 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
     let due_left = session.len() - reviewed;
     let data = json!({"reviewed": reviewed, "new": new_count, "due_left": due_left, "commit": commit});
     Ok(Report::new(Outcome::ok(data), format!("reviewed {reviewed}, {due_left} left\n")))
+}
+
+/// Shows one card and reads the user's grade. `None` when the user stops (`q` or end
+/// of input).
+fn ask(card: &Card, progress: &str, input: &mut impl BufRead, err: &mut impl Write) -> std::io::Result<Option<Grade>> {
+    writeln!(err, "\n[{progress}] {}\n\n{}\n\n(press Enter to show the answer)", card.path, card.question)?;
+    let mut buf = String::new();
+    if input.read_line(&mut buf)? == 0 {
+        return Ok(None);
+    }
+    writeln!(err, "{}\n\ngrade: again/hard/good/easy (1-4), q to stop", card.answer)?;
+    loop {
+        buf.clear();
+        if input.read_line(&mut buf)? == 0 || buf.trim() == "q" {
+            return Ok(None);
+        }
+        match Grade::parse(&buf) {
+            Some(g) => return Ok(Some(g)),
+            None => writeln!(err, "type again, hard, good, easy, 1-4 or q")?,
+        }
+    }
 }

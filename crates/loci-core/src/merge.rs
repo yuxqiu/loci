@@ -57,7 +57,7 @@ pub fn plan(index: &Index, from: &str, into: &str) -> Result<Merge, Refusal> {
         edits.insert(into.clone(), into_edits);
     }
     relink::add_writes(index, &mut change, edits)?;
-    relink::verify(index, &targets, &change, "merge.verify", true)?;
+    relink::verify(index, &targets, &change, "merge.verify")?;
     Ok(Merge { from, into, change })
 }
 

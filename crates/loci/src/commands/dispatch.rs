@@ -36,6 +36,5 @@ pub fn run(ctx: &Ctx, args: Vec<String>) -> ExitCode {
 }
 
 fn fail(ctx: &Ctx, name: &str, refusal: Refusal) -> ExitCode {
-    let exit = Report::from(refusal).print(ctx.json, VERSION, name);
-    ExitCode::from(exit as u8)
+    Report::from(refusal).print(ctx.json, VERSION, name).into()
 }

@@ -1,6 +1,6 @@
 //! Git helpers. loci calls the `git` CLI.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 fn git(root: &Path) -> Command {
@@ -38,7 +38,7 @@ fn trimmed(out: Vec<u8>) -> String {
 /// without touching the index or any branch. `now` (Unix seconds) dates the record.
 /// Returns the ref, or `None` when there is no HEAD or the tree equals HEAD's.
 pub fn record_agent_tree(root: &Path, now: u64) -> Result<Option<String>, String> {
-    if !has_head(root) {
+    if !has_head(root)? {
         return Ok(None);
     }
     let head = trimmed(run(root, &["rev-parse", "HEAD"])?);
@@ -100,34 +100,30 @@ pub fn prune_agent_refs(root: &Path, now: u64, max_age: u64) -> Result<usize, St
 /// Whether `path` is gitignored (`git check-ignore`: exit 0 ignored, 1 not ignored,
 /// anything else an error).
 pub fn is_ignored(root: &Path, path: &str) -> Result<bool, String> {
-    let out =
-        git(root).args(["check-ignore", "-q", "--", path]).stdin(Stdio::null()).output().map_err(|e| e.to_string())?;
+    answer(root, &["check-ignore", "-q", "--", path])
+}
+
+/// Whether the repository has a commit.
+pub fn has_head(root: &Path) -> Result<bool, String> {
+    answer(root, &["rev-parse", "--verify", "-q", "HEAD"])
+}
+
+/// Runs a git query that exits 0 for yes and 1 for no; any other exit is an error.
+fn answer(root: &Path, args: &[&str]) -> Result<bool, String> {
+    let what = args.join(" ");
+    let out = git(root).args(args).stdin(Stdio::null()).output().map_err(|e| format!("git {what}: {e}"))?;
     match out.status.code() {
         Some(0) => Ok(true),
         Some(1) => Ok(false),
-        _ => Err(format!("git check-ignore: {}", String::from_utf8_lossy(&out.stderr).trim())),
+        _ => Err(format!("git {what}: {}", String::from_utf8_lossy(&out.stderr).trim())),
     }
 }
 
-/// True iff `dir` is the top level of a git work tree.
-pub fn is_worktree_root(dir: &Path) -> bool {
-    match run(dir, &["rev-parse", "--show-toplevel"]) {
-        Ok(out) => {
-            let top = String::from_utf8_lossy(&out).trim().to_string();
-            let top = Path::new(&top).canonicalize().ok();
-            top.is_some() && top == dir.canonicalize().ok()
-        }
-        Err(_) => false,
-    }
-}
-
-/// True iff `dir` is inside some git work tree.
-pub fn in_worktree(dir: &Path) -> bool {
-    run(dir, &["rev-parse", "--is-inside-work-tree"]).is_ok()
-}
-
-pub fn has_head(root: &Path) -> bool {
-    run(root, &["rev-parse", "--verify", "-q", "HEAD"]).is_ok()
+/// The top level of the git work tree holding `dir`, canonicalized. The error is git's
+/// message, for example when `dir` is in no work tree.
+pub fn toplevel(dir: &Path) -> Result<PathBuf, String> {
+    let top = trimmed(run(dir, &["rev-parse", "--show-toplevel"])?);
+    Path::new(&top).canonicalize().map_err(|e| format!("{top}: {e}"))
 }
 
 /// The content of `<rev>:<path>`, if it exists.

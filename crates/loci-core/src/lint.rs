@@ -11,7 +11,7 @@ use crate::config::Budgets;
 use crate::digest;
 use crate::envelope::{Diagnostic, sort_diagnostics};
 use crate::git;
-use crate::index::{FileIssue, Index, LinkError, SourceTarget};
+use crate::index::{FileIssue, Index, LinkError, SourceFolder, SourceTarget};
 use crate::parse::{FmError, FmValue, LinkForm, Note, TopBlock, prereq_slug, verbatim};
 use crate::sources::{SourceMeta, hex_sha256};
 use crate::vault::{self, Kind};
@@ -161,7 +161,7 @@ impl Lint<'_> {
         let ty = |key: &str, t: &str, span: std::ops::Range<usize>| {
             d("fm.field-type", format!("`{key}` must be {t}")).at(text, span)
         };
-        let get = |key: &str| note.frontmatter.as_ref().and_then(|f| f.get(key)).map(|e| &e.value);
+        let get = |key: &str| note.fm(key);
         for e in note.frontmatter.iter().flat_map(|f| &f.entries) {
             if !CONCEPT_FIELDS.contains(&e.key.as_str()) {
                 out.push(
@@ -294,10 +294,10 @@ impl Lint<'_> {
         let Some(frag) = link.fragment.as_deref() else { return true };
         match target {
             // `#p<N>` on the folder's single PDF; `#heading` on its single markdown file.
-            SourceTarget::Folder { files, .. } => match files.as_slice() {
-                [file] if PAGE.is_match(frag) => file.ends_with(".pdf"),
-                [file] => file.ends_with(".md") && self.index.check_fragment(file, frag).is_ok(),
-                _ => false,
+            SourceTarget::Folder(folder) => match folder.original() {
+                Some(file) if PAGE.is_match(frag) => file.ends_with(".pdf"),
+                Some(file) => file.ends_with(".md") && self.index.check_fragment(&file, frag).is_ok(),
+                None => false,
             },
             SourceTarget::Note(note) => !frag.starts_with('^') && self.index.check_fragment(&note, frag).is_ok(),
         }
@@ -308,9 +308,8 @@ impl Lint<'_> {
         // Duplicate ids.
         let mut ids: BTreeMap<String, Vec<&str>> = BTreeMap::new();
         for n in index.concepts() {
-            if let Some(FmValue::Str { value, .. }) = n.frontmatter.as_ref().and_then(|f| f.get("id")).map(|e| &e.value)
-            {
-                ids.entry(value.clone()).or_default().push(&n.path);
+            if let Some(id) = n.fm_str("id") {
+                ids.entry(id.to_string()).or_default().push(&n.path);
             }
         }
         for (id, paths) in &ids {
@@ -382,18 +381,19 @@ impl Lint<'_> {
     /// Source folder layout (§6.4): files inside `sources/<type>/<slug>/`, each folder
     /// one file plus `source.yaml`.
     fn source_layout(&self, out: &mut Vec<Diagnostic>) {
-        for f in self.index.files.iter().filter(|f| f.starts_with("sources/") && source_folder(f).is_none()) {
+        for f in self.index.files.iter().filter(|f| f.starts_with("sources/") && vault::source_folder(f).is_none()) {
             out.push(
                 Diagnostic::error("sources.layout", format!("`{f}` is not inside a `sources/<type>/<slug>/` folder"))
                     .at_path(f),
             );
         }
-        for (folder, files) in source_folders(self.index) {
-            let at = |code: &str, msg: &str| Diagnostic::error(code, msg).at_path(format!("{folder}/source.yaml"));
-            if files.iter().filter(|f| f.as_str() != "source.yaml").count() != 1 {
+        for folder in self.index.source_folders().into_values() {
+            let at =
+                |code: &str, msg: &str| Diagnostic::error(code, msg).at_path(format!("{}/source.yaml", folder.path));
+            if folder.original().is_none() {
                 out.push(at("sources.uncovered", "source folder must hold exactly one file besides `source.yaml`"));
             }
-            if !files.iter().any(|f| f == "source.yaml") {
+            if !folder.has_meta() {
                 out.push(at("sources.no-provenance", "source folder has no `source.yaml`"));
             }
         }
@@ -499,23 +499,6 @@ fn prereq_cycles(index: &Index, out: &mut Vec<Diagnostic>) {
     }
 }
 
-/// The source folder `sources/<type>/<slug>` holding `path`, and the path inside it,
-/// when `path` follows the layout (§6.4).
-fn source_folder(path: &str) -> Option<(String, String)> {
-    let parts: Vec<&str> = path.split('/').collect();
-    let ok = parts.len() >= 4 && parts[0] == "sources" && vault::is_slug(parts[1]) && vault::is_slug(parts[2]);
-    ok.then(|| (parts[..3].join("/"), parts[3..].join("/")))
-}
-
-/// The files of each source folder, by folder.
-fn source_folders(index: &Index) -> BTreeMap<String, Vec<String>> {
-    let mut folders: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (folder, file) in index.files.iter().filter_map(|f| source_folder(f)) {
-        folders.entry(folder).or_default().push(file);
-    }
-    folders
-}
-
 /// The rules that read file bytes or git (§7.3): `source.yaml` and the SHA-256 of
 /// each source, and `material-dropped`. Unsorted; the caller merges them with
 /// [`Lint::run`].
@@ -524,12 +507,9 @@ pub fn disk_rules(index: &Index, root: &Path) -> Vec<Diagnostic> {
     let unreadable = |path: &str, e: std::io::Error| {
         Diagnostic::error("file.unreadable", format!("file cannot be read: {e}")).at_path(path)
     };
-    for (folder, files) in source_folders(index) {
-        let others: Vec<&String> = files.iter().filter(|f| f.as_str() != "source.yaml").collect();
-        if others.len() == files.len() {
-            continue; // no `source.yaml`: `sources.no-provenance`
-        }
-        let meta = format!("{folder}/source.yaml");
+    // Folders without `source.yaml` are `sources.no-provenance` (Lint::run).
+    for folder in index.source_folders().into_values().filter(SourceFolder::has_meta) {
+        let meta = format!("{}/source.yaml", folder.path);
         let meta_text = match std::fs::read_to_string(root.join(&meta)) {
             Ok(t) => t,
             Err(e) => {
@@ -547,8 +527,7 @@ pub fn disk_rules(index: &Index, root: &Path) -> Vec<Diagnostic> {
                 continue;
             }
         };
-        if let [file] = others.as_slice() {
-            let file = format!("{folder}/{file}");
+        if let Some(file) = folder.original() {
             match std::fs::read(root.join(&file)) {
                 Ok(bytes) if hex_sha256(&bytes) != sha => out.push(
                     Diagnostic::error("sources.hash-mismatch", format!("`{file}` does not match its recorded SHA-256"))
@@ -563,13 +542,11 @@ pub fn disk_rules(index: &Index, root: &Path) -> Vec<Diagnostic> {
     out
 }
 
-/// `material-dropped` (§7.3): compares the working tree with HEAD. A git failure is
-/// warning `git.failed`, and the rule is not checked.
+/// `material-dropped` (§7.3): compares the working tree with HEAD, if there is one. A
+/// git failure is warning `git.failed`, and the rule is not checked.
 fn material_dropped(root: &Path, out: &mut Vec<Diagnostic>) {
-    if !git::has_head(root) {
-        return;
-    }
-    if let Err(e) = check_material(root, out) {
+    let checked = git::has_head(root).and_then(|head| if head { check_material(root, out) } else { Ok(()) });
+    if let Err(e) = checked {
         out.push(Diagnostic::warning("git.failed", format!("git failed, `material-dropped` was not checked: {e}")));
     }
 }

@@ -2,23 +2,20 @@
 
 use loci_core::envelope::{Outcome, Refusal, Report, line_col};
 use loci_core::index::Index;
+use loci_core::vault;
 use serde_json::json;
 
-use super::{Ctx, vault_path};
+use super::Ctx;
 
 pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
+    let target = vault::path_arg(target)?;
     // A note or concept, else any other vault file (an image, a source file).
-    let path = match index.note(target) {
+    let path = match index.note(&target) {
         Ok(n) => n.path.clone(),
-        Err(e) => {
-            let p = vault_path(target)?;
-            if index.files.binary_search(&p).is_err() {
-                return Err(e.refusal("links.unknown", target));
-            }
-            p
-        }
+        Err(e) if index.files.binary_search(&target).is_err() => return Err(e.refusal("links.unknown", &target)),
+        Err(_) => target,
     };
 
     let mut human = format!("links from {path}:\n");

@@ -147,17 +147,14 @@ pub fn run(ctx: &Ctx, agent: Option<&str>, k: usize) -> Result<Report, Refusal> 
     let mrr = rr_sum / n;
     let max = latencies.iter().copied().fold(0.0, f64::max);
     let med = median(&mut latencies);
-    let agent_json = agent.map(|_| json!({"pass_rate": agent_passes as f64 / n, "median_s": median(&mut agent_times)}));
+    let agent_stats = agent.map(|_| (agent_passes as f64 / n, median(&mut agent_times)));
+    let agent_json = agent_stats.map(|(pass_rate, median_s)| json!({"pass_rate": pass_rate, "median_s": median_s}));
     let mut human = format!(
         "{} cases: recall@{k} {recall:.3}, MRR {mrr:.3}, find median {med:.1} ms (max {max:.1} ms)\n",
         cases.len()
     );
-    if let Some(a) = &agent_json {
-        human.push_str(&format!(
-            "agent: pass rate {:.3}, median {:.1} s\n",
-            a["pass_rate"].as_f64().unwrap_or(0.0),
-            a["median_s"].as_f64().unwrap_or(0.0)
-        ));
+    if let Some((pass_rate, median_s)) = agent_stats {
+        human.push_str(&format!("agent: pass rate {pass_rate:.3}, median {median_s:.1} s\n"));
     }
     let data = json!({
         "cases": cases.len(),

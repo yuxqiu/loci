@@ -112,7 +112,7 @@ pub fn estimate<'a>(
     let items: Vec<&Line> = lines.iter().filter(|l| l.concept.as_deref() == Some(concept)).collect();
     match items.last() {
         Some(last) => {
-            let age_days = (now.as_second() - last.t.as_second()).max(0) as f64 / 86_400.0;
+            let age_days = (now.as_second() - last.t.as_second()).max(0) as f64 / SECONDS_PER_DAY;
             (Estimate::Item { grade: last.grade, age_days }, items)
         }
         None => (Estimate::Unknown, vec![]),

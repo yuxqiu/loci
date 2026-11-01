@@ -9,7 +9,7 @@ use loci_core::index::Index;
 use loci_core::vault::{self, Kind};
 use serde_json::json;
 
-use super::{Ctx, vault_path};
+use super::Ctx;
 
 #[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum Format {
@@ -31,7 +31,7 @@ impl Format {
 pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option<PathBuf>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
-    let target = vault_path(target)?;
+    let target = vault::path_arg(target)?;
     let path = index.note(&target).map_err(|e| e.refusal("export.unknown", &target))?.path.clone();
     if !matches!(vault::kind_of(&path), Some(Kind::View | Kind::Concept)) {
         return Err(Refusal::refused("export.kind", format!("`{path}` is not a view or a concept")));
@@ -58,12 +58,14 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
             cmd.args(["--standalone", "--mathjax"]);
         }
         let status = cmd.status();
-        std::fs::remove_file(&md_path).map_err(Refusal::io)?;
+        let removed = std::fs::remove_file(&md_path);
+        // A pandoc failure is reported before a failure to remove the temporary file.
         match status {
             Ok(s) if s.success() => {}
             Ok(s) => return Err(Refusal::internal("export.pandoc", format!("pandoc exited with {s}"))),
             Err(e) => return Err(Refusal::refused("export.pandoc", format!("cannot run pandoc: {e}"))),
         }
+        removed.map_err(Refusal::io)?;
     }
     let data = json!({
         "output": out_path,

@@ -27,6 +27,14 @@ them under its version.
   folders.
 - An unsupported `schema` in `loci.toml` is refused with a message naming the
   supported one.
+- `loci search` reports `search.index` when it cannot build its index.
+- `vault.not-git` now includes git's own message, so a missing or broken git is no
+  longer reported as "not a git work tree" alone. `lint` reports `git.failed`, and
+  `loci done` reports `done.record`, when git cannot tell whether there is a commit.
+- A line in `plugins/learn/reviews.jsonl` that does not parse is `learn.log` with
+  exit 1 (was exit 3).
+- Commands that take a note accept the same path forms everywhere (`./`, a trailing
+  `/`, with or without `.md`) and refuse paths outside the vault (`path.outside`).
 
 ### Removed
 

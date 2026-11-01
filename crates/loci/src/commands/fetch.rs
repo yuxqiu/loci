@@ -4,14 +4,14 @@ use std::io::Read;
 
 use loci_core::envelope::{Outcome, Refusal, Report};
 use loci_core::sources::{SourceMeta, hex_sha256};
-use loci_core::vault::{is_slug, nfc, write_atomic};
+use loci_core::vault::{self, is_slug, nfc, write_atomic};
 use serde_json::json;
 
-use super::{Ctx, vault_path};
+use super::Ctx;
 
 pub fn run(ctx: &Ctx, from: &str, dest: &str) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
-    let dest = vault_path(dest)?;
+    let dest = vault::path_arg(dest)?;
     let Some((ty, slug)) = dest.split_once('/') else {
         return Err(Refusal::refused("fetch.dest", "the destination is `<type>/<slug>`"));
     };
@@ -27,20 +27,18 @@ pub fn run(ctx: &Ctx, from: &str, dest: &str) -> Result<Report, Refusal> {
         return Err(Refusal::refused("fetch.dest", format!("`{folder_rel}` already exists")));
     }
     let is_url = from.starts_with("http://") || from.starts_with("https://");
-    // The inbox file to move, when `from` is not a URL.
-    let mut inbox_file = None;
-    let (file_name, bytes, url) = if is_url {
-        (file_name_from_url(from), download(from)?, Some(from.to_string()))
+    // `inbox_file`: the inbox file to move, when `from` is not a URL.
+    let (file_name, bytes, url, inbox_file) = if is_url {
+        (file_name_from_url(from), download(from)?, Some(from.to_string()), None)
     } else {
-        let rel = vault_path(from)?;
+        let rel = vault::path_arg(from)?;
         if !rel.starts_with("inbox/") {
             return Err(Refusal::refused("fetch.from", format!("`{rel}` is neither a URL nor under inbox/")));
         }
         match std::fs::read(vault.abs(&rel)) {
             Ok(b) => {
                 let name = rel.rsplit('/').next().expect("rsplit yields at least one part").to_string();
-                inbox_file = Some(vault.abs(&rel));
-                (name, b, None)
+                (name, b, None, Some(vault.abs(&rel)))
             }
             Err(e) => return Err(Refusal::refused("fetch.from", format!("cannot read `{rel}`: {e}"))),
         }
@@ -73,7 +71,7 @@ pub fn run(ctx: &Ctx, from: &str, dest: &str) -> Result<Report, Refusal> {
             Ok(()) => e.to_string(),
             Err(u) => format!("{e}; undoing it also failed, see `{folder_rel}`: {u}"),
         };
-        return Err(Refusal::internal("io", message));
+        return Err(Refusal::io(message));
     }
     let data = json!({"path": folder_rel, "file": file_name, "sha256": meta.sha256, "url": url});
     Ok(Report::new(Outcome::ok(data), format!("{folder_rel}/{file_name}\n")))

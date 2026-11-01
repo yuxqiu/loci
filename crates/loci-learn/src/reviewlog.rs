@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::Path;
 
 use jiff::Timestamp;
+use loci_core::envelope::Refusal;
 use loci_core::git;
 use serde::{Deserialize, Serialize};
 
@@ -161,16 +162,18 @@ impl Input {
     }
 }
 
-/// Reads every line of the log, sorted by timestamp (stable for equal times).
-pub fn read(vault: &Path) -> Result<Vec<Line>, String> {
+/// Reads every line of the log, sorted by timestamp (stable for equal times). A line
+/// that does not parse is `learn.log`.
+pub fn read(vault: &Path) -> Result<Vec<Line>, Refusal> {
     let text = match std::fs::read_to_string(vault.join(LOG)) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(e) => return Err(e.to_string()),
+        Err(e) => return Err(Refusal::io(e)),
     };
     let mut lines = vec![];
     for (n, l) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
-        let line: Line = serde_json::from_str(l).map_err(|e| format!("{LOG} line {}: {e}", n + 1))?;
+        let line: Line =
+            serde_json::from_str(l).map_err(|e| Refusal::refused("learn.log", format!("{LOG} line {}: {e}", n + 1)))?;
         lines.push(line);
     }
     lines.sort_by_key(|l| l.t);

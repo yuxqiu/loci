@@ -6,11 +6,11 @@ use loci_core::parse;
 use loci_core::vault::{self, write_atomic};
 use serde_json::json;
 
-use super::{Ctx, vault_path};
+use super::Ctx;
 
 pub fn run(ctx: &Ctx, note: &str, section: &str) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
-    let path = vault_path(note)?;
+    let path = vault::path_arg(note)?;
     let kind = vault::kind_of(&path);
     if !kind.is_some_and(|k| k.is_managed()) {
         return Err(Refusal::refused("block-ids.kind", format!("`{path}` is not a managed note")));

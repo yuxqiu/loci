@@ -33,16 +33,8 @@ impl Skill {
     /// A skill from its `SKILL.md`: the description is the `description:` field of the
     /// frontmatter (empty if absent).
     pub fn from_markdown(name: &str, body: &str) -> Self {
-        let mut lines = body.lines();
-        let description = if lines.next() == Some("---") {
-            lines
-                .take_while(|l| *l != "---")
-                .find_map(|l| l.strip_prefix("description:"))
-                .map(|d| d.trim().to_string())
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
+        let note = crate::parse::parse("SKILL.md", crate::vault::Kind::Unknown, body.to_string());
+        let description = note.fm_str("description").unwrap_or_default().to_string();
         Self { name: name.to_string(), description, body: body.to_string() }
     }
 }

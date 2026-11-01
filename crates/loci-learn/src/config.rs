@@ -2,12 +2,12 @@
 
 use std::path::Path;
 
+use loci_core::envelope::Refusal;
 use serde::Deserialize;
 
 pub const PATH: &str = "plugins/learn/config.toml";
 
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields, default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Config {
     pub new_per_day: u32,
     pub desired_retention: f32,
@@ -43,12 +43,13 @@ impl Config {
         Ok(c)
     }
 
-    /// Reads the vault's config, or the defaults if the file is absent.
-    pub fn load(vault: &Path) -> Result<Self, String> {
+    /// Reads the vault's config, or the defaults if the file is absent. An invalid
+    /// file is `learn.config`.
+    pub fn load(vault: &Path) -> Result<Self, Refusal> {
         match std::fs::read_to_string(vault.join(PATH)) {
-            Ok(text) => Self::parse(&text),
+            Ok(text) => Self::parse(&text).map_err(|e| Refusal::refused("learn.config", e)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(Refusal::io(e)),
         }
     }
 }

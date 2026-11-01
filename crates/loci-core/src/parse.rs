@@ -163,8 +163,13 @@ pub struct Note {
 
 impl Note {
     /// Frontmatter field `key`, if it is a string.
+    /// The value of frontmatter field `key`.
+    pub fn fm(&self, key: &str) -> Option<&FmValue> {
+        Some(&self.frontmatter.as_ref()?.get(key)?.value)
+    }
+
     pub fn fm_str(&self, key: &str) -> Option<&str> {
-        match &self.frontmatter.as_ref()?.get(key)?.value {
+        match self.fm(key)? {
             FmValue::Str { value, .. } => Some(value),
             _ => None,
         }
@@ -173,7 +178,7 @@ impl Note {
     /// The string items of frontmatter list `key` (other items are skipped; lint
     /// reports them).
     pub fn fm_strings(&self, key: &str) -> Vec<&str> {
-        match self.frontmatter.as_ref().and_then(|f| f.get(key)).map(|e| &e.value) {
+        match self.fm(key) {
             Some(FmValue::List { items, .. }) => items
                 .iter()
                 .filter_map(|i| match i {
@@ -212,6 +217,16 @@ impl Note {
             .collect()
     }
 
+    /// The top level of every H2 section whose text is `text`: its depth-1 list items,
+    /// and its other top-level blocks.
+    pub fn section_top_level(&self, text: &str) -> (Vec<&ListItem>, Vec<&(TopBlock, Range<usize>)>) {
+        let sections: Vec<Range<usize>> = self.h2_sections(text).into_iter().map(|(_, r)| r).collect();
+        let inside = |r: &Range<usize>| sections.iter().any(|s| s.start <= r.start && r.end <= s.end);
+        let items = self.items.iter().filter(|i| i.depth == 1 && inside(&i.range)).collect();
+        let blocks = self.top_blocks.iter().filter(|(_, r)| inside(r)).collect();
+        (items, blocks)
+    }
+
     /// Byte offset where the body starts: after the frontmatter block, or after a BOM.
     pub fn body_start(&self) -> usize {
         match &self.frontmatter {
@@ -240,6 +255,19 @@ fn options() -> Options {
 pub fn prereq_slug(value: &str) -> Option<&str> {
     let inner = value.strip_prefix("[[")?.strip_suffix("]]")?;
     crate::vault::is_slug(&inner.to_lowercase()).then_some(inner)
+}
+
+/// List item text without its marker (`-`, `*`, `+`, `1.` or `1)`) and leading spaces.
+pub fn strip_list_marker(s: &str) -> &str {
+    let s = s.trim_start();
+    if let Some(rest) = s.strip_prefix(['-', '*', '+']) {
+        return rest.trim_start();
+    }
+    let digits = s.bytes().take_while(u8::is_ascii_digit).count();
+    match s[digits..].strip_prefix(['.', ')']) {
+        Some(rest) if digits > 0 => rest.trim_start(),
+        _ => s,
+    }
 }
 
 /// True if a frontmatter scalar's source bytes are its value (inside its quotes when

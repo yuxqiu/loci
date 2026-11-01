@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use crate::parse::{ListItem, Note, TopBlock};
+use crate::parse::{Note, TopBlock, strip_list_marker};
 use crate::splice::{self, Edit};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,29 +20,22 @@ pub fn ulid_ids() -> impl FnMut() -> String {
 
 /// Computes the new text and the assigned ids. Returns `None` when no section matches.
 pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> String) -> Option<(String, Vec<Assigned>)> {
-    let sections: Vec<Range<usize>> = note.h2_sections(heading).into_iter().map(|(_, r)| r).collect();
-    if sections.is_empty() {
+    if note.h2_sections(heading).is_empty() {
         return None;
     }
-    let inside = |r: &Range<usize>| sections.iter().any(|s| s.start <= r.start && r.end <= s.end);
+    let (items, blocks) = note.section_top_level(heading);
     let has_id = |block: &Range<usize>| note.block_ids.iter().any(|b| &b.block == block);
 
-    // Targets: top-level list items (their leading text) and top-level paragraphs.
-    let mut targets: Vec<(Range<usize>, Range<usize>)> = vec![]; // (block, id slice)
-    // An item that starts with a nested block (a quote, a fence) has no leading text to
+    // Targets: top-level list items (their leading text) and top-level paragraphs. An
+    // item that starts with a nested block (a quote, a fence) has no leading text to
     // carry an id.
-    let has_lead = |item: &ListItem| {
-        let lead = note.text[item.lead.clone()].trim_start();
-        let marker = lead.trim_start_matches(|c: char| c.is_ascii_digit());
-        let rest = marker.strip_prefix(['-', '*', '+', '.', ')']).unwrap_or(marker);
-        !rest.trim().is_empty()
-    };
-    for item in note.items.iter().filter(|i| i.depth == 1 && inside(&i.range) && has_lead(i)) {
+    let mut targets: Vec<(Range<usize>, Range<usize>)> = vec![]; // (block, id slice)
+    for item in items.into_iter().filter(|i| !strip_list_marker(&note.text[i.lead.clone()]).trim().is_empty()) {
         if !has_id(&item.range) {
             targets.push((item.range.clone(), item.lead.clone()));
         }
     }
-    for (_, r) in note.top_blocks.iter().filter(|(b, r)| matches!(b, TopBlock::Paragraph) && inside(r)) {
+    for (_, r) in blocks.into_iter().filter(|(b, _)| matches!(b, TopBlock::Paragraph)) {
         if !has_id(r) {
             targets.push((r.clone(), r.clone()));
         }
