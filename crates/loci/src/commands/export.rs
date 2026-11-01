@@ -71,7 +71,6 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
     let data = json!({
         "output": out_path,
         "notes": e.notes,
-        "glossary": e.glossary,
         "assets": e.assets.iter().map(|(_, n)| format!("assets/{n}")).collect::<Vec<_>>(),
     });
     Ok(Report::ok(data, format!("{}\n", out_path.display())))

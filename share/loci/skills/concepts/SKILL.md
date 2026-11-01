@@ -5,13 +5,16 @@ description: Write, revise, split, merge and organise concept notes and areas. U
 
 # Concepts
 
+If you have not read them this session, read the framework rules (`loci rules`),
+`RULES.md` and `STYLE.md` first. The framework rules ("Writing concept notes") say how to
+search before writing, file a concept and link it.
+
 ## A concept note
 
 ```markdown
 ---
 id: <assigned by loci new>
 prereqs: ["[[prerequisite-slug]]"]
-digest: One sentence that summarises the concept.
 ---
 # Title
 
@@ -23,9 +26,8 @@ claim it supports ([[sources/papers/<key>.pdf#p3]]).
 ```
 
 - `prereqs` lists direct prerequisites only, each quoted.
-- `digest` is one sentence with no links; it is what `loci digest` shows.
-- Other names (an abbreviation, a spelling, a translation) go in the title, the
-  digest or the text, where `loci find` finds them. There is no alias field.
+- Other names (an abbreviation, a spelling, a translation) go in the title or the
+  text, where `loci find` finds them. There is no alias field.
 - One note per concept. An idea gets its own note once it has its own definition
   and other notes need to link to it on its own (`loci links <note>` lists what
   links to a note); otherwise it is a heading in its parent.
@@ -49,7 +51,7 @@ a scope note:
   area's `AREA.md`;
 - optionally, in a few words, key topics that have no sub-folder.
 
-Do not list sub-folders (`loci digest` outlines them), summarise concepts or record
+Do not list sub-folders (the folder shows them), summarise concepts or record
 history there.
 
 Group related concepts in sub-folders of an area (`concepts/<area>/<group>/`),
@@ -61,4 +63,5 @@ links are rewritten for you.
 
 A curated view is a file in `views/`: an ordered list of concept links with
 connecting text (a reading path, a project overview, a learning plan). Build
-one from `loci digest`, `loci find` and the concepts' `prereqs`.
+one from `loci find`, `loci closure` (prerequisites in order) and the folders under
+`concepts/`.

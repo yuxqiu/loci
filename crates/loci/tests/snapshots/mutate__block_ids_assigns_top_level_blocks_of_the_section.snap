@@ -4,7 +4,6 @@ expression: redact_ulids(&after)
 ---
 ---
 id: [ulid]
-digest: A note for block-ids.
 ---
 # Cards note
 

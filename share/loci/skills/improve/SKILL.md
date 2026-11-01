@@ -5,6 +5,9 @@ description: Review how loci is working for the user and propose improvements to
 
 # Improve
 
+If you have not read them this session, read the framework rules (`loci rules`),
+`RULES.md` and `STYLE.md` first.
+
 Find gaps from evidence, propose changes at the right level, test them where that
 is cheap, and leave every decision to the user. Change nothing outside the vault.
 

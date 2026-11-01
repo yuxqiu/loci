@@ -1,4 +1,4 @@
-//! `loci lint` (and the read-only `find` / `digest`) on the fixture vaults of m0 §13.2.
+//! `loci lint` (and the read-only `find`) on the fixture vaults of m0 §13.2.
 
 mod common;
 
@@ -321,9 +321,6 @@ fn kinds() {
     assert_snapshot!(diag_lines(&env));
     // Not indexed.
     assert_eq!(hit_paths(&find(&v, "zanzibar")), ["views/v.md"]);
-    // Not digested.
-    let (_, out, _) = v.run_raw(&["digest"]);
-    assert_eq!(out, "# Index\n");
 }
 
 // ---------------------------------------------------------------- table-pipe
@@ -354,80 +351,25 @@ fn frontmatter_edge_lint() {
     assert!(ft["message"].as_str().unwrap().contains("prereqs"));
     assert_codes(&env, "concepts/a/tags.md", &["fm.unknown-field"]);
     assert_eq!(covered_by(&v, &env, "fm.unknown-field", "concepts/a/tags.md"), ["tags"]);
-    assert_codes(&env, "concepts/a/empty-digest.md", &["fm.missing-field"]);
     assert_codes(&env, "journal/r/2025/01/25-01-02.md", &["fm.not-allowed"]);
     assert_codes(&env, "journal/r/2025/01/25-01-01.md", &[]);
 }
 
-// ---------------------------------------------------------------- area-digest
+// ---------------------------------------------------------------- areas
 
 #[test]
-fn area_digest_lint() {
-    let (_, code, env) = lint("area-digest");
+fn areas_lint() {
+    let (_, code, env) = lint("areas");
     assert_eq!(code, 1);
     assert_codes(&env, "concepts/missing/AREA.md", &["area.missing"]);
     assert_codes(&env, "concepts/broken/AREA.md", &["area.format"]);
-    let ob = with_code(&env, "index.over-budget");
-    assert_eq!(ob.len(), 1, "{}", diag_lines(&env));
-    assert_eq!(ob[0]["severity"], "warning");
-    assert!(ob[0]["message"].as_str().unwrap().contains("algorithms"));
-    assert!(ob[0]["message"].as_str().unwrap().contains("(budget 120)"));
-    assert!(codes_on(&env, "concepts/algorithms/no-digest.md").contains(&"fm.missing-field".to_string()));
-}
-
-#[test]
-fn area_digest_root_output() {
-    let v = TestVault::committed(BIN, "area-digest");
-    let (code, out, _) = v.run_raw(&["digest"]);
-    assert_eq!(code, 0);
-    assert_eq!(
-        out,
-        "# Index\n\
-         \n## Algorithms (concepts/algorithms, 5 concepts)\n\
-         \nTechniques for searching, sorting and traversing data.\n\
-         \nSub-folders: graphs (2)\n\
-         \n## Broken Area (concepts/broken, 1 concepts)\n\
-         \n## missing (concepts/missing, 1 concepts)\n"
-    );
-    let (code, env) = v.run(&["digest"]);
-    assert_eq!(code, 0);
-    assert_json_snapshot!(env, {".loci" => "[version]"});
-    // Deterministic.
-    assert_eq!(v.run_raw(&["digest"]), v.run_raw(&["digest"]));
-}
-
-#[test]
-fn area_digest_area_output() {
-    let v = TestVault::committed(BIN, "area-digest");
-    let (code, out, _) = v.run_raw(&["digest", "--area", "algorithms"]);
-    assert_eq!(code, 0);
-    assert_eq!(
-        out,
-        "# Algorithms (concepts/algorithms)\n\
-         \n- [[binary-search]]: Find a key in a sorted array.\n\
-         - [[merge-sort]]: Stable divide-and-conquer sort.\n\
-         - [[no-digest]]\n\
-         \n## graphs\n\
-         \n- [[bfs]]: Visit vertices by distance.\n\
-         \n## graphs/deep\n\
-         \n- [[dijkstra]]: Shortest paths.\n"
-    );
-    let (_, out, _) = v.run_raw(&["digest", "--area", "missing"]);
-    assert_eq!(out, "# missing (concepts/missing)\n\n- [[y]]: In an area without AREA.md.\n");
-    let (code, env) = v.run(&["digest", "--area", "algorithms"]);
-    assert_eq!(code, 0);
-    assert_json_snapshot!(env, {".loci" => "[version]"});
-    let (code, env) = v.run(&["digest", "--area", "nope"]);
-    assert_eq!(code, 1);
-    assert_eq!(error_code(&env), "digest.no-area");
-}
-
-#[test]
-fn empty_vault_digest() {
-    let v = TestVault::committed(BIN, "dispatch");
-    std::fs::remove_dir_all(v.root.join("concepts")).unwrap();
-    let (_, out, _) = v.run_raw(&["digest"]);
-    assert_eq!(out, "# Index\n");
+    let long = with_code(&env, "area.too-long");
+    assert_eq!(long.len(), 1, "{}", diag_lines(&env));
+    assert_eq!(path_of(long[0]), "concepts/algorithms/AREA.md");
+    assert_eq!(long[0]["severity"], "warning");
+    assert!(long[0]["message"].as_str().unwrap().contains("(budget 20)"));
+    // Sub-folders at any depth hold concepts, without an AREA.md of their own.
+    assert_codes(&env, "concepts/algorithms/graphs/deep/dijkstra.md", &[]);
 }
 
 // ---------------------------------------------------------------- sources (lint)

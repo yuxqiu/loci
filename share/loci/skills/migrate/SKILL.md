@@ -5,6 +5,9 @@ description: Bring notes from another notes system (a folder of markdown, an Obs
 
 # Migrate
 
+If you have not read them this session, read the framework rules (`loci rules`),
+`RULES.md` and `STYLE.md` first.
+
 The old notes stay where they are and are never modified. Migration copies one
 batch at a time into the inbox and processes it with the normal `intake` skill.
 

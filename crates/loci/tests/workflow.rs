@@ -21,16 +21,25 @@ fn status_change_counts_and_inbox() {
     let (code, env) = v.run(&["status"]);
     assert_eq!(code, 0, "{env:#}");
     assert_eq!(env["data"]["changes"], json!({"modified": 1, "deleted": 1, "added": 1, "untracked": 2}));
-    assert_eq!(env["data"]["inbox"]["files"], json!(["inbox/drafts/draft.md", "inbox/drafts/new.md"]));
+    assert_eq!(env["data"]["inbox"]["files"], 2);
+    assert_eq!(env["data"]["inbox"]["by_folder"], json!({"drafts": 2}));
     assert_eq!(env["data"]["inbox"]["uncommitted"], json!(["inbox/drafts/new.md"]));
     let unc = with_code(&env, "inbox.uncommitted");
-    assert_eq!(unc.len(), 1);
-    assert_eq!(path_of(unc[0]), "inbox/drafts/new.md");
+    assert_eq!(unc.len(), 1, "one warning, however many files");
+    assert!(unc[0]["message"].as_str().unwrap().starts_with("1 inbox file(s) uncommitted"), "{env:#}");
     assert_eq!(unc[0]["severity"], "warning");
     // A modified committed draft is uncommitted too.
     v.write("inbox/drafts/draft.md", v.read("inbox/drafts/draft.md") + "\nEdit.\n");
     let (_, env) = v.run(&["status"]);
     assert_eq!(env["data"]["inbox"]["uncommitted"], json!(["inbox/drafts/draft.md", "inbox/drafts/new.md"]));
+    // The human form counts by folder and lists at most ten uncommitted files.
+    for n in 0..11 {
+        v.write(&format!("inbox/sources/clip-{n:02}.md"), "# Clip\n");
+    }
+    let (_, out, _) = v.run_raw(&["status"]);
+    assert!(out.contains("13 file(s), 13 uncommitted (drafts 2, sources 11)"), "{out}");
+    assert_eq!(out.lines().filter(|l| l.starts_with("- inbox/")).count(), 10, "{out}");
+    assert!(out.contains("- and 3 more"), "{out}");
 }
 
 #[test]
@@ -39,31 +48,36 @@ fn status_envelope() {
     let (code, env) = v.run(&["status"]);
     assert_eq!(code, 0);
     assert!(diags(&env).is_empty(), "{}", diag_lines(&env));
-    assert_eq!(env["data"]["rules"]["RULES.md"], v.read("RULES.md"));
-    assert_eq!(env["data"]["rules"]["STYLE.md"], v.read("STYLE.md"));
-    let (_, digest, _) = v.run_raw(&["digest"]);
-    assert_eq!(env["data"]["digest"], digest);
     assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
-    // The human output has every part, in order.
+    // The human output has every part, in order, and nothing that does not change
+    // from task to task: no rules, style, index or plugins.
     let (_, out, _) = v.run_raw(&["status"]);
-    let order = ["## Plugins", "## Uncommitted changes", "## Inbox", "# Index", "# Rules", "# Style"];
+    for gone in ["framework rules", "# Rules", "# Style", "# Index", "## Plugins"] {
+        assert!(!out.contains(gone), "{gone}:\n{out}");
+    }
+    let order = ["## Uncommitted changes", "## Agent work to review", "## Inbox"];
     let pos: Vec<usize> = order.iter().map(|h| out.find(h).unwrap_or_else(|| panic!("no {h}:\n{out}"))).collect();
     assert!(pos.windows(2).all(|w| w[0] < w[1]), "{out}");
     // status writes nothing.
     assert_eq!(v.git(&["status", "--porcelain"]), "");
 }
 
+/// The framework rules are read at session start, from `loci rules`, which needs no
+/// vault; the `AGENTS.md` that `init` writes says so.
 #[test]
-fn status_reports_every_part_when_one_fails() {
-    let v = TestVault::committed(BIN, "agent-workflow");
-    std::fs::remove_file(v.root.join("STYLE.md")).unwrap();
-    let (code, env) = v.run(&["status"]);
-    assert_eq!(code, 0, "{env:#}");
-    assert!(env["data"]["changes"].is_object());
-    assert!(env["data"]["digest"].is_string());
-    assert!(env["data"]["rules"]["RULES.md"].is_string());
-    assert!(env["data"]["rules"]["STYLE.md"].is_null());
-    assert!(has(&env, "status.rules", "STYLE.md"), "{env:#}");
+fn rules_are_read_at_session_start() {
+    let v = TestVault::empty(BIN);
+    let (code, out, _) = v.run_raw(&["rules"]);
+    assert_eq!(code, 0);
+    assert!(out.starts_with("# loci framework rules\n"), "{out}");
+    let (_, env) = v.run(&["rules"]);
+    assert_eq!(env["data"]["rules"], out);
+    v.run(&["init"]);
+    let agents = v.read("AGENTS.md");
+    assert!(
+        agents.contains("`loci rules`") && agents.contains("`RULES.md`") && agents.contains("`STYLE.md`"),
+        "{agents}"
+    );
 }
 
 /// When git cannot list the vault, no command runs on a guess (m0 §3).
@@ -148,11 +162,11 @@ fn new_writes_the_skeleton() {
     let id = env["data"]["id"].as_str().unwrap();
     assert!(is_ulid(id), "{id}");
     let text = v.read("concepts/a/sub/fresh.md");
-    assert_eq!(text, format!("---\nid: {id}\nprereqs: []\ndigest: \"\"\n---\n# fresh\n"));
+    assert_eq!(text, format!("---\nid: {id}\nprereqs: []\n---\n# fresh\n"));
     assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
-    // The empty digest is fm.missing-field until filled.
+    // The skeleton lints clean.
     let (_, env) = v.run(&["lint"]);
-    assert_eq!(codes_on(&env, "concepts/a/sub/fresh.md"), ["fm.missing-field"]);
+    assert_eq!(codes_on(&env, "concepts/a/sub/fresh.md"), Vec::<String>::new());
 
     let (code, env) = v.run(&["new", "concepts/a/titled.md", "--title", "A Title"]);
     assert_eq!(code, 0);

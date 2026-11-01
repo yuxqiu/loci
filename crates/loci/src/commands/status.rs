@@ -1,50 +1,37 @@
-//! `loci status` (m0 §9.6).
+//! `loci status` (m0 §9.6): what has changed in the vault. The rules that do not
+//! change from task to task are read at session start (`AGENTS.md`), not here.
 
-use loci_core::digest;
+use std::collections::BTreeMap;
+
 use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::git;
-use loci_core::index::Index;
 use serde_json::json;
 
-use super::{Ctx, plugins};
-use crate::assets;
+use super::Ctx;
+
+/// Uncommitted inbox files listed by name in the human form; the rest are counted.
+const LISTED: usize = 10;
 
 pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let root = &vault.root;
+    let files = &vault.listing().files;
     let mut diags: Vec<Diagnostic> = vec![];
     let mut human = String::new();
 
-    // Every part reads the vault's files from the index, like every other command.
-    let index = Index::open(&vault);
-
     // 1. The agent entry point.
-    if !index.files.iter().any(|f| f == "AGENTS.md") {
+    if !files.iter().any(|f| f == "AGENTS.md") {
         diags.push(
             Diagnostic::warning("install.missing", "`AGENTS.md` is missing")
                 .with_hint("run `loci init` in a new vault"),
         );
     }
 
-    // 2. Plugins.
-    let installed = plugins();
-    human.push_str("## Plugins\n\n");
-    if installed.is_empty() {
-        human.push_str("none\n");
-    }
-    for p in &installed {
-        human.push_str(&format!("- {} ({})\n", p.name, p.path.display()));
-    }
-
-    // 3. Framework rules.
-    human.push('\n');
-    human.push_str(assets::RULES);
-
-    // 4. Uncommitted changes. A git failure is reported and the other parts go on.
+    // 2. Uncommitted changes. A git failure is reported and the other parts go on.
     let changes = match git::status(root) {
         Ok(c) => {
             human.push_str(&format!(
-                "\n## Uncommitted changes\n\n{} modified, {} deleted, {} added, {} untracked\n",
+                "## Uncommitted changes\n\n{} modified, {} deleted, {} added, {} untracked\n",
                 c.modified.len(),
                 c.deleted.len(),
                 c.added.len(),
@@ -53,13 +40,13 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
             Some(c)
         }
         Err(e) => {
-            human.push_str("\n## Uncommitted changes\n\nunknown: `git status` failed\n");
+            human.push_str("## Uncommitted changes\n\nunknown: `git status` failed\n");
             diags.push(Diagnostic::warning("status.git", format!("`git status` failed: {e}")));
             None
         }
     };
 
-    // Agent work recorded by `loci done`, waiting for the `improve` skill.
+    // 3. Agent work recorded by `loci done`, waiting for the `improve` skill.
     let records = match git::agent_refs(root) {
         Ok(r) => {
             human.push_str(&format!("\n## Agent work to review\n\n{} task(s) recorded by `loci done`\n", r.len()));
@@ -72,62 +59,52 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         }
     };
 
-    // 5. Inbox.
-    let inbox: Vec<&String> = index.files.iter().filter(|f| f.starts_with("inbox/")).collect();
+    // 4. Inbox: counts by folder, and the files not yet committed, which block work.
+    let inbox: Vec<&String> = files.iter().filter(|f| f.starts_with("inbox/")).collect();
+    let mut by_folder: BTreeMap<&str, usize> = BTreeMap::new();
+    for f in &inbox {
+        let parts: Vec<&str> = f.split('/').collect();
+        *by_folder.entry(if parts.len() > 2 { parts[1] } else { "" }).or_default() += 1;
+    }
     let uncommitted: Option<Vec<&String>> = changes.as_ref().map(|c| {
         let changed = |f: &String| c.untracked.contains(f) || c.modified.contains(f) || c.added.contains(f);
         inbox.iter().copied().filter(|f| changed(f)).collect()
     });
-    for f in uncommitted.iter().flatten() {
-        diags.push(
-            Diagnostic::warning(
-                "inbox.uncommitted",
-                "commit these before processing; a dissolved draft must be in git",
-            )
-            .at_path(f.as_str()),
-        );
-    }
+    let folders: Vec<String> = by_folder
+        .iter()
+        .map(|(d, n)| if d.is_empty() { format!("{n} directly in inbox/") } else { format!("{d} {n}") })
+        .collect();
     let uncommitted_count = uncommitted.as_ref().map_or("unknown".to_string(), |u| u.len().to_string());
-    human.push_str(&format!("\n## Inbox\n\n{} file(s), {uncommitted_count} uncommitted\n", inbox.len()));
-    for f in &inbox {
-        human.push_str(&format!("- {f}\n"));
+    human.push_str(&format!("\n## Inbox\n\n{} file(s), {uncommitted_count} uncommitted", inbox.len()));
+    if !folders.is_empty() {
+        human.push_str(&format!(" ({})", folders.join(", ")));
     }
-
-    // 6. Index.
-    let areas = digest::areas(&index);
-    let digest_text = digest::render_root(&areas);
     human.push('\n');
-    human.push_str(&digest_text);
-
-    // 7. Rule files.
-    let mut rules = serde_json::Map::new();
-    for name in ["RULES.md", "STYLE.md"] {
-        human.push('\n');
-        match index.parsed(name) {
-            Some(note) => {
-                human.push_str(&note.text);
-                rules.insert(name.to_string(), json!(note.text));
-            }
-            None => {
-                human.push_str(&format!("`{name}` is missing\n"));
-                diags.push(Diagnostic::warning("status.rules", format!("`{name}` is missing")).at_path(name));
-                rules.insert(name.to_string(), serde_json::Value::Null);
-            }
+    if let Some(u) = uncommitted.as_ref().filter(|u| !u.is_empty()) {
+        for f in u.iter().take(LISTED) {
+            human.push_str(&format!("- {f}\n"));
         }
+        if u.len() > LISTED {
+            human.push_str(&format!("- and {} more\n", u.len() - LISTED));
+        }
+        diags.push(Diagnostic::warning(
+            "inbox.uncommitted",
+            format!(
+                "{} inbox file(s) uncommitted: commit them before processing; a dissolved draft must be in git",
+                u.len()
+            ),
+        ));
     }
 
     let data = json!({
-        "plugins": installed,
         "changes": changes.as_ref().map(|c| json!({
             "modified": c.modified.len(),
             "deleted": c.deleted.len(),
             "added": c.added.len(),
             "untracked": c.untracked.len(),
         })),
-        "inbox": {"files": inbox, "uncommitted": uncommitted},
         "agent_records": records,
-        "digest": digest_text,
-        "rules": rules,
+        "inbox": {"files": inbox.len(), "by_folder": by_folder, "uncommitted": uncommitted},
     });
     Ok(Report::ok(data, human).with_diagnostics(diags))
 }

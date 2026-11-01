@@ -4,7 +4,6 @@
 pub mod bench;
 pub mod blockids;
 pub mod closure;
-pub mod digest;
 pub mod dispatch;
 pub mod done;
 pub mod export;
@@ -15,6 +14,7 @@ pub mod lint;
 pub mod merge;
 pub mod mv;
 pub mod new;
+pub mod rules;
 pub mod skill;
 pub mod status;
 

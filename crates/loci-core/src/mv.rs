@@ -154,7 +154,7 @@ mod tests {
     use super::*;
     use crate::index::from_texts;
 
-    const C: &str = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ndigest: d\n---\n# T\n";
+    const C: &str = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# T\n";
 
     #[test]
     fn rename_rewrites_links_and_leaves_the_note() {
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn source_citations_follow() {
-        let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ndigest: d\n---\n# T\n\nSee [[sources/papers/p.pdf#p3]].\n";
+        let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# T\n\nSee [[sources/papers/p.pdf#p3]].\n";
         let i = from_texts(&[("concepts/a/x.md", c), ("sources/papers/p.pdf", "")]);
         let p = plan(&i, "sources/papers/p.pdf", "sources/papers/q.pdf", |_| Ok(false), |_| false).unwrap();
         assert!(p.writes["concepts/a/x.md"].contains("[[sources/papers/q.pdf#p3]]"));

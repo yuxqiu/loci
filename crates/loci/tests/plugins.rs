@@ -47,7 +47,7 @@ fn unknown_command_lists_core_commands_and_plugins() {
     let (code, env) = v.run(&["nosuch"]);
     assert_eq!((code, error_code(&env)), (1, "cmd.unknown"));
     let msg = env["error"]["message"].as_str().unwrap();
-    for c in ["init", "lint", "find", "digest", "mv", "status", "new", "skill", "block-ids"] {
+    for c in ["init", "lint", "find", "rules", "mv", "status", "new", "skill", "block-ids"] {
         assert!(msg.contains(c), "{msg}");
     }
     assert!(msg.contains("stub"), "{msg}");
@@ -221,15 +221,4 @@ fn skills_plugin_failures_drop_the_output() {
         assert!(skills.iter().all(|s| s["plugin"].is_null()), "{what}: plugin skills not dropped");
         assert!(!skills.is_empty(), "{what}: core skills still listed");
     }
-}
-
-#[test]
-fn status_lists_the_plugin() {
-    let v = vault_with(Stub::default());
-    let (code, env) = v.run(&["status"]);
-    assert_eq!(code, 0);
-    assert_eq!(env["command"], "status");
-    assert_eq!(env["data"]["plugins"], json!([{"name": "stub", "path": v.bin().join("loci-stub").to_str().unwrap()}]));
-    let install = diags(&env).iter().filter(|d| d["code"].as_str().unwrap().starts_with("install.")).count();
-    assert_eq!(install, 0, "skills installed elsewhere are not checked: {}", diag_lines(&env));
 }

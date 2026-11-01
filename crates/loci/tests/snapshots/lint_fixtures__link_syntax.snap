@@ -2,6 +2,6 @@
 source: crates/loci/tests/lint_fixtures.rs
 expression: diag_lines(&env)
 ---
-concepts/a/c.md:7:26 error link.markdown: a vault target must use a wikilink: `[[concepts/a/b]]` (hint: write [[concepts/a/b]])
-concepts/a/c.md:9:17 error link.markdown: a vault target must use a wikilink: `![[concepts/a/x.png]]` (hint: write ![[concepts/a/x.png]])
-concepts/a/c.md:11:17 error link.markdown: a vault target must use a wikilink: `[[concepts/a/b]]` (hint: write [[concepts/a/b]])
+concepts/a/c.md:6:26 error link.markdown: a vault target must use a wikilink: `[[concepts/a/b]]` (hint: write [[concepts/a/b]])
+concepts/a/c.md:8:17 error link.markdown: a vault target must use a wikilink: `![[concepts/a/x.png]]` (hint: write ![[concepts/a/x.png]])
+concepts/a/c.md:10:17 error link.markdown: a vault target must use a wikilink: `[[concepts/a/b]]` (hint: write [[concepts/a/b]])

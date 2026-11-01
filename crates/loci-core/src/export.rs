@@ -4,7 +4,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ops::Range;
 
-use crate::digest::valid_digest;
 use crate::index::{Index, Resolved, heading_key};
 use crate::parse::{Heading, Link, LinkForm, Note};
 use crate::splice::{self, Edit};
@@ -140,8 +139,6 @@ pub struct Export {
     pub markdown: String,
     /// Included note paths, in order.
     pub notes: Vec<String>,
-    /// Notes listed in the glossary.
-    pub glossary: Vec<String>,
     /// Images to copy: (vault path, file name under `assets/`).
     pub assets: Vec<(String, String)>,
 }
@@ -254,12 +251,7 @@ pub fn export(index: &Index, root: &str, depth: usize) -> Export {
                                 None => text,
                             }
                         }
-                        None => {
-                            if valid_digest(target).is_some() && !out.glossary.contains(&p) {
-                                out.glossary.push(p.clone());
-                            }
-                            text
-                        }
+                        None => text,
                     }
                 }
             };
@@ -276,14 +268,6 @@ pub fn export(index: &Index, root: &str, depth: usize) -> Export {
         }
         doc.push_str(edited.trim_start_matches('\n'));
         out.notes.push(note.path.clone());
-    }
-    if !out.glossary.is_empty() {
-        doc.push_str(if doc.ends_with('\n') { "\n## Glossary\n\n" } else { "\n\n## Glossary\n\n" });
-        for p in &out.glossary {
-            let n = index.parsed(p).expect("the glossary holds notes");
-            let digest = valid_digest(n).expect("only notes with a valid digest are in the glossary");
-            doc.push_str(&format!("**{}**: {digest}\n\n", n.title()));
-        }
     }
     out.markdown = format!("{}\n", doc.trim_end());
     out.assets = asset_names.into_iter().collect();
@@ -353,7 +337,7 @@ mod tests {
     use crate::index::from_texts;
 
     fn concept(title: &str, body: &str) -> String {
-        format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ndigest: About {title}.\n---\n# {title}\n\n{body}")
+        format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# {title}\n\n{body}")
     }
 
     #[test]
@@ -380,7 +364,6 @@ mod tests {
         ]);
         let e = export(&i, "views/algo.md", 1);
         assert_eq!(e.notes, vec!["views/algo.md", "concepts/a/bfs.md", "concepts/a/dfs.md"]);
-        assert_eq!(e.glossary, vec!["concepts/a/queue.md"]);
         assert_eq!(e.assets, vec![("concepts/a/attachments/g.png".to_string(), "g.png".to_string())]);
         let md = &e.markdown;
         assert!(md.contains("[BFS](#bfs) and [depth-first](#dfs)."), "{md}");
@@ -388,8 +371,8 @@ mod tests {
         assert!(md.contains("#### Proof\n"), "{md}");
         assert!(md.contains("see Queue."), "{md}");
         assert!(md.contains("![graph](assets/g.png)"), "{md}");
-        assert!(md.contains("## Glossary\n\n**Queue**: About Queue."), "{md}");
-        assert!(!md.contains("digest:"), "{md}");
+        assert!(!md.contains("Glossary"), "a note left out is plain text, nothing more: {md}");
+        assert!(!md.contains("id:"), "{md}");
     }
 
     #[test]
@@ -449,13 +432,13 @@ mod tests {
         let i = from_texts(&[
             ("views/v.md", "# BFS notes\n\n## BFS\n\n[[bfs]]\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Body.\n")),
-            ("concepts/a/untitled.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\ndigest: d\n---\nNo heading.\n"),
+            ("concepts/a/untitled.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\n---\nNo heading.\n"),
         ]);
         let e = export(&i, "views/v.md", 1);
         assert!(e.markdown.contains("[BFS](#bfs-1)"), "{}", e.markdown);
         let i = from_texts(&[
             ("views/v.md", "# V\n\n[[untitled]]\n"),
-            ("concepts/a/untitled.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\ndigest: d\n---\nNo heading.\n"),
+            ("concepts/a/untitled.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\n---\nNo heading.\n"),
         ]);
         let e = export(&i, "views/v.md", 1);
         assert!(

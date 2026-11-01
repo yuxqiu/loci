@@ -30,7 +30,7 @@ fn learn_with(v: &TestVault, args: &[&str], stdin: &str, version: Option<&str>) 
 
 /// A concept note whose `## Cards` section holds `cards`.
 fn concept(id: &str, cards: &str) -> String {
-    loci_testkit::concept(id, "", "d", &format!("# T\n\nBody.\n\n## Cards\n\n{cards}"))
+    loci_testkit::concept(id, "", &format!("# T\n\nBody.\n\n## Cards\n\n{cards}"))
 }
 
 fn codes(env: &Value) -> Vec<String> {
@@ -117,7 +117,7 @@ fn log_commits_alone_and_validates() {
 fn state_kinds() {
     let v = vault(&[
         ("concepts/a/x.md", &concept(CONCEPT, &format!("- q :: a ^{ID1}\n- q2 :: a ^{ID2}\n"))),
-        ("concepts/a/y.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\ndigest: d\n---\n# Y\n"),
+        ("concepts/a/y.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\n---\n# Y\n"),
     ]);
     let (_, env) = learn(&v, &["state", "x"], "");
     assert_eq!(env["data"]["estimate"]["kind"], "unknown");

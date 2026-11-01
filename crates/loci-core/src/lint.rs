@@ -6,14 +6,13 @@ use std::path::Path;
 use unicode_normalization::is_nfc;
 
 use crate::config::Budgets;
-use crate::digest;
 use crate::envelope::{Diagnostic, sort_diagnostics};
 use crate::git;
 use crate::index::{Index, LinkError};
 use crate::parse::{FmError, FmValue, Note, TopBlock, prereq_item};
 use crate::vault::{self, Kind};
 
-const CONCEPT_FIELDS: [&str; 3] = ["id", "prereqs", "digest"];
+const CONCEPT_FIELDS: [&str; 2] = ["id", "prereqs"];
 
 /// The rules over the index (§7.3). The rules that read file bytes or git are
 /// [`disk_rules`].
@@ -162,26 +161,6 @@ impl Lint<'_> {
             }
             Some(v) => out.push(wrong(v.span())),
         }
-        match get("digest") {
-            None => out.push(d("fm.missing-field", "concept has no `digest`".into())),
-            Some(FmValue::Str { value, span, .. }) => {
-                for (code, msg) in digest::digest_errors(value) {
-                    out.push(d(code, msg.into()).at(text, span.clone()));
-                }
-                let n = value.chars().count();
-                if !value.trim().is_empty() && n > self.budgets.digest {
-                    out.push(
-                        Diagnostic::warning(
-                            "digest.too-long",
-                            format!("`digest` is {n} characters (budget {})", self.budgets.digest),
-                        )
-                        .at_path(path)
-                        .at(text, span.clone()),
-                    );
-                }
-            }
-            Some(v) => out.push(ty("digest", "a string", v.span())),
-        }
     }
 
     fn links(&self, note: &Note, out: &mut Vec<Diagnostic>) {
@@ -263,28 +242,6 @@ impl Lint<'_> {
         }
         // Prereq cycles.
         prereq_cycles(index, out);
-        // Index budgets.
-        let all = digest::areas(index);
-        let root = digest::render_root(&all);
-        let n = root.chars().count();
-        if n > self.budgets.root_index {
-            out.push(Diagnostic::warning(
-                "index.over-budget",
-                format!("the root digest output is {n} characters (budget {})", self.budgets.root_index),
-            ));
-        }
-        for a in &all {
-            let n = digest::render_area(a).chars().count();
-            if n > self.budgets.area_index {
-                out.push(
-                    Diagnostic::warning(
-                        "index.over-budget",
-                        format!("the {} digest output is {n} characters (budget {})", a.name, self.budgets.area_index),
-                    )
-                    .at_path(format!("concepts/{}/AREA.md", a.name)),
-                );
-            }
-        }
     }
 }
 
@@ -313,11 +270,22 @@ fn h1_rules(note: &Note, out: &mut Vec<Diagnostic>) {
     }
 }
 
+/// The paragraph of an AREA.md that is exactly an H1 and one paragraph (m0 §6.3).
+fn area_paragraph(note: &Note) -> Option<&str> {
+    if note.frontmatter.is_some() || note.fm_error.is_some() {
+        return None;
+    }
+    match note.top_blocks.as_slice() {
+        [(TopBlock::Heading(1), _), (TopBlock::Paragraph, p)] => Some(note.text[p.clone()].trim()),
+        _ => None,
+    }
+}
+
 fn area_rules(note: &Note, budgets: &Budgets, out: &mut Vec<Diagnostic>) {
     let path = note.path.as_str();
-    match digest::area_parts(note) {
+    match area_paragraph(note) {
         None => out.push(Diagnostic::error("area.format", "AREA.md must be an H1 and one paragraph").at_path(path)),
-        Some((_, para)) => {
+        Some(para) => {
             let n = para.chars().count();
             if n > budgets.area_paragraph {
                 out.push(
@@ -491,7 +459,7 @@ mod tests {
     #[test]
     fn prereqs_must_be_bare_slugs() {
         for bad in ["[[x#H]]", "[[]]", "[[x|y]]", "[[a/x]]", "[[two words]]"] {
-            let note = format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nprereqs: [\"{bad}\"]\ndigest: d\n---\n# X\n");
+            let note = format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nprereqs: [\"{bad}\"]\n---\n# X\n");
             let files = [("concepts/a/y.md", note.as_str()), ("concepts/a/x.md", "")];
             let d = lint(&files);
             assert!(d.contains(&("concepts/a/y.md".into(), "fm.field-type".into())), "{bad}: {d:?}");
@@ -502,7 +470,7 @@ mod tests {
 
     #[test]
     fn escaped_frontmatter_links_are_rejected_not_linked() {
-        let note = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nprereqs: [\"[[caf\\u00e9]]\"]\ndigest: d\n---\n# X\n";
+        let note = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nprereqs: [\"[[caf\\u00e9]]\"]\n---\n# X\n";
         let files = [("concepts/a/x.md", note), ("concepts/a/AREA.md", "# A\n\nArea.\n"), ("concepts/a/café.md", "")];
         let d = lint(&files);
         let x = |code: &str| d.iter().filter(|(p, c)| p == "concepts/a/x.md" && c == code).count();
@@ -511,8 +479,7 @@ mod tests {
         assert!(index.parsed("concepts/a/x.md").unwrap().links.is_empty(), "no link from an escaped scalar");
     }
 
-    const OK: &str =
-        "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ndigest: A thing.\n---\n# A\n\nSee [[journal/r/2025/03/25-03-14]].\n";
+    const OK: &str = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# A\n\nSee [[journal/r/2025/03/25-03-14]].\n";
 
     #[test]
     fn clean_vault() {
@@ -536,7 +503,7 @@ mod tests {
 
     #[test]
     fn cycle_reported_once() {
-        let c = |p: &str| format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nprereqs: [\"[[{p}]]\"]\ndigest: d\n---\n# T\n");
+        let c = |p: &str| format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nprereqs: [\"[[{p}]]\"]\n---\n# T\n");
         let r =
             lint(&[("concepts/x/AREA.md", "# X\n\nP.\n"), ("concepts/x/a.md", &c("b")), ("concepts/x/b.md", &c("a"))]);
         assert_eq!(r.iter().filter(|(_, c)| c == "prereqs.cycle").count(), 1);
@@ -546,10 +513,7 @@ mod tests {
     fn tags_and_unquoted_prereqs() {
         let r = lint(&[
             ("concepts/x/AREA.md", "# X\n\nP.\n"),
-            (
-                "concepts/x/a.md",
-                "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ntags: [a]\nprereqs: [[b]]\ndigest: d\n---\n# T\n",
-            ),
+            ("concepts/x/a.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ntags: [a]\nprereqs: [[b]]\n---\n# T\n"),
         ]);
         let codes: Vec<&str> = r.iter().map(|(_, c)| c.as_str()).collect();
         assert!(codes.contains(&"fm.unknown-field"));

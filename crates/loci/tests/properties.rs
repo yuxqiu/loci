@@ -1,12 +1,11 @@
 //! Properties of m0 §13.3 over generated in-memory vaults, through the `loci-core`
-//! library: `mv` keeps resolving links resolving to the mapped target; `lint` and
-//! `digest` are deterministic; splicing an empty edit list is the identity and one-pass
-//! splicing equals applying edits one at a time from the end.
+//! library: `mv` keeps resolving links resolving to the mapped target; `lint` is
+//! deterministic; splicing an empty edit list is the identity and one-pass splicing
+//! equals applying edits one at a time from the end.
 
 use std::collections::BTreeMap;
 
 use loci_core::config::Budgets;
-use loci_core::digest;
 use loci_core::index::{self, Index};
 use loci_core::lint::Lint;
 use loci_core::mv;
@@ -90,7 +89,7 @@ fn vault() -> impl Strategy<Value = GenVault> {
                     } else {
                         String::new()
                     };
-                    format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S{n:03}\n{pre}digest: 摘要 digest {n}\n---\n{body}")
+                    format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S{n:03}\n{pre}---\n{body}")
                 } else {
                     body
                 };
@@ -190,14 +189,11 @@ proptest! {
     }
 
     #[test]
-    fn lint_and_digest_are_deterministic(g in vault()) {
+    fn lint_is_deterministic(g in vault()) {
         let budgets = Budgets::default();
         let run = || {
             let i = build(&g.files);
-            let diags = Lint { index: &i, budgets: &budgets }.run();
-            let areas = digest::areas(&i);
-            let areas_text: Vec<String> = areas.iter().map(digest::render_area).collect();
-            (serde_json::to_string(&diags).unwrap(), digest::render_root(&areas), areas_text)
+            serde_json::to_string(&Lint { index: &i, budgets: &budgets }.run()).unwrap()
         };
         prop_assert_eq!(run(), run());
     }

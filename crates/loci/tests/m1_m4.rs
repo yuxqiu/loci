@@ -23,17 +23,13 @@ fn strs(v: &serde_json::Value) -> Vec<&str> {
 #[test]
 fn merge_rewrites_links_and_deletes_the_absorbed_note() {
     let v = vault(&[
-        ("concepts/g/bfs.md", concept(IDS[0], "", "Level order.", "# BFS\n\n## Queue\n\nText.\n")),
-        (
-            "concepts/g/graph-search.md",
-            concept(IDS[1], "prereqs: [\"[[bfs]]\"]\n", "Search.", "# Graph search\n\nSee [[bfs]].\n"),
-        ),
+        ("concepts/g/bfs.md", concept(IDS[0], "", "# BFS\n\n## Queue\n\nText.\n")),
+        ("concepts/g/graph-search.md", concept(IDS[1], "prereqs: [\"[[bfs]]\"]\n", "# Graph search\n\nSee [[bfs]].\n")),
         (
             "concepts/g/dijkstra.md",
             concept(
                 IDS[2],
                 "prereqs: [\"[[bfs]]\"]\n",
-                "Weighted.",
                 "# Dijkstra\n\n[[concepts/g/bfs#Queue|the queue]] and [[bfs]].\n",
             ),
         ),
@@ -63,7 +59,7 @@ fn merge_rewrites_links_and_deletes_the_absorbed_note() {
 
 #[test]
 fn merge_refusals_write_nothing() {
-    let v = vault(&[("concepts/g/bfs.md", concept(IDS[0], "", "d", "# BFS\n")), ("views/plan.md", "# Plan\n".into())]);
+    let v = vault(&[("concepts/g/bfs.md", concept(IDS[0], "", "# BFS\n")), ("views/plan.md", "# Plan\n".into())]);
     let before = v.tree();
     let (code, env) = v.run(&["merge", "bfs", "bfs"]);
     assert_eq!((code, error_code(&env)), (1, "merge.same"));
@@ -78,9 +74,9 @@ fn closure_orders_prerequisites_first() {
         format!("prereqs: [{}]\n", xs.iter().map(|x| format!("\"[[{x}]]\"")).collect::<Vec<_>>().join(", "))
     };
     let v = vault(&[
-        ("concepts/g/top.md", concept(IDS[0], &p(&["mid", "base", "nope"]), "Top.", "# Top\n")),
-        ("concepts/g/mid.md", concept(IDS[1], &p(&["base"]), "Mid.", "# Mid\n")),
-        ("concepts/g/base.md", concept(IDS[2], "", "Base.", "# Base\n")),
+        ("concepts/g/top.md", concept(IDS[0], &p(&["mid", "base", "nope"]), "# Top\n")),
+        ("concepts/g/mid.md", concept(IDS[1], &p(&["base"]), "# Mid\n")),
+        ("concepts/g/base.md", concept(IDS[2], "", "# Base\n")),
     ]);
     let (code, env) = v.run(&["closure", "top"]);
     assert_eq!(code, 0, "{env}");
@@ -88,10 +84,10 @@ fn closure_orders_prerequisites_first() {
     let order: Vec<_> =
         c.as_array().unwrap().iter().map(|m| (m["slug"].as_str().unwrap(), m["depth"].as_u64().unwrap())).collect();
     assert_eq!(order, [("base", 1), ("mid", 1)]);
-    assert_eq!(c[0]["digest"], "Base.");
+    assert_eq!(c[0]["path"], "concepts/g/base.md");
     assert_eq!(env["data"]["unresolved"], json!([{"from": "concepts/g/top.md", "target": "nope"}]));
     let (_, human, _) = v.run_raw(&["closure", "top"]);
-    assert_eq!(human, "- [[base]]: Base.\n- [[mid]]: Mid.\n");
+    assert_eq!(human, "- [[base]]\n- [[mid]]\n");
 
     let (code, env) = v.run(&["closure", "missing"]);
     assert_eq!((code, error_code(&env)), (1, "closure.unknown"));
@@ -106,9 +102,9 @@ fn closure_orders_prerequisites_first() {
 fn closure_depth_and_cycles() {
     let p = |x: &str| format!("prereqs: [\"[[{x}]]\"]\n");
     let v = vault(&[
-        ("concepts/g/a.md", concept(IDS[0], &p("b"), "A.", "# A\n")),
-        ("concepts/g/b.md", concept(IDS[1], &p("c"), "B.", "# B\n")),
-        ("concepts/g/c.md", concept(IDS[2], &p("b"), "C.", "# C\n")),
+        ("concepts/g/a.md", concept(IDS[0], &p("b"), "# A\n")),
+        ("concepts/g/b.md", concept(IDS[1], &p("c"), "# B\n")),
+        ("concepts/g/c.md", concept(IDS[2], &p("b"), "# C\n")),
     ]);
     let (code, env) = v.run(&["closure", "a", "--depth", "1"]);
     assert_eq!(code, 0, "{env}");
@@ -128,7 +124,7 @@ fn closure_depth_and_cycles() {
 #[test]
 fn bench_tool_and_agent_levels() {
     let v = vault(&[
-        ("concepts/g/bfs.md", concept(IDS[0], "", "Breadth-first search.", "# BFS\n\nVisits by level with a queue.\n")),
+        ("concepts/g/bfs.md", concept(IDS[0], "", "# BFS\n\nVisits by level with a queue.\n")),
         ("views/plan.md", "# Plan\n\nNothing relevant.\n".into()),
         (
             "bench/retrieval.jsonl",
@@ -175,26 +171,18 @@ fn bench_tool_and_agent_levels() {
 }
 
 #[test]
-fn export_collects_links_glossary_and_assets() {
+fn export_collects_links_and_assets() {
     let v = vault(&[
         (
             "views/study.md",
             "# Study\n\nStart with [[bfs]], then [[dijkstra#Relaxation]].\n\n![[assets/g/grid.png]]\n".into(),
         ),
-        (
-            "concepts/g/bfs.md",
-            concept(IDS[0], "", "Level order.", "# BFS\n\n## Queue\n\nUses a queue; see [[graph]].\n"),
-        ),
+        ("concepts/g/bfs.md", concept(IDS[0], "", "# BFS\n\n## Queue\n\nUses a queue; see [[graph]].\n")),
         (
             "concepts/g/dijkstra.md",
-            concept(
-                IDS[1],
-                "",
-                "Weighted.",
-                "# Dijkstra\n\nIntro.\n\n## Relaxation\n\nRelax edges.\n\n## Other\n\nNot exported.\n",
-            ),
+            concept(IDS[1], "", "# Dijkstra\n\nIntro.\n\n## Relaxation\n\nRelax edges.\n\n## Other\n\nNot exported.\n"),
         ),
-        ("concepts/g/graph.md", concept(IDS[2], "", "Vertices and edges.", "# Graph\n\nBody.\n")),
+        ("concepts/g/graph.md", concept(IDS[2], "", "# Graph\n\nBody.\n")),
         ("assets/g/grid.png", "PNG".into()),
     ]);
     let (code, env) = v.run(&["export", "views/study"]);
@@ -202,20 +190,18 @@ fn export_collects_links_glossary_and_assets() {
     let d = &env["data"];
     assert_eq!(d["output"].as_str().unwrap(), v.root.join(".loci/export/study.md").to_str().unwrap());
     assert_eq!(strs(&d["notes"]), ["views/study.md", "concepts/g/bfs.md", "concepts/g/dijkstra.md"]);
-    assert_eq!(strs(&d["glossary"]), ["concepts/g/graph.md"], "depth 1: graph is two links away");
     assert_eq!(strs(&d["assets"]), ["assets/grid.png"]);
     assert_eq!(v.read(".loci/export/assets/grid.png"), "PNG");
     let md = v.read(".loci/export/study.md");
     assert!(!md.contains("id: "), "frontmatter stripped:\n{md}");
     assert!(md.contains("Relax edges.") && !md.contains("Not exported."), "only the linked section:\n{md}");
     assert!(md.contains("](#"), "links to included notes become anchors:\n{md}");
-    assert!(md.contains("## Glossary") && md.contains("**Graph**: Vertices and edges."), "{md}");
+    assert!(md.contains("see Graph.") && !md.contains("Glossary"), "a note two links away is plain text:\n{md}");
     assert!(md.contains("![](assets/grid.png)") || md.contains("](assets/grid.png)"), "{md}");
 
-    // Depth 2 pulls graph in; nothing left for the glossary.
+    // Depth 2 pulls graph in.
     let (_, env) = v.run(&["export", "views/study", "--depth", "2"]);
     assert!(strs(&env["data"]["notes"]).contains(&"concepts/g/graph.md"));
-    assert!(strs(&env["data"]["glossary"]).is_empty());
 
     // The export dir is ignored by lint (.loci/ is gitignored by init).
     v.write(".gitignore", ".loci/\n");
@@ -255,8 +241,8 @@ fn export_html_to_relative_paths() {
 #[test]
 fn an_ambiguous_slug_is_refused() {
     let v = vault(&[
-        ("concepts/g/bfs.md", concept(IDS[0], "", "A.", "# BFS\n")),
-        ("concepts/h/bfs.md", concept(IDS[1], "", "B.", "# BFS\n")),
+        ("concepts/g/bfs.md", concept(IDS[0], "", "# BFS\n")),
+        ("concepts/h/bfs.md", concept(IDS[1], "", "# BFS\n")),
     ]);
     for args in [&["closure", "bfs"][..], &["export", "bfs"], &["merge", "bfs", "concepts/g/bfs"]] {
         let (code, env) = v.run(args);
@@ -274,11 +260,10 @@ fn links_lists_outgoing_and_incoming() {
             concept(
                 IDS[0],
                 "prereqs: [\"[[queue]]\"]\n",
-                "d",
                 "# BFS\n\n## Proof\n\nSee [[missing]] and [[sources/papers/p.pdf#p2]].\n\n![[concepts/g/attachments/grid.png]]\n",
             ),
         ),
-        ("concepts/g/queue.md", concept(IDS[1], "", "d", "# Queue\n")),
+        ("concepts/g/queue.md", concept(IDS[1], "", "# Queue\n")),
         ("views/v.md", "# V\n\n[[bfs#Proof]] and [[concepts/g/bfs]].\n".into()),
         ("concepts/g/attachments/grid.png", "PNG".into()),
         ("sources/papers/p.pdf", "%PDF".into()),

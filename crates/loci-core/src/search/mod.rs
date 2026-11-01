@@ -32,7 +32,6 @@ pub struct SearchDoc {
     pub kind: Kind,
     /// H1 raw text, else the file stem.
     pub title: String,
-    pub digest: String,
     /// Body text with frontmatter excluded.
     pub body: String,
     /// Lines before the body (the frontmatter), so that hit lines count from the
@@ -47,7 +46,6 @@ impl From<&Note> for SearchDoc {
             path: note.path.clone(),
             kind: note.kind,
             title: note.title().to_string(),
-            digest: note.fm_str("digest").unwrap_or_default().to_string(),
             body: note.text[body_start..].to_string(),
             line_offset: note.text[..body_start].matches('\n').count(),
         }
@@ -88,14 +86,13 @@ pub fn search(docs: &[SearchDoc], query: &str, k: usize, kinds: &[Kind]) -> Resu
             .set_tokenizer(TOKENIZER)
             .set_index_option(IndexRecordOption::WithFreqsAndPositions),
     );
-    let boosted: [(Field, f32); 4] = [
+    let boosted: [(Field, f32); 3] = [
         (sb.add_text_field("title", text.clone()), 3.0),
-        (sb.add_text_field("digest", text.clone()), 2.0),
         // The tokenizer splits on every non-alphanumeric, including `/ - _ .`.
         (sb.add_text_field("path", text.clone()), 1.0),
         (sb.add_text_field("body", text), 1.0),
     ];
-    let [title, digest, path, body] = boosted.map(|(f, _)| f);
+    let [title, path, body] = boosted.map(|(f, _)| f);
     let id = sb.add_u64_field("id", STORED);
     let index = Index::create_in_ram(sb.build());
     index.tokenizers().register(TOKENIZER, LociTokenizer);
@@ -105,7 +102,6 @@ pub fn search(docs: &[SearchDoc], query: &str, k: usize, kinds: &[Kind]) -> Resu
     for (i, d) in docs.iter().enumerate() {
         let mut doc = TantivyDocument::default();
         doc.add_text(title, &d.title);
-        doc.add_text(digest, &d.digest);
         doc.add_text(path, &d.path);
         doc.add_text(body, &d.body);
         doc.add_u64(id, i as u64);
@@ -184,14 +180,7 @@ mod tests {
     use super::*;
 
     fn doc(path: &str, kind: Kind, title: &str, body: &str) -> SearchDoc {
-        SearchDoc {
-            path: path.into(),
-            kind,
-            title: title.into(),
-            digest: String::new(),
-            body: body.into(),
-            line_offset: 0,
-        }
+        SearchDoc { path: path.into(), kind, title: title.into(), body: body.into(), line_offset: 0 }
     }
 
     fn paths(hits: &[Hit]) -> Vec<&str> {

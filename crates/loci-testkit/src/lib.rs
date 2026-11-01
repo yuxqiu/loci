@@ -269,9 +269,9 @@ pub fn strip_block_ids(s: &str) -> String {
     BLOCK_ID.replace_all(s, "").into_owned()
 }
 
-/// A concept note: frontmatter with `id`, the `extra` lines, and `digest`, then `body`.
-pub fn concept(id: &str, extra: &str, digest: &str, body: &str) -> String {
-    format!("---\nid: {id}\n{extra}digest: {digest}\n---\n{body}")
+/// A concept note: frontmatter with `id` and the `extra` lines, then `body`.
+pub fn concept(id: &str, extra: &str, body: &str) -> String {
+    format!("---\nid: {id}\n{extra}---\n{body}")
 }
 
 fn map_strings(v: &Value, f: &dyn Fn(&str) -> String) -> Value {

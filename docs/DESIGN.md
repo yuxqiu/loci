@@ -56,14 +56,14 @@ loci does not install the skills anywhere: the user installs the
 `share/loci/skills/` folders wherever their agent loads skills from (the vault's
 `.agents/skills/`, a user-wide skills folder, or the agent's own mechanism).
 
-The vault commits a small `AGENTS.md` stub. It tells any agent to install loci and
-run `loci status` first. `loci status` prints:
+The vault commits a small `AGENTS.md` stub. It tells any agent to install loci, to
+read the framework rules (`loci rules`), `RULES.md` and `STYLE.md` at the start of a
+session, and to run `loci status` before each task. `loci status` reports only what
+changes from task to task:
 
-- the framework rules;
-- the root index;
-- `RULES.md` and `STYLE.md`;
-- the inbox;
-- a summary of uncommitted changes.
+- a summary of uncommitted changes;
+- the agent work recorded by `loci done`, waiting for review;
+- the inbox, counted by folder, with its uncommitted files.
 
 `loci skill show <name>` prints any skill from the binary, so an agent that has
 `loci` but no installed skills (for example, one working from a fresh clone) can
@@ -74,16 +74,16 @@ Agent setup:
 | Agent | Reads |
 |---|---|
 | Codex, Cursor, Copilot, opencode | `AGENTS.md` |
-| Claude Code | `AGENTS.md` only when there is no `CLAUDE.md` |
+| Claude Code | `AGENTS.md` only when there is no `CLAUDE.md`; otherwise a line in `CLAUDE.md` pointing at `AGENTS.md` |
 | Gemini CLI | `AGENTS.md` once the context file name is set to it |
-| any other agent with a shell | told to run `loci status` and `loci skill show` |
+| any other agent with a shell | told to run `loci rules`, `loci status` and `loci skill show` |
 
 ## 4. Vault
 
 ### 4.1 Layout
 
 ```
-AGENTS.md                         committed stub: "run `loci status` first"
+AGENTS.md                         committed stub: "read `loci rules`, run `loci status` before each task"
 loci.toml                         schema version and size budgets
 RULES.md                          vault rules, with a "Lessons" section the agent maintains
 STYLE.md                          the user's writing style
@@ -91,7 +91,7 @@ inbox/
   drafts/                         the user's writing, to be dissolved into concepts
   journal/<stream>/               journal entries, to be filed
   sources/                        PDFs and clippings (the web clipper saves here)
-concepts/<area>/[<sub-folders>/]  sub-folders at any depth; the digest outlines them
+concepts/<area>/[<sub-folders>/]  sub-folders at any depth
   AREA.md                         (top-level areas only) a scope note: what the area holds, what goes elsewhere
   <slug>.md                       concept notes
   attachments/                    images used by notes in this folder
@@ -133,7 +133,6 @@ directly in `inbox/`, outside its subfolders, is a lint warning.
 ---
 id: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV
 prereqs: ["[[priority-queue]]", "[[edge-relaxation]]"]
-digest: One sentence that summarises the concept.
 ---
 # Dijkstra's algorithm
 
@@ -150,7 +149,6 @@ each claim: the greedy choice is safe for non-negative weights
 - **`id`:** a ULID, permanent across renames.
 - **`prereqs`:** direct prerequisites only; the closure is computed. Cycles are
   errors.
-- **`digest`:** one sentence, shown by `loci digest`.
 - **Citations:** evidence is cited with a link in the text, next to the claim it
   supports: a page of a source (`[[sources/papers/x.pdf#p3]]`), a heading of a
   markdown source, or a journal entry. Never another concept. Notes written from the
@@ -158,8 +156,7 @@ each claim: the greedy choice is safe for non-negative weights
   (the intake commit deletes the draft and writes the concept).
 - **H1:** the title. Exactly one, directly after the frontmatter.
 - **Other names** (abbreviations, spellings, a translation, the names of sub-ideas
-  folded into the note) go in the H1, the digest or the text, which `loci find`
-  searches. There is no alias field: a rename or merge rewrites every link, and an
+  folded into the note) go in the H1 or the text, which `loci find` searches. There is no alias field: a rename or merge rewrites every link, and an
   agent searching by meaning finds a concept without one.
 - **No other fields.** In particular, `tags:` is an error.
 - **Links:** a bare `[[name]]` resolves only to the concept with that slug. Every
@@ -209,15 +206,13 @@ curated view is created in any of three ways:
 
 - the user writes or edits it directly, and lint checks its links;
 - the user asks the agent, for example "make a view of everything I know about
-  graph search, in prerequisite order". The agent builds it from `loci digest`,
-  `loci find` and `loci closure`;
+  graph search, in prerequisite order". The agent builds it from `loci find` and
+  `loci closure`;
 - the user drops a draft whose value is mainly its arrangement of existing
   concepts, such as a reading path. The intake skill keeps the arrangement as a
   view, and merges any new knowledge in the draft into concepts as usual.
 
 - **Generated views** are commands:
-  - `loci digest`: the index, built from each `AREA.md` and each concept's digest,
-    printed on demand;
   - `loci closure`: the prerequisites of a concept;
   - timelines, which come from `git log`.
 
@@ -226,7 +221,7 @@ self-contained document, by default under `.loci/export/`:
 
 - linked notes or `#heading` sections are inlined, with headings shifted;
 - a concept appearing twice is inlined once;
-- other links become anchors, or plain text with a glossary of digests;
+- links to inlined notes become anchors, and other links plain text;
 - frontmatter is stripped;
 - images are copied to `assets/`;
 - HTML and PDF output go through pandoc.
@@ -250,7 +245,7 @@ about them. Lint never blocks a commit.
 
 **Editing by hand.** Notes are plain markdown files, and the user may change
 anything except `sources/` and `plugins/` at any time. Nothing derived is stored
-(the index, digests and search are computed from the files on each command), so
+(search and closures are computed from the files on each command), so
 there is nothing to sync and the agent is not involved unless asked. What a hand
 edit needs:
 
@@ -417,10 +412,10 @@ and `docs/specs/m1-m4.md`, the learn plugin in `docs/specs/learn-plugin.md`.
 | Group | Core commands |
 |---|---|
 | setup | `init` |
-| session | `status`, `skill show [<name>]` |
+| session | `rules`, `status`, `skill show [<name>]` |
 | structure | `new`, `block-ids --section`, `mv` (links are rewritten), `merge` (M1) |
 | health | `lint` (also runs each installed plugin's lint), `done` (an agent's last step: lint, then a local record of its work for the `improve` skill) |
-| find | `digest`, `find`, `closure`, `links` (a note's links and the links to it) |
+| find | `find`, `closure`, `links` (a note's links and the links to it) |
 | views | `export` |
 | benchmark | `bench` |
 
@@ -456,7 +451,7 @@ Learn plugin commands: `loci learn lint`, `skills`, `log`, `state`,
 
   Rust plugins link `loci-core`; others use the core CLI's JSON output.
 - **Installation.** The Nix flake builds `loci` and each plugin, each with its
-  skills under `share/loci/skills/`. `loci status` lists the installed plugins.
+  skills under `share/loci/skills/`.
 
 Implementation:
 
@@ -473,8 +468,10 @@ Implementation:
 
 ## 8. Search
 
-- **Agent:** `loci digest` (two levels: root and area), `loci find` (BM25 over the formed
-  notes: concepts, areas, views, journal entries) and grep. Sources and inbox drafts
+- **Agent:** `loci find` (BM25 over the formed notes: concepts, areas, views,
+  journal entries) and grep. When filing a concept, the agent reads the area scope
+  notes (`concepts/*/AREA.md`) directly and lists `concepts/<area>/` for
+  sub-folders. Sources and inbox drafts
   are searched only when asked for by kind; the notes written from them are what
   `find` returns. Skills depend only on `loci find --json`, so the
   engine can be replaced without changing them.

@@ -25,10 +25,14 @@ them under its version.
 - The framework rules say when to link: search before writing a concept, link the
   first mention of every concept that has a note, and link a new concept from the
   notes that mention it.
-- The root digest outlines each area's sub-folders with their concept counts
-  (`Sub-folders: graphs (6), strings (3)`; JSON `subfolders`). `AREA.md`'s paragraph
-  is a scope note: what the area holds and which look-alike topics go to a
-  neighbouring area. Concept sub-folders may nest at any depth.
+- `AREA.md`'s paragraph is a scope note: what the area holds and which look-alike
+  topics go to a neighbouring area. The agent reads it when filing a concept.
+  Concept sub-folders may nest at any depth.
+- `loci status` reports only what changes: uncommitted changes, agent work to
+  review, and the inbox, counted by folder with at most ten uncommitted files
+  named. The framework rules, `RULES.md`, `STYLE.md`, the index and the plugin
+  list are no longer printed. The agent reads the rules at session start, as the
+  `AGENTS.md` that `loci init` writes says, through the new `loci rules`.
 - Every command exits 1 when it reports an error diagnostic, not only `lint`:
   `loci skill` now exits 1 when a plugin's `skills` hook fails.
 - Source types and journal streams are any slug you choose; nothing is declared
@@ -102,6 +106,17 @@ them under its version.
 
 ### Removed
 
+- The concept `digest` frontmatter field, with `digest.multiline`, `digest.has-link`
+  and `digest.too-long`; the `loci digest` command, the root and area indexes and
+  `index.over-budget`; the `digest`, `root_index` and `area_index` budgets; and the
+  glossary of `loci export`; the `digest` key of `loci closure --json` members, and
+  digests in `loci find`. Research found no evidence that a one-line summary helps
+  beyond the title (`docs/research/15-digests-vs-search.md`). To update a vault:
+  delete `digest`, `root_index` and `area_index` from `[budgets]` in `loci.toml`
+  (otherwise `config.invalid`), and the `digest:` line from every concept
+  (otherwise `fm.unknown-field`); replace `AGENTS.md` with the stub a fresh
+  `loci init` writes (run it in an empty folder and copy the file), which sends
+  agents to `loci rules`.
 - The home-manager module, and the skill checks in `loci status`.
 - Lint's `file.encoding`, and `file.unreadable` as a lint rule: a file loci cannot
   read now refuses the vault (`file.unreadable`).
@@ -114,6 +129,6 @@ them under its version.
 - `source.yaml` and SHA-256 checks: `sources.no-provenance`, `sources.bad-meta`,
   `sources.uncovered` and `sources.hash-mismatch`.
 - The `aliases` frontmatter field, with `alias.duplicate`, `mv.frontmatter` and
-  `merge.frontmatter`. Other names for a concept go in its title, digest or text,
+  `merge.frontmatter`. Other names for a concept go in its title or text,
   which `loci find` searches. `loci mv` and `loci merge` rewrite links only and no
   longer edit the renamed or kept note, so renaming a concept back now works.

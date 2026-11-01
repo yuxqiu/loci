@@ -7,16 +7,13 @@ pub const FILE: &str = "loci.toml";
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct Budgets {
-    pub digest: usize,
     pub area_paragraph: usize,
-    pub root_index: usize,
-    pub area_index: usize,
     pub note: usize,
 }
 
 impl Default for Budgets {
     fn default() -> Self {
-        Self { digest: 160, area_paragraph: 600, root_index: 8000, area_index: 24000, note: 12000 }
+        Self { area_paragraph: 600, note: 12000 }
     }
 }
 
@@ -45,9 +42,9 @@ impl Config {
         let b = Budgets::default();
         format!(
             "schema = 1\n\n[budgets]           # characters (Unicode scalar values)\n\
-             digest = {}\narea_paragraph = {}\nroot_index = {}\narea_index = {}\n\
+             area_paragraph = {}\n\
              note = {}        # body characters after the frontmatter (size.note)\n",
-            b.digest, b.area_paragraph, b.root_index, b.area_index, b.note
+            b.area_paragraph, b.note
         )
     }
 }
@@ -64,8 +61,8 @@ mod tests {
 
     #[test]
     fn budgets_may_be_omitted() {
-        let c = Config::parse("schema = 1\n[budgets]\ndigest = 80\n").unwrap();
-        assert_eq!(c.budgets.digest, 80);
+        let c = Config::parse("schema = 1\n[budgets]\narea_paragraph = 80\n").unwrap();
+        assert_eq!(c.budgets.area_paragraph, 80);
         assert_eq!(c.budgets.note, 12000);
     }
 

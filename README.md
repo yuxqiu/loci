@@ -14,21 +14,23 @@ The name: *loci communes* were the topic headings of a commonplace book; the met
    installed by the Nix packages under `share/loci/skills/`. An agent without them
    can read them with `loci skill show`.
 3. In the folder for your notes, run `loci init`. It creates the vault, the git
-   repository and an `AGENTS.md` that tells agents to run `loci status` first.
+   repository and an `AGENTS.md` that tells agents to read the framework
+   rules (`loci rules`), `RULES.md` and `STYLE.md` at the start of a session, and to
+   run `loci status` before each task.
    Agents read `AGENTS.md` as follows:
 
    | Agent | Reads `AGENTS.md` |
    |---|---|
    | Codex, Cursor, Copilot, opencode | yes |
-   | Claude Code | only when there is no `CLAUDE.md` |
+   | Claude Code | only when there is no `CLAUDE.md`; otherwise add a line to `CLAUDE.md` telling it to follow `AGENTS.md` |
    | Gemini CLI | once its context file name is set to `AGENTS.md` |
-   | any other agent with a shell | tell it to run `loci status` first |
+   | any other agent with a shell | tell it to follow `AGENTS.md` |
 
 ## Using it
 
 Notes are plain markdown in a git repository; edit them with any editor.
 
-- **Hand edits need no sync.** The index and search are computed from the files
+- **Hand edits need no sync.** Search and closures are computed from the files
   on each command, and the agent acts only when asked. Edit anything except
   `sources/` and `plugins/`:
 

@@ -5,6 +5,9 @@ description: Learn material the user does not understand ("learn X") — find th
 
 # Learn session
 
+If you have not read them this session, read the framework rules (`loci rules`),
+`RULES.md` and `STYLE.md` first.
+
 The input is material the user does not understand: a paper, a chapter, a link or a
 question. Build the knowledge needed to understand it, searching outward until every
 path reaches something the user already knows.
@@ -33,8 +36,8 @@ from scratch without looking at the first grade, and log only the final grade.
    understood without; the user may edit, add or drop them. The user answers them
    before any teaching. Record questions, answers and grades in the session's journal
    entry.
-1. **Identify.** File the material as a source (framework rules, "Filing a
-   source"). List the concepts it uses, with
+1. **Identify.** File the material as a source (framework rules: `loci rules`,
+   "Filing a source"). List the concepts it uses, with
    the passages that use them. Each is load-bearing (the material cannot be
    understood without it) or peripheral (it gets a one-line definition where it
    appears).

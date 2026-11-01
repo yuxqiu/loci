@@ -168,7 +168,7 @@ fn frontmatter_edge_crlf_note_moves_unchanged() {
     mv(&v, "concepts/a/crlf.md", "concepts/a/crlf-two.md");
     assert_eq!(
         v.read("concepts/a/crlf-two.md"),
-        "---\r\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0J1\r\ndigest: A CRLF note.\r\n---\r\n# CRLF\r\n\r\nBody line.\r\n"
+        "---\r\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0J1\r\n---\r\n# CRLF\r\n\r\nBody line.\r\n"
     );
 }
 
@@ -180,7 +180,7 @@ fn frontmatter_edge_prereqs_edited_inside_quotes() {
     let text = v.read("concepts/a/scalars.md");
     assert_eq!(
         text,
-        "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0J6\nprereqs: [\"[[target-two]]\"]\ndigest: Quoted and plain scalars.\n---\n\
+        "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0J6\nprereqs: [\"[[target-two]]\"]\n---\n\
          # Scalars\n\nSee [[journal/r/2025/01/25-01-03]] and [[journal/r/2025/01/25-01-03#Morning]].\n"
     );
     let (_, env) = v.run(&["lint"]);
@@ -196,12 +196,9 @@ fn cjk_mv_edits_frontmatter_at_the_right_offset() {
     assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
     assert_eq!(
         v.read("concepts/algo/二分查找.md"),
-        "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0G1\nprereqs: [\"[[排序算法]]\"]\ndigest: 在有序数组中查找\n---\n# 二分\n"
+        "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0G1\nprereqs: [\"[[排序算法]]\"]\n---\n# 二分\n"
     );
-    assert_eq!(
-        v.read("concepts/algo/排序算法.md"),
-        "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0G2\ndigest: 排列元素\n---\n# 排序\n"
-    );
+    assert_eq!(v.read("concepts/algo/排序算法.md"), "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0G2\n---\n# 排序\n");
     mv(&v, "views/zh.md", "views/中文.md");
     assert_eq!(
         v.read("views/linker.md"),

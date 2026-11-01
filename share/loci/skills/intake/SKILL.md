@@ -7,7 +7,8 @@ description: Process the inbox — dissolve drafts into concept notes, file jour
 
 ## Before you start
 
-Run `loci status`. If `inbox/` has uncommitted files, stop and ask the user to
+If you have not read them this session, read the framework rules (`loci rules`),
+`RULES.md` and `STYLE.md` first. Run `loci status`. If `inbox/` has uncommitted files, stop and ask the user to
 commit them: a dissolved draft must be in git so it can be recovered. A concept's
 origin is found with `git log -p -- <concept path>`, not by citing the draft.
 
@@ -17,8 +18,8 @@ For each draft:
 
 1. Read it fully. List the concepts it explains, the results it reports (dated,
    may go stale) and the open questions it raises.
-2. For each concept, find whether it already exists (`loci digest`, `loci find`
-   with the names and phrasings it might go by). Merge new material into the existing note; create a note with
+2. For each concept, find whether it already exists (`loci find` with the names
+   and phrasings it might go by). Merge new material into the existing note; create a note with
    `loci new` only when the idea has its own definition and other notes will
    need to link to it on its own. Otherwise make it a heading in its parent
    concept.
@@ -40,7 +41,7 @@ entries have no frontmatter; add concept links in the body only.
 
 ## Sources (`inbox/sources/`)
 
-1. File it as the framework rules say ("Filing a source").
+1. File it as the framework rules say (`loci rules`, "Filing a source").
 2. For an annotated PDF, the annotations are the user's: process highlights and
    comments like a draft. If the paper is already filed, keep the filed copy,
    process only the new annotations, and delete the new copy.

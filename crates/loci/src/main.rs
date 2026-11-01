@@ -18,7 +18,7 @@ pub const CORE_COMMANDS: &[&str] = &[
     "lint",
     "done",
     "find",
-    "digest",
+    "rules",
     "mv",
     "status",
     "new",
@@ -64,14 +64,11 @@ enum Cmd {
         #[arg(long = "kind", value_enum)]
         kinds: Vec<commands::find::KindArg>,
     },
-    /// Print the root index, or one area's index.
-    Digest {
-        #[arg(long)]
-        area: Option<String>,
-    },
+    /// Print the framework rules (read at session start).
+    Rules,
     /// Move or rename a file or directory, rewriting links.
     Mv { from: String, to: String },
-    /// Show install state, plugins, changes, inbox, index and rules.
+    /// Show what has changed: uncommitted changes, agent work to review, the inbox.
     Status,
     /// Create a concept note.
     New {
@@ -139,7 +136,7 @@ fn main() -> ExitCode {
         Cmd::Find { query, k, kinds } => {
             ("find", commands::find::run(&ctx, &query, k, &kinds.into_iter().map(Kind::from).collect::<Vec<_>>()))
         }
-        Cmd::Digest { area } => ("digest", commands::digest::run(&ctx, area.as_deref())),
+        Cmd::Rules => ("rules", commands::rules::run()),
         Cmd::Mv { from, to } => ("mv", commands::mv::run(&ctx, &from, &to)),
         Cmd::Status => ("status", commands::status::run(&ctx)),
         Cmd::New { path, title } => ("new", commands::new::run(&ctx, &path, title.as_deref())),

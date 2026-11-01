@@ -10,7 +10,6 @@ Area a.
 == concepts/a/block-target.md ==
 ---
 id: [ulid]
-digest: A note linked by block id.
 ---
 # Block target
 
@@ -19,7 +18,6 @@ Text. ^b
 == concepts/a/heading-target.md ==
 ---
 id: [ulid]
-digest: A linked note.
 ---
 # Heading target
 
@@ -29,14 +27,12 @@ digest: A linked note.
 ---
 id: [ulid]
 prereqs: ["[[renamed-new]]", "[[heading-target]]"]
-digest: A note with prerequisites.
 ---
 # Prereq holder
 
 == concepts/a/renamed-new.md ==
 ---
 id: [ulid]
-digest: A renamed note.
 ---
 # Renamed
 

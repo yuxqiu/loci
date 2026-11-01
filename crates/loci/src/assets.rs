@@ -9,7 +9,10 @@ This vault is managed by loci (https://github.com/yuxqiu/loci).
 
 1. Check that the `loci` command is installed; if not, install it as described at
    the URL above.
-2. Run `loci status` before anything else, and follow what it prints.
+2. At the start of a session, read the framework rules (`loci rules`), then
+   `RULES.md` (this vault's rules and lessons) and `STYLE.md` (the user's writing
+   style), which override the framework rules where they differ.
+3. Before each task, run `loci status` and act on what it reports.
 ";
 
 pub const RULES: &str = include_str!("../../../share/loci/rules.md");

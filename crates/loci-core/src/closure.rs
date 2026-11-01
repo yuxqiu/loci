@@ -2,7 +2,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use crate::digest::valid_digest;
 use crate::index::Index;
 use crate::vault;
 
@@ -12,7 +11,6 @@ pub struct Member {
     pub path: String,
     /// Shortest number of `prereqs` steps from the concept.
     pub depth: usize,
-    pub digest: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -75,10 +73,7 @@ pub fn closure(index: &Index, root: &str, max_depth: Option<usize>) -> Closure {
         emitted.insert(next.clone());
         order.push(next);
     }
-    out.members = order
-        .into_iter()
-        .map(|p| Member { slug: slug(&p), depth: depth[&p], digest: index.parsed(&p).and_then(valid_digest), path: p })
-        .collect();
+    out.members = order.into_iter().map(|p| Member { slug: slug(&p), depth: depth[&p], path: p }).collect();
     if edges.values().flatten().any(|p| p == root) {
         out.cyclic = true;
     }
@@ -92,7 +87,7 @@ mod tests {
 
     fn c(prereqs: &[&str]) -> String {
         let list: Vec<String> = prereqs.iter().map(|p| format!("\"[[{p}]]\"")).collect();
-        format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nprereqs: [{}]\ndigest: d\n---\n# T\n", list.join(", "))
+        format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nprereqs: [{}]\n---\n# T\n", list.join(", "))
     }
 
     #[test]

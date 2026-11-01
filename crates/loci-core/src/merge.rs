@@ -88,12 +88,12 @@ mod tests {
 
     #[test]
     fn merge_rewrites_links_and_self_prereq() {
-        let from = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TA\ndigest: d\n---\n# A\n";
-        let into = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TB\nprereqs: [\"[[old]]\", \"[[heap]]\"]\ndigest: d\n---\n# B\n";
+        let from = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TA\n---\n# A\n";
+        let into = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TB\nprereqs: [\"[[old]]\", \"[[heap]]\"]\n---\n# B\n";
         let i = from_texts(&[
             ("concepts/a/old.md", from),
             ("concepts/a/dijkstra.md", into),
-            ("concepts/a/heap.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TC\ndigest: d\n---\n# H\n"),
+            ("concepts/a/heap.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TC\n---\n# H\n"),
             ("views/v.md", "# V\n\n[[old]] [[concepts/a/old#A]]\n"),
         ]);
         let c = plan(&i, "old", "dijkstra").unwrap().change;
@@ -108,9 +108,8 @@ mod tests {
 
     #[test]
     fn adjacent_self_prereqs_are_removed_together() {
-        let id = |n: &str| format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T{n}\ndigest: d\n---\n# {n}\n");
-        let c =
-            "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TC\nprereqs: [\"[[w]]\", \"[[y]]\", \"[[Y]]\"]\ndigest: d\n---\n# C\n";
+        let id = |n: &str| format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T{n}\n---\n# {n}\n");
+        let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TC\nprereqs: [\"[[w]]\", \"[[y]]\", \"[[Y]]\"]\n---\n# C\n";
         let i =
             from_texts(&[("concepts/a/w.md", id("W")), ("concepts/a/y.md", id("Y")), ("concepts/a/c.md", c.into())]);
         let d = &plan(&i, "y", "c").unwrap().change.writes["concepts/a/c.md"];
@@ -119,18 +118,18 @@ mod tests {
 
     #[test]
     fn emptied_block_prereqs_are_dropped() {
-        let into = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T2\nprereqs:\n  - \"[[old]]\"\ndigest: d\n---\n# Into\n";
+        let into = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T2\nprereqs:\n  - \"[[old]]\"\n---\n# Into\n";
         let i = from_texts(&[
-            ("concepts/a/old.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T1\ndigest: d\n---\n# Old\n"),
+            ("concepts/a/old.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T1\n---\n# Old\n"),
             ("concepts/a/into.md", into),
         ]);
         let c = plan(&i, "old", "into").unwrap().change;
-        assert_eq!(c.writes["concepts/a/into.md"], "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T2\ndigest: d\n---\n# Into\n");
+        assert_eq!(c.writes["concepts/a/into.md"], "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T2\n---\n# Into\n");
     }
 
     #[test]
     fn refusals() {
-        let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TA\ndigest: d\n---\n# A\n";
+        let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TA\n---\n# A\n";
         let i = from_texts(&[("concepts/a/x.md", c), ("views/v.md", "# V\n")]);
         assert_eq!(plan(&i, "x", "x").err().unwrap().code().to_string(), "merge.same");
         assert_eq!(plan(&i, "x", "views/v").err().unwrap().code().to_string(), "merge.not-concept");

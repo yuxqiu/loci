@@ -114,7 +114,7 @@ mod tests {
     use loci_core::vault::Kind;
 
     fn cards(body: &str) -> (Vec<Card>, Vec<FormatIssue>) {
-        let text = format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ndigest: d\n---\n# T\n\n{body}");
+        let text = format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# T\n\n{body}");
         of_note(&parse("concepts/a/x.md", Kind::Concept, text))
     }
 

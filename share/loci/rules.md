@@ -19,8 +19,9 @@ This vault is a loci knowledge base. These rules apply to every agent working in
 - `inbox/drafts/`, `inbox/journal/<stream>/`, `inbox/sources/`: material waiting
   to be processed.
 - `plugins/<name>/`: plugin data. Do not edit it by hand.
-- `RULES.md` (vault rules and lessons) and `STYLE.md` (the user's writing style)
-  are printed below by `loci status`. They override these rules where they differ.
+- `RULES.md` (vault rules and lessons) and `STYLE.md` (the user's writing style):
+  read them after these rules at the start of a session. They override these rules
+  where they differ.
 
 ## Workflow
 
@@ -39,8 +40,11 @@ This vault is a loci knowledge base. These rules apply to every agent working in
 ## Writing concept notes
 
 - Create notes with `loci new concepts/<area>/<slug>.md`; never invent ids.
-- Frontmatter holds only `id`, `prereqs`, `digest`. Other names for a concept go in
-  its H1, digest or text.
+- Frontmatter holds only `id` and `prereqs`. Other names for a concept go in its H1
+  or text.
+- **Filing a concept.** Choose the area by reading the scope notes
+  (`concepts/*/AREA.md`): what each area holds and which look-alike topics go to a
+  neighbour. Then choose the sub-folder by listing `concepts/<area>/`.
 - Cite evidence with a link next to the claim it supports:
   `[[sources/<type>/<slug>.pdf#p<N>]]`, `[[sources/<type>/<slug>#<heading>]]` or a
   journal entry. Never cite
@@ -88,7 +92,8 @@ This vault is a loci knowledge base. These rules apply to every agent working in
 
 ## Finding things
 
-- `loci digest` prints the index; `loci digest --area <area>` one area.
+- `loci status` reports what has changed: uncommitted changes, agent work to
+  review, and the inbox. Run it before each task.
 - `loci find <query>` searches the notes (concepts, areas, views, journal entries);
   add `--kind source`, `inbox`, `rules` or `unknown` to search those instead. Then
   read the files you need.

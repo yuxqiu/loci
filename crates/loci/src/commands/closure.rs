@@ -1,7 +1,6 @@
 //! `loci closure` (m1-m4 §2).
 
 use loci_core::closure;
-use loci_core::digest;
 use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::index::Index;
 use loci_core::vault;
@@ -22,11 +21,11 @@ pub fn run(ctx: &Ctx, slug: &str, depth: Option<usize>) -> Result<Report, Refusa
                 .at_path(path.as_str()),
         );
     }
-    let human: String = c.members.iter().map(|m| digest::concept_line(&m.slug, m.digest.as_deref())).collect();
+    let human: String = c.members.iter().map(|m| format!("- [[{}]]\n", m.slug)).collect();
     let data = json!({
         "concept": path,
         "closure": c.members.iter().map(|m| json!({
-            "slug": m.slug, "path": m.path, "depth": m.depth, "digest": m.digest,
+            "slug": m.slug, "path": m.path, "depth": m.depth,
         })).collect::<Vec<_>>(),
         "unresolved": c.unresolved.iter().map(|(f, t)| json!({"from": f, "target": t})).collect::<Vec<_>>(),
     });
