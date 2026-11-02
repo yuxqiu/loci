@@ -36,7 +36,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         Ok(_) => return Err(Refusal::refused("vault.not-git", "run `loci init` at the root of the git work tree")),
     }
     let files: [(&str, String); 4] = [
-        (config::FILE, Config::default_file()),
+        (config::FILE, Config::default_file(&super::updates::all().last().expect("updates ship").id)),
         ("RULES.md", "# Rules\n\n## Lessons\n".to_string()),
         ("STYLE.md", "# Style\n".to_string()),
         ("AGENTS.md", assets::AGENTS_STUB.to_string()),

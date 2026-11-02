@@ -21,5 +21,9 @@ Integration tests run the built binaries against fixture vaults in
 `tests/fixtures/`, with `PATH` holding only `git` (and `loci-stub` in the plugin
 tests).
 
+A change that asks something of existing vaults (a stub, a removed field, a new
+convention) also gets an entry at the bottom of `share/loci/updates.md` (Offer, How,
+Done when; the next id; today's date). Entries are never edited or deleted.
+
 Every change that users or agents notice (commands, lint rules, vault layout,
 skills, framework rules) adds a line to `CHANGELOG.md` under "Unreleased".

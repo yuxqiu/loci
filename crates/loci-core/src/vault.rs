@@ -67,7 +67,10 @@ pub fn is_slug(s: &str) -> bool {
 
 /// A ULID in canonical form (Crockford base32, uppercase, 26 characters).
 pub fn is_ulid(s: &str) -> bool {
-    s.len() == 26 && s.bytes().all(|b| b"0123456789ABCDEFGHJKMNPQRSTVWXYZ".contains(&b))
+    // Canonical Crockford base32, 26 characters, at most 128 bits (so the first is
+    // 0-7). Not `ulid::Ulid::from_string`: it accepts lowercase and drops the bits
+    // past 128 without an error.
+    s.len() == 26 && s.as_bytes()[0] <= b'7' && s.bytes().all(|b| b"0123456789ABCDEFGHJKMNPQRSTVWXYZ".contains(&b))
 }
 
 /// A journal entry path (m0 §6.6): a file inside `journal/<stream>/`, the stream a
@@ -382,9 +385,27 @@ fn listed(header: &str, items: &[String]) -> String {
 
 /// Writes a file via a temporary sibling and a rename, so readers never see a partial file.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let tmp = path.with_extension(format!("{}.loci-tmp", path.extension().and_then(|e| e.to_str()).unwrap_or("")));
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, path)
+    use std::io::Write;
+    // A uniquely named file in the same folder, synced before it replaces `path`.
+    let mut tmp = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(Path::new(".")))?;
+    tmp.write_all(bytes)?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path).map(|_| ()).map_err(|e| e.error)
+}
+
+/// Copies the directory `from` to `to`, recursively, leaving out the entries of `from`
+/// itself named in `skip`.
+pub fn copy_dir(from: &Path, to: &Path, skip: &[&str]) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        if skip.iter().any(|s| entry.file_name() == *s) {
+            continue;
+        }
+        let (src, dst) = (entry.path(), to.join(entry.file_name()));
+        if entry.file_type()?.is_dir() { copy_dir(&src, &dst, &[])? } else { std::fs::copy(&src, &dst).map(|_| ())? }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -396,6 +417,8 @@ mod tests {
         assert!(is_ulid("01JB9XQ7Z3K4M5N6P7Q8R9S0TV"));
         assert!(!is_ulid("abc"));
         assert!(!is_ulid("01jb9xq7z3k4m5n6p7q8r9s0tv"));
+        assert!(!is_ulid("81JB9XQ7Z3K4M5N6P7Q8R9S0TV"), "above the 128-bit range");
+        assert!(!is_ulid("01JB9XQ7Z3K4M5N6P7Q8R9S0TI"), "an alias, not the canonical form");
         assert!(!is_ulid("01JB9XQ7Z3K4M5N6P7Q8R9S0TI"));
     }
 

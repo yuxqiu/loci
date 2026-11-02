@@ -1,7 +1,6 @@
 //! `loci export` (m1-m4 §4).
 
 use std::path::PathBuf;
-use std::process::Command;
 
 use loci_core::envelope::{Refusal, Report};
 use loci_core::export;
@@ -15,7 +14,6 @@ use super::Ctx;
 pub enum Format {
     Md,
     Html,
-    Pdf,
 }
 
 impl Format {
@@ -23,7 +21,6 @@ impl Format {
         match self {
             Format::Md => "md",
             Format::Html => "html",
-            Format::Pdf => "pdf",
         }
     }
 }
@@ -38,7 +35,6 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
         return Err(Refusal::refused("export.kind", format!("`{path}` is not a view or a concept")));
     }
     let e = export::export(&index, &path, depth);
-    // Absolute, because pandoc runs in the output directory.
     let out_path = match output {
         Some(o) => ctx.cwd.join(o),
         None => vault.abs(&format!(".loci/export/{}.{}", vault::stem(&path), format.ext())),
@@ -48,30 +44,68 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
     for (src, name) in &e.assets {
         std::fs::copy(vault.abs(src), out_dir.join("assets").join(name)).map_err(Refusal::io)?;
     }
-    if format == Format::Md {
-        std::fs::write(&out_path, &e.markdown).map_err(Refusal::io)?;
-    } else {
-        let md_path = out_path.with_extension("md.tmp");
-        std::fs::write(&md_path, &e.markdown).map_err(Refusal::io)?;
-        let mut cmd = Command::new("pandoc");
-        cmd.arg(&md_path).args(["-f", "markdown", "-o"]).arg(&out_path).current_dir(&out_dir);
-        if format == Format::Html {
-            cmd.args(["--standalone", "--mathjax"]);
-        }
-        let status = cmd.status();
-        let removed = std::fs::remove_file(&md_path);
-        // A pandoc failure is reported before a failure to remove the temporary file.
-        match status {
-            Ok(s) if s.success() => {}
-            Ok(s) => return Err(Refusal::internal("export.pandoc", format!("pandoc exited with {s}"))),
-            Err(e) => return Err(Refusal::refused("export.pandoc", format!("cannot run pandoc: {e}"))),
-        }
-        removed.map_err(Refusal::io)?;
-    }
+    let text = match format {
+        Format::Md => e.markdown.clone(),
+        Format::Html => html(&e, note.title()).map_err(|m| Refusal::internal("export.html", m))?,
+    };
+    std::fs::write(&out_path, text).map_err(Refusal::io)?;
     let data = json!({
         "output": out_path,
         "notes": e.notes,
         "assets": e.assets.iter().map(|(_, n)| format!("assets/{n}")).collect::<Vec<_>>(),
     });
     Ok(Report::ok(data, format!("{}\n", out_path.display())))
+}
+
+/// A standalone HTML page for the export, which needs nothing from the network: the
+/// markdown rendered by `pulldown-cmark`, each heading given the identifier its
+/// `#anchor` links use, and math rendered to MathML by `pulldown-latex`, which
+/// browsers display natively (TeX it cannot render is shown, in red, not dropped).
+fn html(e: &export::Export, title: &str) -> Result<String, String> {
+    use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, html::push_html};
+    let options = Options::ENABLE_TABLES
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_MATH;
+    let mut ids = e.heading_ids.iter();
+    let mut events = vec![];
+    for event in Parser::new_ext(&e.markdown, options) {
+        events.push(match event {
+            Event::Start(Tag::Heading { level, classes, attrs, .. }) => {
+                let id = ids.next().ok_or("more headings than identifiers")?;
+                Event::Start(Tag::Heading { level, id: Some(CowStr::from(id.clone())), classes, attrs })
+            }
+            Event::InlineMath(m) => Event::Html(mathml(&m, false)?.into()),
+            Event::DisplayMath(m) => Event::Html(mathml(&m, true)?.into()),
+            other => other,
+        });
+    }
+    if ids.next().is_some() {
+        return Err("fewer headings than identifiers".to_string());
+    }
+    let mut body = String::new();
+    push_html(&mut body, events.into_iter());
+    Ok(format!(
+        "<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>{}</title>\n</head>\n\
+         <body>\n{body}</body>\n</html>\n",
+        escape(title)
+    ))
+}
+
+/// TeX `tex` as a MathML `<math>` element, its source kept as an annotation.
+fn mathml(tex: &str, display: bool) -> Result<String, String> {
+    use pulldown_latex::config::DisplayMode;
+    use pulldown_latex::{Parser, RenderConfig, Storage, push_mathml};
+    let storage = Storage::new();
+    let mut config = RenderConfig::with_annotation(tex);
+    config.display_mode = if display { DisplayMode::Block } else { DisplayMode::Inline };
+    let mut out = String::new();
+    push_mathml(&mut out, Parser::new(tex, &storage), config).map_err(|e| format!("rendering math: {e}"))?;
+    Ok(out)
+}
+
+/// `text` with the characters HTML gives meaning escaped.
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }

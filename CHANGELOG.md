@@ -41,6 +41,18 @@ them under its version.
   collision, names the note that has the slug. A dangling `[[slug]]` suggests the
   closest concept. `loci status` ends with the next step. Every argument has a
   `--help` description.
+- The `improve` skill records the proposals the user declines and does not offer
+  them again without new evidence.
+- **Vault updates:** `loci updates` lists the changes a release asks of a vault,
+  with the procedure an agent follows to offer them and apply the accepted ones;
+  `loci updates --handled <id>` records them in `loci.toml` (`updates`). `loci status`
+  says when updates are waiting, and `loci init` starts a vault current.
+- `loci export --to html` no longer needs pandoc: loci renders the page itself,
+  with math as MathML and nothing loaded from the network. `--to pdf` is removed
+  (print the HTML from a browser), and anchors follow GitHub's rule, so links in a
+  markdown export work on GitHub.
+- `fm.id-format` also rejects an `id` above the ULID range (a first character past
+  `7`), which was accepted before.
 - `loci done --note "<text>"` records what the agent found hard in the task, in
   its local record; the `improve` skill reads these notes.
 - Every command exits 1 when it reports an error diagnostic, not only `lint`:
@@ -130,10 +142,9 @@ them under its version.
   Research found no evidence that a one-line summary helps
   beyond the title (`docs/research/15-digests-vs-search.md`). To update a vault:
   delete `digest`, `root_index` and `area_index` from `[budgets]` in `loci.toml`
-  (otherwise `config.invalid`), and the `digest:` line from every concept
-  (otherwise `fm.unknown-field`); replace `AGENTS.md` with the stub a fresh
-  `loci init` writes (run it in an empty folder and copy the file), which sends
-  agents to `loci rules`.
+  (otherwise every command refuses with `config.invalid`), then run `loci updates`:
+  the rest (the `digest:` lines, the `AGENTS.md` stub, the benchmark cases) are
+  vault updates the agent offers.
 - The home-manager module, and the skill checks in `loci status`.
 - Lint's `file.encoding`, and `file.unreadable` as a lint rule: a file loci cannot
   read now refuses the vault (`file.unreadable`).

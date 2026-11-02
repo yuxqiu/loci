@@ -75,6 +75,10 @@ Present the proposals as a short list: finding, evidence, proposed change, test
 result. Apply only what the user accepts, as working-tree edits they review with
 `git diff`. Never commit.
 
+Before presenting, check the `## Lessons` section of `RULES.md` for proposals the
+user declined. Leave a declined proposal out unless there is evidence that was not
+there when it was declined, and then say what is new.
+
 **Issue drafts for loci** are text for the user to file, never filed by you. Each
 has: the loci version (`loci --version`), what falls short, a minimal reproduction
 with neutral examples (no vault content, paths or names), the proposed fix and its
@@ -82,7 +86,9 @@ level from the order above, and the evidence it addresses.
 
 ## 5. Record what held
 
-Delete the refs you reviewed (`git update-ref -d <ref>`). Keep a lesson only if the
-evidence or the test supported it. Delete lessons that an adopted check or command
+Delete the refs you reviewed (`git update-ref -d <ref>`). Record each proposal the
+user declined as a lesson, so that it is not offered again on the same evidence
+(`- 2026-03-14: declined: <proposal>; evidence then: <evidence>`). Keep any other
+lesson only if the evidence or the test supported it. Delete lessons that an adopted check or command
 now makes unnecessary. Summarise what changed, what was
 rejected, and what is waiting on an upstream fix.

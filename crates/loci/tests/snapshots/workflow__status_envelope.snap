@@ -18,7 +18,12 @@ expression: v.redact(&env)
       },
       "files": 1,
       "uncommitted": []
-    }
+    },
+    "updates": [
+      "u0001",
+      "u0002",
+      "u0003"
+    ]
   },
   "diagnostics": [],
   "error": null,

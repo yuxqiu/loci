@@ -21,8 +21,17 @@ impl Default for Budgets {
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub schema: u32,
+    /// The last vault update handled, applied or declined (`loci updates`).
+    pub updates: Option<String>,
     #[serde(default)]
     pub budgets: Budgets,
+}
+
+/// The number of update id `id` (`u0003` is 3), if it has the form `u` and four
+/// digits.
+pub fn update_number(id: &str) -> Option<u32> {
+    let digits = id.strip_prefix('u')?;
+    (digits.len() == 4 && digits.bytes().all(|b| b.is_ascii_digit())).then(|| digits.parse().expect("four digits"))
 }
 
 impl Config {
@@ -34,18 +43,40 @@ impl Config {
                 config.schema
             ));
         }
+        if let Some(id) = config.updates.as_deref().filter(|id| update_number(id).is_none()) {
+            return Err(format!("`updates = \"{id}\"` is not an update id (`u` and four digits)"));
+        }
         Ok(config)
     }
 
-    /// The file `loci init` writes: every key spelled out.
-    pub fn default_file() -> String {
+    /// The file `loci init` writes: every key spelled out, with `updates` the newest
+    /// update the binary knows.
+    pub fn default_file(updates: &str) -> String {
         let b = Budgets::default();
         format!(
-            "schema = 1\n\n[budgets]           # characters (Unicode scalar values)\n\
+            "schema = 1\n\
+             updates = \"{updates}\"   # the last vault update handled (loci updates)\n\n\
+             [budgets]           # characters (Unicode scalar values)\n\
              area_paragraph = {}\n\
              note = {}        # body characters after the frontmatter (size.note)\n",
             b.area_paragraph, b.note
         )
+    }
+
+    /// `text`, a `loci.toml`, with its `updates` key set to `id`. Edited with
+    /// `toml_edit`, so comments, layout and other keys stay as written; a comment on
+    /// the `updates` line is kept too.
+    pub fn set_updates(text: &str, id: &str) -> Result<String, String> {
+        let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e: toml_edit::TomlError| e.to_string())?;
+        match doc.get_mut("updates").and_then(toml_edit::Item::as_value_mut) {
+            Some(value) => {
+                let decor = value.decor().clone();
+                *value = id.into();
+                *value.decor_mut() = decor;
+            }
+            None => doc["updates"] = toml_edit::value(id),
+        }
+        Ok(doc.to_string())
     }
 }
 
@@ -55,7 +86,8 @@ mod tests {
 
     #[test]
     fn default_file_round_trips() {
-        let c = Config::parse(&Config::default_file()).unwrap();
+        let c = Config::parse(&Config::default_file("u0003")).unwrap();
+        assert_eq!(c.updates.as_deref(), Some("u0003"));
         assert_eq!(c.budgets, Budgets::default());
     }
 
@@ -72,5 +104,26 @@ mod tests {
         assert!(Config::parse("schema = 1\n[budgets]\nbar = 1\n").is_err());
         assert!(Config::parse("schema = 2\n").is_err());
         assert!(Config::parse("schema = 1\n[learn]\nx = 1\n").is_err());
+    }
+
+    #[test]
+    fn the_updates_key_is_an_id_set_in_place() {
+        assert_eq!(update_number("u0042"), Some(42));
+        assert!(update_number("u42").is_none() && update_number("x0042").is_none());
+        assert!(Config::parse("schema = 1\nupdates = \"nope\"\n").is_err());
+        // Replaced in place, its comment, other comments and tables kept.
+        let file = "schema = 1\nupdates = \"u0001\"   # note\n\n[budgets]\nnote = 5 # x\n";
+        assert_eq!(
+            Config::set_updates(file, "u0004").unwrap(),
+            "schema = 1\nupdates = \"u0004\"   # note\n\n[budgets]\nnote = 5 # x\n"
+        );
+        // Added with the other top-level keys, before the first table.
+        let bare = "# my vault\nschema = 1\n[budgets]\nnote = 5\n";
+        let set = Config::set_updates(bare, "u0002").unwrap();
+        assert_eq!(set, "# my vault\nschema = 1\nupdates = \"u0002\"\n[budgets]\nnote = 5\n");
+        assert_eq!(Config::parse(&set).unwrap().updates.as_deref(), Some("u0002"));
+        // A key that only starts with `updates` is another key.
+        let near = "schema = 1\nupdates_note = \"x\"\n";
+        assert!(Config::set_updates(near, "u0001").unwrap().contains("updates_note = \"x\"\nupdates = \"u0001\"\n"));
     }
 }

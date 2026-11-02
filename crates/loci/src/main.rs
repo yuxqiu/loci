@@ -17,6 +17,7 @@ pub const CORE_COMMANDS: &[&str] = &[
     "lint",
     "done",
     "rules",
+    "updates",
     "mv",
     "status",
     "new",
@@ -59,6 +60,15 @@ enum Cmd {
     },
     /// Print the framework rules (read at session start).
     Rules,
+    /// List the vault updates waiting, with the procedure for applying them.
+    Updates {
+        /// Print every update this loci knows.
+        #[arg(long)]
+        all: bool,
+        /// Record that every update through this id is handled, applied or declined.
+        #[arg(long, value_name = "ID")]
+        handled: Option<String>,
+    },
     /// Move or rename a file or directory, rewriting links.
     Mv {
         /// The vault path of a file or folder.
@@ -125,7 +135,8 @@ enum Cmd {
         /// How many links away notes are included.
         #[arg(long, default_value_t = 1)]
         depth: usize,
-        /// The output format (html and pdf need pandoc).
+        /// The output format: markdown, or a standalone HTML page (print it to PDF from a
+        /// browser).
         #[arg(long = "to", value_enum, default_value = "md")]
         format: commands::export::Format,
         /// The output file (default: `.loci/export/<stem>.<ext>`).
@@ -153,6 +164,7 @@ fn main() -> ExitCode {
         Cmd::Lint => ("lint", commands::lint::run(&ctx)),
         Cmd::Done { note } => ("done", commands::done::run(&ctx, &note)),
         Cmd::Rules => ("rules", commands::rules::run()),
+        Cmd::Updates { all, handled } => ("updates", commands::updates::run(&ctx, all, handled.as_deref())),
         Cmd::Mv { from, to } => ("mv", commands::mv::run(&ctx, &from, &to)),
         Cmd::Status => ("status", commands::status::run(&ctx)),
         Cmd::New { path, title } => ("new", commands::new::run(&ctx, &path, title.as_deref())),

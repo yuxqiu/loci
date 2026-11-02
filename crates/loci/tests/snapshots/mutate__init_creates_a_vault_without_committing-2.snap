@@ -27,6 +27,7 @@ This vault is managed by loci (https://github.com/yuxqiu/loci).
 
 == loci.toml ==
 schema = 1
+updates = "u0003"   # the last vault update handled (loci updates)
 
 [budgets]           # characters (Unicode scalar values)
 area_paragraph = 600

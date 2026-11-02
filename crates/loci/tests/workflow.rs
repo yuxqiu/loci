@@ -67,6 +67,47 @@ fn status_envelope() {
     assert_eq!(v.git(&["status", "--porcelain"]), "");
 }
 
+/// Vault updates: a new vault starts current; one without the mark is offered every
+/// update, with the procedure; `--handled` moves the mark in order; a vault ahead of
+/// the binary is warned.
+#[test]
+fn updates_are_offered_until_handled() {
+    let v = TestVault::committed(BIN, "agent-workflow");
+    let newest = {
+        let (_, env) = v.run(&["updates", "--all"]);
+        env["data"]["updates"].as_array().unwrap().last().unwrap()["id"].as_str().unwrap().to_string()
+    };
+    // The fixture's loci.toml has no `updates` key: every update waits.
+    let (code, out, _) = v.run_raw(&["status"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("## Updates\n\n") && out.contains("read them with `loci updates`"), "{out}");
+    let (code, out, _) = v.run_raw(&["updates"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("1. Show the user the Offer of every waiting update") && out.contains("## u0001 · "), "{out}");
+    let (code, env) = v.run(&["updates", "--handled", &newest]);
+    assert_eq!((code, env["data"]["handled"].clone()), (0, json!(newest)), "{env:#}");
+    assert!(v.read("loci.toml").contains(&format!("updates = \"{newest}\"")));
+    let (_, env) = v.run(&["updates"]);
+    assert_eq!(env["data"]["waiting"], json!([]));
+    let (_, env) = v.run(&["status"]);
+    assert_eq!(env["data"]["updates"], json!([]));
+    // Already handled, or unknown, is refused.
+    let (code, env) = v.run(&["updates", "--handled", "u0001"]);
+    assert_eq!((code, error_code(&env)), (1, "updates.order"));
+    let (code, env) = v.run(&["updates", "--handled", "u9999"]);
+    assert_eq!((code, error_code(&env)), (1, "updates.unknown"));
+    // A vault ahead of this loci: a warning in status, a refusal in updates.
+    v.write("loci.toml", v.read("loci.toml").replace(&newest, "u9999"));
+    let (_, env) = v.run(&["status"]);
+    assert_eq!(with_code(&env, "updates.newer").len(), 1, "{env:#}");
+    let (code, env) = v.run(&["updates"]);
+    assert_eq!((code, error_code(&env)), (1, "updates.newer"));
+    // `init` writes the newest id.
+    let fresh = TestVault::empty(BIN);
+    fresh.run(&["init"]);
+    assert!(fresh.read("loci.toml").contains(&format!("updates = \"{newest}\"")));
+}
+
 /// The framework rules are read at session start, from `loci rules`, which needs no
 /// vault; the `AGENTS.md` that `init` writes says so.
 #[test]

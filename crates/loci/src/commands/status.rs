@@ -101,6 +101,13 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         human.push_str("Next: process them with the intake skill (`loci skill show intake`).\n");
     }
 
+    // 5. Vault updates waiting for the user's decision (`loci updates`).
+    let (line, waiting, warning) = super::updates::status(vault.config.updates.as_deref());
+    if !line.is_empty() {
+        human.push_str(&format!("\n## Updates\n\n{line}"));
+    }
+    diags.extend(warning);
+
     let data = json!({
         "changes": changes.as_ref().map(|c| json!({
             "modified": c.modified.len(),
@@ -110,6 +117,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         })),
         "agent_records": records,
         "inbox": {"files": inbox.len(), "by_folder": by_folder, "uncommitted": uncommitted},
+        "updates": waiting,
     });
     Ok(Report::ok(data, human).with_diagnostics(diags))
 }

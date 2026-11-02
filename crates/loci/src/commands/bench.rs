@@ -9,6 +9,9 @@ use loci_core::envelope::{Refusal, Report};
 use serde::Deserialize;
 use serde_json::json;
 
+use loci_core::vault;
+use wait_timeout::ChildExt;
+
 use super::Ctx;
 
 /// The default cases file, relative to the vault root.
@@ -58,13 +61,10 @@ fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::R
         _ => {}
     }
     let start = Instant::now();
-    while child.try_wait()?.is_none() {
-        if start.elapsed() > AGENT_TIMEOUT {
-            child.kill()?;
-            child.wait()?;
-            return Ok(None);
-        }
-        std::thread::sleep(Duration::from_millis(50));
+    if child.wait_timeout(AGENT_TIMEOUT)?.is_none() {
+        child.kill()?;
+        child.wait()?;
+        return Ok(None);
     }
     // A process the agent left running may hold stdout open, so the wait is bounded too.
     match output.recv_timeout(AGENT_TIMEOUT.saturating_sub(start.elapsed())) {
@@ -92,9 +92,9 @@ pub fn run(ctx: &Ctx, agent: &str, cases_file: Option<&Path>) -> Result<Report, 
         cases.push(case);
     }
     let (mut passes, mut times, mut results) = (0usize, vec![], vec![]);
-    for (n, case) in cases.iter().enumerate() {
+    for case in &cases {
         let start = Instant::now();
-        let pass = run_case(&vault.root, agent, case, n).map_err(|e| Refusal::internal("bench.agent", e))?;
+        let pass = run_case(&vault.root, agent, case).map_err(|e| Refusal::internal("bench.agent", e))?;
         times.push(start.elapsed().as_secs_f64());
         passes += usize::from(pass);
         results.push(json!({"q": case.q, "pass": pass}));
@@ -108,47 +108,26 @@ pub fn run(ctx: &Ctx, agent: &str, cases_file: Option<&Path>) -> Result<Report, 
 
 /// Runs one case on a fresh copy of the vault (without `bench/`), so that the agent
 /// never sees the cases and no case sees another's edits; the copy is deleted after.
-fn run_case(root: &Path, agent: &str, case: &Case, n: usize) -> Result<bool, String> {
-    let work = std::env::temp_dir().join(format!("loci-bench-{}-{n}", std::process::id()));
-    let result = (|| {
-        let copy = work.join("vault");
-        copy_dir(root, &copy).map_err(|e| format!("copying the vault: {e}"))?;
-        let Some(reply) =
-            run_agent(agent, &case.q, &copy).map_err(|e| format!("cannot run the agent through `sh`: {e}"))?
-        else {
-            return Ok(false);
-        };
-        let output = work.join("output.txt");
-        std::fs::write(&output, reply).map_err(|e| format!("writing the agent's reply: {e}"))?;
-        let status = Command::new("sh")
-            .args(["-c", &case.check])
-            .current_dir(&copy)
-            .env("LOCI_BENCH_OUTPUT", &output)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map_err(|e| format!("cannot run the check through `sh`: {e}"))?;
-        Ok(status.success())
-    })();
-    // A copy that cannot be deleted is left behind, not mistaken for a result.
-    let _ = std::fs::remove_dir_all(&work);
-    result
-}
-
-/// Copies the vault at `root` to `to`, leaving out its `bench/`.
-fn copy_dir(root: &Path, to: &Path) -> std::io::Result<()> {
-    fn copy(from: &Path, to: &Path, skip: Option<&str>) -> std::io::Result<()> {
-        std::fs::create_dir_all(to)?;
-        for entry in std::fs::read_dir(from)? {
-            let entry = entry?;
-            if skip.is_some_and(|s| entry.file_name() == s) {
-                continue;
-            }
-            let (src, dst) = (entry.path(), to.join(entry.file_name()));
-            if entry.file_type()?.is_dir() { copy(&src, &dst, None)? } else { std::fs::copy(&src, &dst).map(|_| ())? }
-        }
-        Ok(())
-    }
-    copy(root, to, Some("bench"))
+fn run_case(root: &Path, agent: &str, case: &Case) -> Result<bool, String> {
+    let work =
+        tempfile::Builder::new().prefix("loci-bench-").tempdir().map_err(|e| format!("a temporary folder: {e}"))?;
+    let copy = work.path().join("vault");
+    vault::copy_dir(root, &copy, &["bench"]).map_err(|e| format!("copying the vault: {e}"))?;
+    let Some(reply) =
+        run_agent(agent, &case.q, &copy).map_err(|e| format!("cannot run the agent through `sh`: {e}"))?
+    else {
+        return Ok(false);
+    };
+    let output = work.path().join("output.txt");
+    std::fs::write(&output, reply).map_err(|e| format!("writing the agent's reply: {e}"))?;
+    let status = Command::new("sh")
+        .args(["-c", &case.check])
+        .current_dir(&copy)
+        .env("LOCI_BENCH_OUTPUT", &output)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| format!("cannot run the check through `sh`: {e}"))?;
+    Ok(status.success())
 }

@@ -17,6 +17,9 @@ This vault is managed by loci (https://github.com/yuxqiu/loci).
 
 pub const RULES: &str = include_str!("../../../share/loci/rules.md");
 
+/// The vault updates (`loci updates`): every entry, append-only.
+pub const UPDATES: &str = include_str!("../../../share/loci/updates.md");
+
 const SKILL_FILES: &[(&str, &str)] = &[
     ("concepts", include_str!("../../../share/loci/skills/concepts/SKILL.md")),
     ("improve", include_str!("../../../share/loci/skills/improve/SKILL.md")),

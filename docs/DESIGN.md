@@ -207,7 +207,7 @@ curated view is created in any of three ways:
   - `loci closure`: the prerequisites of a concept;
   - timelines, which come from `git log`.
 
-`loci export <view-or-concept> [--depth N] [--to md|html|pdf]` writes one
+`loci export <view-or-concept> [--depth N] [--to md|html]` writes one
 self-contained document, by default under `.loci/export/`:
 
 - linked notes or `#heading` sections are inlined, with headings shifted;
@@ -215,7 +215,8 @@ self-contained document, by default under `.loci/export/`:
 - links to inlined notes become anchors, and other links plain text;
 - frontmatter is stripped;
 - images are copied to `assets/`;
-- HTML and PDF output go through pandoc.
+- HTML is rendered by loci, math as MathML, with nothing loaded from the network;
+  a PDF is the page printed from a browser (D180).
 
 ## 5. Working with the agent
 
@@ -404,7 +405,7 @@ and `docs/specs/m1-m4.md`, the learn plugin in `docs/specs/learn-plugin.md`.
 | Group | Core commands |
 |---|---|
 | setup | `init` |
-| session | `rules`, `status`, `skill show [<name>]` |
+| session | `rules`, `status`, `skill show [<name>]`, `updates` (vault updates the agent offers, D176) |
 | structure | `new`, `block-ids --section`, `mv` (links are rewritten), `merge` (M1) |
 | health | `lint` (also runs each installed plugin's lint), `done` (an agent's last step: lint, then a local record of its work for the `improve` skill) |
 | find | `closure`, `links` (a note's links, the links to it and its unlinked mentions) |

@@ -225,24 +225,33 @@ fn export_refusals() {
     assert_eq!((code, error_code(&env)), (1, "export.kind"));
 }
 
+/// HTML is rendered by loci itself and needs no network: every `#anchor` link points at
+/// a heading `id` in the page, math is MathML, and `-o` is relative to the working
+/// directory.
 #[test]
-fn export_html_to_relative_paths() {
-    use std::os::unix::fs::PermissionsExt;
-    let v = vault(&[("views/plan.md", "# Plan\n\nText.\n".into())]);
-    // A stub pandoc: fails unless its input exists, then copies it to `-o`.
-    let stub = v.bin().join("pandoc");
-    std::fs::write(&stub, "#!/bin/sh\nin=$1\ntest -f \"$in\" || exit 2\nwhile [ \"$1\" != -o ]; do shift; done\nexec cat \"$in\" > \"$2\"\n")
-        .unwrap();
-    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-    for tool in ["sh", "cat"] {
-        std::os::unix::fs::symlink(find_on_path(tool), v.bin().join(tool)).unwrap();
-    }
+fn export_html_is_rendered_in_process() {
+    let v = vault(&[
+        ("views/plan.md", "# Plan\n\n## Proof\n\nSee [[bfs]].\n".into()),
+        (
+            "concepts/g/bfs.md",
+            concept(IDS[0], "", "# BFS\n\nCost $O(V+E)$, and $a_1 < b_2$.\n\n## Proof\n\nBy induction.\n"),
+        ),
+    ]);
     for out in ["out/plan.html", "plan.html"] {
-        let (code, env) = v.run(&["export", "views/plan", "--to", "html", "-o", out]);
+        let (code, env) = v.run(&["export", "views/plan", "--depth", "1", "--to", "html", "-o", out]);
         assert_eq!(code, 0, "{out}: {env:#}");
-        assert!(v.read(out).contains("Text."), "{out}");
-        assert!(!v.root.join(out.replace(".html", ".md.tmp")).exists(), "{out}: the temporary file is removed");
+        let page = v.read(out);
+        assert!(page.starts_with("<!doctype html>") && page.contains("<title>Plan</title>"), "{page}");
+        let ids: Vec<&str> = page.split("id=\"").skip(1).map(|s| s.split('"').next().unwrap()).collect();
+        let links: Vec<&str> = page.split("href=\"#").skip(1).map(|s| s.split('"').next().unwrap()).collect();
+        assert_eq!(ids, ["plan", "proof", "bfs", "proof-1"], "{page}");
+        assert!(!links.is_empty() && links.iter().all(|l| ids.contains(l)), "{links:?} in {ids:?}");
+        assert_eq!(page.matches("<math").count(), 2, "{page}");
+        assert!(page.contains("<msub>") && page.contains("O(V+E)"), "math is MathML, source kept: {page}");
+        assert!(!page.contains("http"), "nothing from the network: {page}");
     }
+    let (code, _, err) = v.run_raw(&["export", "views/plan", "--to", "pdf"]);
+    assert!(code == 2 && err.contains("possible values: md, html"), "pdf is no longer a format: {err}");
 }
 
 #[test]

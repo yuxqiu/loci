@@ -39,16 +39,7 @@ pub fn find_on_path(name: &str) -> PathBuf {
 }
 
 fn copy_dir(from: &Path, to: &Path) {
-    std::fs::create_dir_all(to).unwrap();
-    for entry in std::fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let dest = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_dir(&entry.path(), &dest);
-        } else {
-            std::fs::copy(entry.path(), &dest).unwrap();
-        }
-    }
+    loci_core::vault::copy_dir(from, to, &[]).unwrap();
 }
 
 impl TestVault {

@@ -104,15 +104,18 @@ struct Anchors {
     headings: BTreeMap<String, String>,
 }
 
-/// Pandoc's identifiers for the headings of the units, in document order: the base
-/// identifier, with `-1`, `-2`, … appended when it is already taken.
-fn anchors(units: &[Unit]) -> Vec<Anchors> {
+/// The identifiers of the headings of the units: per unit, its anchors; and every
+/// identifier in document order. Each is [`anchor_id`] of the heading text, with `-1`,
+/// `-2`, … appended when it is already taken, as GitHub does.
+fn anchors(units: &[Unit]) -> (Vec<Anchors>, Vec<String>) {
     let mut used: BTreeSet<String> = BTreeSet::new();
+    let mut order: Vec<String> = vec![];
     let mut unique = |text: &str| {
-        let base = pandoc_id(text);
+        let base = anchor_id(text);
         let id = (0..).map(|n| if n == 0 { base.clone() } else { format!("{base}-{n}") }).find(|c| !used.contains(c));
         let id = id.expect("an unused identifier exists");
         used.insert(id.clone());
+        order.push(id.clone());
         id
     };
     let mut out = vec![];
@@ -131,35 +134,34 @@ fn anchors(units: &[Unit]) -> Vec<Anchors> {
         }
         out.push(a);
     }
-    out
+    drop(unique);
+    (out, order)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Export {
     pub markdown: String,
+    /// The identifier of every heading of `markdown`, in document order: what its
+    /// `#anchor` links point at, for a renderer to give the headings.
+    pub heading_ids: Vec<String>,
     /// Included note paths, in order.
     pub notes: Vec<String>,
     /// Images to copy: (vault path, file name under `assets/`).
     pub assets: Vec<(String, String)>,
 }
 
-/// Pandoc's automatic identifier for a heading text.
-fn pandoc_id(text: &str) -> String {
-    let mut s: String = text
+/// The identifier of a heading text, by GitHub's rule, so that the links of a markdown
+/// export also work where GitHub renders it: lowercase; letters, digits, `-` and `_`
+/// kept; each space a `-`; everything else dropped.
+fn anchor_id(text: &str) -> String {
+    let s: String = text
         .chars()
-        .filter_map(|c| {
-            if c.is_alphanumeric() || c == '_' || c == '-' || c == '.' {
-                Some(c.to_lowercase().collect::<String>())
-            } else if c.is_whitespace() {
-                Some("-".to_string())
-            } else {
-                None
-            }
+        .filter_map(|c| match c {
+            c if c.is_alphanumeric() || c == '_' || c == '-' => Some(c.to_lowercase().collect::<String>()),
+            ' ' => Some("-".to_string()),
+            _ => None,
         })
         .collect();
-    // Remove everything up to the first letter.
-    let first_letter = s.char_indices().find(|(_, c)| c.is_alphabetic()).map_or(s.len(), |(i, _)| i);
-    s.drain(..first_letter);
     if s.is_empty() { "section".to_string() } else { s }
 }
 
@@ -212,10 +214,10 @@ pub fn export(index: &Index, root: &str, depth: usize) -> Export {
             units.push(unit);
         }
     }
-    let anchors = anchors(&units);
+    let (anchors, heading_ids) = anchors(&units);
 
     // 2–4. Assemble, rewriting headings, links, images and block ids.
-    let mut out = Export::default();
+    let mut out = Export { heading_ids, ..Export::default() };
     let mut asset_names: BTreeMap<String, String> = BTreeMap::new();
     let mut taken: BTreeSet<String> = BTreeSet::new();
     let mut doc = String::new();
@@ -341,10 +343,11 @@ mod tests {
     }
 
     #[test]
-    fn pandoc_ids() {
-        assert_eq!(pandoc_id("Dijkstra's algorithm"), "dijkstras-algorithm");
-        assert_eq!(pandoc_id("1. Intro"), "intro");
-        assert_eq!(pandoc_id("二分查找"), "二分查找");
+    fn anchor_ids() {
+        assert_eq!(anchor_id("Dijkstra's algorithm"), "dijkstras-algorithm");
+        assert_eq!(anchor_id("1. Intro"), "1-intro");
+        assert_eq!(anchor_id("二分查找"), "二分查找");
+        assert_eq!(anchor_id("C++ & Rust"), "c--rust");
     }
 
     #[test]
@@ -428,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn anchors_follow_pandoc_uniqueness() {
+    fn anchors_are_unique_in_document_order() {
         let i = from_texts(&[
             ("views/v.md", "# BFS notes\n\n## BFS\n\n[[bfs]]\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Body.\n")),

@@ -16,6 +16,7 @@ pub mod new;
 pub mod rules;
 pub mod skill;
 pub mod status;
+pub mod updates;
 
 use std::path::PathBuf;
 
