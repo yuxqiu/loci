@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use super::{Ctx, managed};
 use crate::envelope::{Applicability, Diagnostic, Fix};
 use crate::id::Ulid;
-use crate::parse::{BOM, FmError, Note, TopBlock};
+use crate::parse::{BOM, FmError, TopBlock};
 use crate::vault::Kind;
 
 /// A byte-order mark, broken frontmatter, and frontmatter outside concepts.
@@ -35,12 +35,6 @@ pub(super) fn note_format(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
                     .at(text, fm.range.clone()),
             );
         }
-    }
-}
-
-pub(super) fn h1(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
-    for note in managed(ctx) {
-        h1_rules(note, out);
     }
 }
 
@@ -85,29 +79,31 @@ pub(super) fn block_ids(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     }
 }
 
-fn h1_rules(note: &Note, out: &mut Vec<Diagnostic>) {
-    let path = note.path.as_str();
-    let h1s: Vec<_> = note.headings.iter().filter(|h| h.level == 1).collect();
-    if h1s.is_empty() {
-        let at = note.body_start();
-        let fix = Fix::new(Applicability::DisplayOnly, "add a title").edit(
-            path,
-            at..at,
-            format!("# {}\n\n", note.path.stem()),
-        );
-        out.push(Diagnostic::error("h1.missing", "no H1").at_path(path).with_fix(fix));
-        return;
-    }
-    if h1s.len() > 1 {
-        out.push(
-            Diagnostic::error("h1.multiple", "more than one H1").at_path(path).at(&note.text, h1s[1].range.clone()),
-        );
-    }
-    if !matches!(note.top_blocks.first(), Some((TopBlock::Heading(1), _))) {
-        out.push(
-            Diagnostic::error("h1.not-first", "the H1 is not the first block after the frontmatter")
-                .at_path(path)
-                .at(&note.text, h1s[0].range.clone()),
-        );
+pub(super) fn h1(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
+    for note in managed(ctx) {
+        let path = note.path.as_str();
+        let h1s: Vec<_> = note.headings.iter().filter(|h| h.level == 1).collect();
+        if h1s.is_empty() {
+            let at = note.body_start();
+            let fix = Fix::new(Applicability::DisplayOnly, "add a title").edit(
+                path,
+                at..at,
+                format!("# {}\n\n", note.path.stem()),
+            );
+            out.push(Diagnostic::error("h1.missing", "no H1").at_path(path).with_fix(fix));
+            continue;
+        }
+        if h1s.len() > 1 {
+            out.push(
+                Diagnostic::error("h1.multiple", "more than one H1").at_path(path).at(&note.text, h1s[1].range.clone()),
+            );
+        }
+        if !matches!(note.top_blocks.first(), Some((TopBlock::Heading(1), _))) {
+            out.push(
+                Diagnostic::error("h1.not-first", "the H1 is not the first block after the frontmatter")
+                    .at_path(path)
+                    .at(&note.text, h1s[0].range.clone()),
+            );
+        }
     }
 }

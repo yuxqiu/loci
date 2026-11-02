@@ -24,6 +24,7 @@ pub fn plan(
     if !to.is_core() {
         return Err(Refusal::refused("mv.to", format!("`{to}` is not a valid destination")));
     }
+    // Before the path rules, so a move into an ignored folder says so.
     if ignored(to)? {
         return Err(Refusal::refused("path.ignored", format!("`{to}` is ignored by git")));
     }
@@ -108,7 +109,7 @@ pub fn plan(
     let mut new_slugs = BTreeSet::new();
     for new in map.values().filter(|n| n.kind() == Some(Kind::Concept)) {
         let new_slug = new.slug().expect("`problem` refused a concept whose stem is no slug");
-        if index.name_taken(&new_slug, |p| map.contains_key(p)) || !new_slugs.insert(new_slug.clone()) {
+        if index.slug_paths(&new_slug).iter().any(|p| !map.contains_key(p)) || !new_slugs.insert(new_slug.clone()) {
             return Err(Refusal::refused("mv.collision", format!("slug `{new_slug}` is already used")));
         }
     }

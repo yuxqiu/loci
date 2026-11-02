@@ -97,11 +97,6 @@ impl VaultPath {
         Some(Self::new(to.rel().join(rest).into_string()).expect("a vault folder joined with vault segments"))
     }
 
-    /// This path with `suffix` appended to its last segment (`.md` for a note argument).
-    pub fn with_suffix(&self, suffix: &str) -> VaultPath {
-        Self::new(format!("{}{suffix}", self.0)).expect("a suffix without `/` keeps a vault path")
-    }
-
     /// The kind of the file at this path. `None` for paths core never reads as vault
     /// files (m0 §3): `plugins/`, `.git/`, the root `loci.toml` and `.gitignore`.
     pub fn kind(&self) -> Option<Kind> {
@@ -157,7 +152,11 @@ impl VaultPath {
     /// This path as a note argument means it (m0 §8): itself if it is a note, else with
     /// `.md` added.
     pub fn as_note(&self) -> VaultPath {
-        if self.is_note() { self.clone() } else { self.with_suffix(".md") }
+        if self.is_note() {
+            self.clone()
+        } else {
+            Self::new(format!("{}.md", self.0)).expect("a suffix keeps a vault path")
+        }
     }
 
     /// A note's name: the file name without `.md` (a concept's slug); any other file's
@@ -189,7 +188,7 @@ impl VaultPath {
     /// Whether this is a valid journal entry path (m0 §6.6): a file inside
     /// `journal/<stream>/`, the stream a slug. Folders and file names below the stream
     /// are the user's.
-    pub fn journal_ok(&self) -> bool {
+    fn journal_ok(&self) -> bool {
         let parts: Vec<&str> = self.components().collect();
         parts.len() >= 3 && parts[0] == "journal" && parts[1].parse::<Slug>().is_ok()
     }
@@ -228,15 +227,6 @@ impl VaultPath {
     }
 }
 
-impl TryFrom<String> for VaultPath {
-    type Error = String;
-
-    /// See [`VaultPath::new`]; the error is the rejected string.
-    fn try_from(s: String) -> Result<Self, String> {
-        Self::new(s.clone()).ok_or(s)
-    }
-}
-
 impl fmt::Display for VaultPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
@@ -249,33 +239,9 @@ impl Borrow<str> for VaultPath {
     }
 }
 
-impl AsRef<str> for VaultPath {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl PartialEq<str> for VaultPath {
-    fn eq(&self, other: &str) -> bool {
-        self.0 == other
-    }
-}
-
 impl PartialEq<&str> for VaultPath {
     fn eq(&self, other: &&str) -> bool {
         self.0 == *other
-    }
-}
-
-impl From<&VaultPath> for String {
-    fn from(p: &VaultPath) -> String {
-        p.0.clone()
-    }
-}
-
-impl From<VaultPath> for String {
-    fn from(p: VaultPath) -> String {
-        p.0
     }
 }
 
@@ -295,7 +261,6 @@ mod tests {
         for good in ["a", "a/b", "views/caf\u{65}\u{301}.md", ".gitignore", "a/.b/c..d"] {
             assert_eq!(VaultPath::new(good.to_string()).unwrap().as_str(), good);
         }
-        assert_eq!(VaultPath::try_from("a//b".to_string()), Err("a//b".to_string()));
     }
 
     #[test]
@@ -375,7 +340,6 @@ mod tests {
         assert_eq!(vp("a/b/c").components().collect::<Vec<_>>(), ["a", "b", "c"]);
         assert_eq!(vp("a/b/c").head(2), Some(vp("a/b")));
         assert_eq!(vp("a/b/c").head(4), None);
-        assert_eq!(vp("views/x").with_suffix(".md"), vp("views/x.md"));
     }
 
     #[test]

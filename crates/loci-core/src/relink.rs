@@ -90,8 +90,7 @@ pub fn finish(
     for (path, file_edits) in edits {
         let note = index.parsed(&path).expect("edits are only made to readable notes");
         let count = file_edits.len();
-        let text =
-            splice::apply(&note.text, file_edits).map_err(|e| Refusal::internal("change.edit", e.to_string()))?;
+        let text = splice::apply(&note.text, file_edits).map_err(|e| Refusal::internal("change.edit", e))?;
         change.writes.insert(change.final_path(&path), Written { text, edits: count });
     }
     verify(index, targets, &change, code)?;

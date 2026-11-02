@@ -13,10 +13,10 @@ pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
     let index = Index::open(&vault);
     let target = VaultPath::from_arg(target)?;
     // A note or concept, else any other vault file (an image, a source file).
-    let path = match index.note(&target) {
+    let path = match index.note(&target, "links.unknown") {
         Ok(n) => n.path.clone(),
-        Err(e) if !index.contains(&target) => return Err(e.refusal("links.unknown", &target)),
-        Err(_) => target,
+        Err(_) if index.contains(&target) => target,
+        Err(r) => return Err(r),
     };
 
     let mut human = format!("links from {path}:\n");

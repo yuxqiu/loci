@@ -46,6 +46,11 @@ pub fn plan_lines(change: &loci_core::relink::Change) -> String {
     moves.chain(writes).chain(deleted).collect()
 }
 
+/// A change's edited files, `[{"path", "edits"}]` (the `edited` of `mv` and `merge`).
+pub fn edited(change: &loci_core::relink::Change) -> serde_json::Value {
+    change.writes.iter().map(|(p, w)| serde_json::json!({"path": p, "edits": w.edits})).collect()
+}
+
 /// Installed plugins (m0 §2.2).
 pub fn plugins() -> Vec<Plugin> {
     let core = crate::core_commands();

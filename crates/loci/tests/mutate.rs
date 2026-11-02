@@ -315,10 +315,7 @@ fn init_creates_a_vault_without_committing() {
     let (code, env) = init_in(&v.root, &v);
     assert_eq!(code, 0, "{env:#}");
     assert!(v.root.join(".git").is_dir());
-    let mut c = std::process::Command::new(v.bin().join("git"));
-    let head =
-        c.arg("-C").arg(&v.root).args(["rev-parse", "--verify", "-q", "HEAD"]).env("HOME", v.home()).output().unwrap();
-    assert!(!head.status.success(), "init committed");
+    assert!(v.git(&["rev-list", "--all"]).is_empty(), "init committed");
     assert!(!v.exists("inbox") && !v.exists(".gitattributes") && !v.exists("plugins"));
     assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
     assert_snapshot!(v.tree());

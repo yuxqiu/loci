@@ -26,55 +26,30 @@ impl Edit {
     }
 }
 
-/// Why a set of edits cannot be applied.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EditError {
-    /// An edit outside the text, reversed, or off a char boundary.
-    Invalid(Range<usize>),
-    /// Two edits overlap.
-    Overlap(Range<usize>, Range<usize>),
-}
-
-impl std::fmt::Display for EditError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EditError::Invalid(r) => write!(f, "edit {r:?} is outside the text or off a character boundary"),
-            EditError::Overlap(a, b) => write!(f, "edits {a:?} and {b:?} overlap"),
-        }
-    }
-}
-
-impl std::error::Error for EditError {}
-
 /// Applies `edits` to `original`. Edits are sorted by start, an insert before a
 /// replacement starting at the same offset; inserts at the same offset keep their input
-/// order. Overlapping edits, or edits outside the text or off a char boundary, are an
-/// error.
-pub fn apply(original: &str, mut edits: Vec<Edit>) -> Result<String, EditError> {
-    // Stable sort keeps the input order of inserts at the same offset.
+/// order (the sort is stable). Overlapping edits, or edits outside the text or off a char
+/// boundary, are an error.
+pub fn apply(original: &str, mut edits: Vec<Edit>) -> Result<String, String> {
     edits.sort_by_key(|e| (e.range.start, e.range.end));
     let mut out = String::with_capacity(original.len());
+    // The end of the previous edit: an edit may start there (an insert), not before.
     let mut cursor = 0;
-    let mut prev: Option<Range<usize>> = None;
     for edit in edits {
-        let r = edit.range.clone();
-        let bad = r.start > r.end
+        let r = edit.range;
+        if r.start > r.end
             || r.end > original.len()
             || !original.is_char_boundary(r.start)
-            || !original.is_char_boundary(r.end);
-        if bad {
-            return Err(EditError::Invalid(r));
+            || !original.is_char_boundary(r.end)
+        {
+            return Err(format!("edit {r:?} is outside the text or off a character boundary"));
         }
-        if let Some(p) = &prev {
-            // Inserts at the end of a previous edit are fine; anything starting inside it is not.
-            if r.start < p.end {
-                return Err(EditError::Overlap(p.clone(), r));
-            }
+        if r.start < cursor {
+            return Err(format!("edit {r:?} overlaps the one before it, which ends at {cursor}"));
         }
         out.push_str(&original[cursor..r.start]);
         out.push_str(&edit.new);
         cursor = r.end;
-        prev = Some(r);
     }
     out.push_str(&original[cursor..]);
     Ok(out)

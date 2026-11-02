@@ -12,7 +12,7 @@ pub fn run(ctx: &Ctx, slug: &str, depth: Option<usize>) -> Result<Report, Refusa
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
     let slug = VaultPath::from_arg(slug)?;
-    let path = index.concept(&slug).map_err(|e| e.refusal("closure.unknown", &slug))?.path.clone();
+    let path = index.concept(&slug, "closure.unknown")?.path.clone();
     let c = closure::closure(&index, &path, depth);
     let mut diags = vec![];
     if c.cyclic {

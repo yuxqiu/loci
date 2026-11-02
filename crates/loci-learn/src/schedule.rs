@@ -7,8 +7,6 @@ use jiff::{Timestamp, ToSpan, tz::TimeZone};
 use loci_core::id::Ulid;
 
 use crate::cards::Card;
-#[cfg(test)]
-use crate::cards::CardId;
 use crate::reviewlog::{Grade, Line, Subject};
 
 const SECONDS_PER_DAY: f64 = 86_400.0;
@@ -53,8 +51,12 @@ impl Scheduler {
 
 /// Retrievability of a card at `now` (§4.1).
 fn retrievability(state: &CardState, now: Timestamp) -> f32 {
-    let elapsed = (now.as_second() - state.last.as_second()).max(0) as f64 / SECONDS_PER_DAY;
-    current_retrievability(state.memory, elapsed as f32, FSRS6_DEFAULT_DECAY)
+    current_retrievability(state.memory, days_since(state.last, now) as f32, FSRS6_DEFAULT_DECAY)
+}
+
+/// Days (fractional, not negative) from `then` to `now`.
+fn days_since(then: Timestamp, now: Timestamp) -> f64 {
+    (now.as_second() - then.as_second()).max(0) as f64 / SECONDS_PER_DAY
 }
 
 /// Whole days between the UTC calendar dates of `a` and `b` (§4.1).
@@ -81,8 +83,9 @@ fn lines_by_card(lines: &[Line]) -> BTreeMap<Ulid, Vec<&Line>> {
     out
 }
 
-/// A concept's estimate (§4.2).
-#[derive(Debug, Clone, PartialEq)]
+/// A concept's estimate (§4.2), serialized as §2.5 shows it (`{"kind": "cards", "r"}`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Estimate {
     Cards { r: f32 },
     Item { grade: Grade, age_days: f64 },
@@ -114,10 +117,7 @@ pub fn estimate<'a>(
     }
     let items: Vec<&Line> = lines.iter().filter(|l| l.subject == Subject::Concept(concept)).collect();
     match items.last() {
-        Some(last) => {
-            let age_days = (now.as_second() - last.t.as_second()).max(0) as f64 / SECONDS_PER_DAY;
-            (Estimate::Item { grade: last.grade, age_days }, items)
-        }
+        Some(last) => (Estimate::Item { grade: last.grade, age_days: days_since(last.t, now) }, items),
         None => (Estimate::Unknown, vec![]),
     }
 }
@@ -156,6 +156,7 @@ pub fn select<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cards::CardId;
 
     /// Test id `n`.
     fn id(n: u8) -> Ulid {
@@ -198,7 +199,7 @@ mod tests {
 
     fn card(path: &str, n: u8) -> Card {
         Card {
-            path: path.to_string().try_into().unwrap(),
+            path: loci_core::path::VaultPath::new(path.to_string()).unwrap(),
             range: 0..0,
             id: CardId::Valid(id(n)),
             question: "q".into(),

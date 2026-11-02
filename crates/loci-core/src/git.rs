@@ -202,20 +202,17 @@ pub fn toplevel(dir: &Path) -> Result<PathBuf, String> {
     Path::new(&top).canonicalize().map_err(|e| format!("{top}: {e}"))
 }
 
-/// The content of `<rev>:<path>`, if it exists.
-pub fn show(root: &Path, rev: &str, path: &VaultPath) -> Result<Vec<u8>, String> {
-    run(root, &["cat-file", "blob", &format!("{rev}:{path}")])
+/// The content of `path` at HEAD; an error when HEAD has no such file.
+pub fn show_head(root: &Path, path: &VaultPath) -> Result<Vec<u8>, String> {
+    run(root, &["cat-file", "blob", &format!("HEAD:{path}")])
 }
 
 /// A name git lists, as a vault path: an untracked nested repository's trailing `/`
 /// dropped, so that it names the folder.
 pub(crate) fn vault_path(name: String) -> VaultPath {
-    let name = match name.strip_suffix('/') {
-        Some(folder) => folder.to_string(),
-        None => name,
-    };
-    VaultPath::try_from(name)
-        .unwrap_or_else(|n| panic!("git lists relative paths without empty, `.` or `..` segments, not `{n}`"))
+    let name = name.strip_suffix('/').unwrap_or(&name);
+    VaultPath::new(name.to_string())
+        .unwrap_or_else(|| panic!("git lists relative paths without empty, `.` or `..` segments, not `{name}`"))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

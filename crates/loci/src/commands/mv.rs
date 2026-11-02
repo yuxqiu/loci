@@ -41,7 +41,7 @@ pub fn run(ctx: &Ctx, from: &str, to: &str, dry_run: bool) -> Result<Report, Ref
     }
     let data = json!({
         "moved": plan.moves.iter().collect::<Vec<_>>(),
-        "edited": plan.writes.iter().map(|(p, w)| json!({"path": p, "edits": w.edits})).collect::<Vec<_>>(),
+        "edited": super::edited(&plan),
         "dry_run": dry_run,
     });
     let (moved, edited) = if dry_run { ("would move", "edit") } else { ("moved", "edited") };

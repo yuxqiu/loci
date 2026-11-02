@@ -68,20 +68,24 @@ fn unsafe_fixes_apply_only_when_asked_and_display_only_never() {
     let v = broken();
     let (_, env) = v.run(&["lint", "--fix", "--unsafe-fixes"]);
     let codes = fixed_codes(&env);
-    for code in ["block.id-duplicate", "fm.id-duplicate", "link.dangling", "link.dangling-heading"] {
+    for code in ["block.id-duplicate", "fm.id-duplicate", "link.dangling"] {
         assert!(codes.contains(&code.to_string()), "{code} in {codes:?}");
     }
     assert!(!codes.contains(&"h1.missing".to_string()), "display-only fixes are never applied");
     let view = v.read("views/v.md");
     assert!(view.contains("[[concepts/a/other|Other]] and ![[concepts/a/attachments/d.png|diagram]]"), "{view}");
-    assert!(view.contains("[[other]], [[other#Section]]"), "{view}");
+    assert!(view.contains("[[other]], [[other#Sectoin]]"), "{view}");
     assert_eq!(v.read("views/untitled.md"), "No title here.\n");
     let (_, after) = v.run(&["lint"]);
     assert_eq!(with_code(&after, "h1.missing").len(), 1);
     let mut left: Vec<&str> =
         after["diagnostics"].as_array().unwrap().iter().map(|d| d["code"].as_str().unwrap()).collect();
     left.sort();
-    assert_eq!(left, ["area.missing", "h1.missing"], "only problems without an applicable fix are left");
+    assert_eq!(
+        left,
+        ["area.missing", "h1.missing", "link.dangling-heading"],
+        "only problems without an applicable fix are left"
+    );
     // `--only` restricts the fixes to one code.
     let v = broken();
     let (_, env) = v.run(&["lint", "--fix", "--only", "file.bom"]);
@@ -116,17 +120,16 @@ fn fixes_that_make_the_vault_worse_are_refused() {
 }
 
 #[test]
-fn a_name_not_in_nfc_is_renamed_with_its_links() {
+fn a_name_not_in_nfc_is_fixed_by_mv_not_lint() {
     let nfd = "concepts/a/cafe\u{301}.md";
     let v = TestVault::with_files(
         BIN,
         &[(nfd, concept(IDS[3], "", "# Café\n")), ("views/v.md", format!("# V\n\n[[{}]]\n", &nfd[..nfd.len() - 3]))],
     );
-    let (_, env) = v.run(&["lint", "--fix"]);
-    assert_eq!(fixed_codes(&env), ["path.not-nfc"], "{env:#}");
-    assert!(v.exists("concepts/a/caf\u{e9}.md") && !v.exists(nfd));
-    let (_, after) = v.run(&["lint"]);
-    assert!(with_code(&after, "path.not-nfc").is_empty() && with_code(&after, "link.dangling").is_empty(), "{after:#}");
+    let (_, env) = v.run(&["lint"]);
+    let d = with_code(&env, "path.not-nfc");
+    assert!(d[0]["hint"].as_str().unwrap().contains("loci mv concepts/a/caf\u{e9}.md"), "{env:#}");
+    assert!(d[0].get("fixes").is_none(), "renames are `mv`'s, not `--fix`'s");
 }
 
 /// A concept with u0001's removed `digest` field and another unknown field.

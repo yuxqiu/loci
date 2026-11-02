@@ -36,18 +36,16 @@ pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal
     if git::is_ignored(&vault.root, &path).map_err(Refusal::git)? {
         return Err(Refusal::refused("path.ignored", format!("`{path}` is ignored by git")));
     }
-    if index.name_taken(&slug, |_| false) {
-        let existing: Vec<String> = index.slug_paths(&slug).iter().map(|p| format!("`{p}`")).collect();
-        let existing = existing.join(", ");
-        return Err(Refusal::refused("new.collision", format!("`{slug}` is already the slug of {existing}")));
+    let existing: Vec<String> = index.slug_paths(&slug).iter().map(|p| format!("`{p}`")).collect();
+    if !existing.is_empty() {
+        return Err(Refusal::refused(
+            "new.collision",
+            format!("`{slug}` is already the slug of {}", existing.join(", ")),
+        ));
     }
     let id = loci_core::id::Ulid::generate();
     let text = format!("---\nid: {id}\nprereqs: []\n---\n# {}\n", title.unwrap_or(slug.as_str()));
-    if let Some(parent) = abs.parent()
-        && let Err(e) = std::fs::create_dir_all(parent)
-    {
-        return Err(Refusal::io(e));
-    }
+    std::fs::create_dir_all(abs.parent().expect("a note path has a folder")).map_err(Refusal::io)?;
     std::fs::write(&abs, text).map_err(Refusal::io)?;
     // Marked for `git diff`, as the framework rules ask of every file an agent creates.
     let mut diags = vec![];

@@ -30,7 +30,7 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
     let target = VaultPath::from_arg(target)?;
-    let note = index.note(&target).map_err(|e| e.refusal("export.unknown", &target))?;
+    let note = index.note(&target, "export.unknown")?;
     let path = note.path.clone();
     if !matches!(note.kind, Kind::View | Kind::Concept) {
         return Err(Refusal::refused("export.kind", format!("`{path}` is not a view or a concept")));
@@ -41,7 +41,8 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
         None => vault.root.join(format!(".loci/export/{}.{}", path.stem(), format.ext())),
     };
     let out_dir = out_path.parent().expect("an absolute file path has a parent").to_path_buf();
-    std::fs::create_dir_all(out_dir.join(export::ASSETS)).map_err(Refusal::io)?;
+    let dirs = if e.assets.is_empty() { out_dir.clone() } else { out_dir.join(export::ASSETS) };
+    std::fs::create_dir_all(dirs).map_err(Refusal::io)?;
     for (src, name) in &e.assets {
         std::fs::copy(vault.abs(src), out_dir.join(export::ASSETS).join(name)).map_err(Refusal::io)?;
     }

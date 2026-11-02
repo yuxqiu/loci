@@ -33,7 +33,7 @@ fn concept(id: &str, cards: &str) -> String {
     loci_testkit::concept(id, "", &format!("# T\n\nBody.\n\n## Cards\n\n{cards}"))
 }
 
-fn codes(env: &Value) -> Vec<String> {
+fn diag_codes(env: &Value) -> Vec<String> {
     diags(env).iter().map(|d| d["code"].as_str().unwrap().to_string()).collect()
 }
 
@@ -65,7 +65,7 @@ fn cards_lint() {
     let (code, env) = learn(&v, &["lint"], "");
     assert_eq!(code, 1);
     assert!(env["data"].is_null());
-    let mut c = codes(&env);
+    let mut c = diag_codes(&env);
     c.sort();
     assert_eq!(
         c,
@@ -180,4 +180,20 @@ fn deleted_card_lines_are_ignored() {
     v.write("plugins/learn/reviews.jsonl", &(v.read("plugins/learn/reviews.jsonl") + "\n"));
     let (_, env) = learn(&v, &["review"], "q\n");
     assert_eq!(env["data"]["new"], 1, "{env}");
+}
+
+#[test]
+fn grades_left_uncommitted_by_an_interrupted_review_are_committed_by_the_next_log() {
+    let v = vault(&[("concepts/a/x.md", &concept(CONCEPT, &format!("- q1 :: a1 ^{ID1}\n")))]);
+    // An interrupted review leaves its appended lines uncommitted.
+    let (code, _) = learn(&v, &["review"], "\ngood\nq\n");
+    assert_eq!(code, 0);
+    v.write(
+        "plugins/learn/reviews.jsonl",
+        &(v.read("plugins/learn/reviews.jsonl")
+            + &format!("{{\"t\":\"2026-01-01T00:00:00Z\",\"card\":\"{ID1}\",\"grade\":\"easy\"}}\n")),
+    );
+    let (code, env) = learn(&v, &["log"], &format!("{{\"card\":\"{ID1}\",\"grade\":\"hard\"}}"));
+    assert_eq!(code, 0, "{env}");
+    assert_eq!(v.git(&["status", "--porcelain", "--", "plugins/learn"]), "", "the whole log is committed");
 }

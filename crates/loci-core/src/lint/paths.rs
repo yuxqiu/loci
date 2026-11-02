@@ -3,7 +3,7 @@
 use unicode_normalization::is_nfc;
 
 use super::Ctx;
-use crate::envelope::{Applicability, Diagnostic, Fix};
+use crate::envelope::Diagnostic;
 use crate::vault::Kind;
 
 /// Path rules (§3, §6.2, §6.4, §6.6), shared with `new` and `mv`, and the inbox layout.
@@ -14,8 +14,11 @@ pub(super) fn paths(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
         }
         if !is_nfc(path.as_str()) {
             let to = crate::vault::nfc(path.as_str());
-            let fix = Fix::new(Applicability::Safe, format!("rename to `{to}`")).rename(path.as_str(), to);
-            out.push(Diagnostic::error("path.not-nfc", "file name is not in Unicode NFC").at_path(path).with_fix(fix));
+            out.push(
+                Diagnostic::error("path.not-nfc", "file name is not in Unicode NFC")
+                    .at_path(path.as_str())
+                    .with_hint(format!("rename it, links following: `loci mv {to} {to}`")),
+            );
         }
         if path.kind() == Some(Kind::Inbox) {
             let parts: Vec<&str> = path.components().collect();
@@ -26,7 +29,7 @@ pub(super) fn paths(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
                         "inbox.root-file",
                         "file directly in `inbox/` or `inbox/journal/`; move it into `drafts/`, `sources/` or a journal stream",
                     )
-                    .at_path(path),
+                    .at_path(path.as_str()),
                 );
             }
         }

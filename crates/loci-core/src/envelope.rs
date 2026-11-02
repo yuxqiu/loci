@@ -30,15 +30,12 @@ pub struct Diagnostic {
     pub fixes: Vec<Fix>,
 }
 
-/// A mechanical fix for a diagnostic: edits to files' text and file renames.
+/// A mechanical fix for a diagnostic: edits to files' text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fix {
     pub message: String,
     pub applicability: Applicability,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub edits: Vec<TextEdit>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub moves: Vec<Move>,
 }
 
 /// How a fix may be applied (after Ruff's safe and unsafe fixes, and rustc's
@@ -63,27 +60,14 @@ pub struct TextEdit {
     pub new: String,
 }
 
-/// A file or folder renamed, links following (as `loci mv`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Move {
-    pub from: String,
-    pub to: String,
-}
-
 impl Fix {
     pub fn new(applicability: Applicability, message: impl Into<String>) -> Self {
-        Self { message: message.into(), applicability, edits: vec![], moves: vec![] }
+        Self { message: message.into(), applicability, edits: vec![] }
     }
 
     /// Adds an edit replacing bytes `range` of file `path` with `new`.
     pub fn edit(mut self, path: impl Into<String>, range: std::ops::Range<usize>, new: impl Into<String>) -> Self {
         self.edits.push(TextEdit { path: path.into(), byte_start: range.start, byte_end: range.end, new: new.into() });
-        self
-    }
-
-    /// Adds a rename of `from` to `to`.
-    pub fn rename(mut self, from: impl Into<String>, to: impl Into<String>) -> Self {
-        self.moves.push(Move { from: from.into(), to: to.into() });
         self
     }
 }

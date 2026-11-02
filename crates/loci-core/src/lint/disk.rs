@@ -9,7 +9,7 @@ use crate::index::Index;
 use crate::path::VaultPath;
 
 /// The codes of [`disk_rules`].
-pub const DISK_CODES: &[&str] = &["sources.changed", "material-dropped", "git.failed"];
+pub(super) const DISK_CODES: &[&str] = &["sources.changed", "material-dropped", "git.failed"];
 
 /// The rules that compare the working tree with HEAD (§7.3): `sources.changed` and
 /// `material-dropped`. Without a HEAD there is nothing to compare; a git failure is
@@ -51,7 +51,7 @@ fn check_material(index: &Index, root: &Path, changes: &git::Changes, out: &mut 
     use crate::parse::Counts;
     // A `HEAD` blob that is not UTF-8 holds no parsed material.
     let head = |p: &VaultPath| {
-        git::show(root, "HEAD", p).map(|b| match String::from_utf8(b) {
+        git::show_head(root, p).map(|b| match String::from_utf8(b) {
             Ok(text) => crate::parse::parse(p, p.kind().expect("a vault path"), text).counts.values(),
             Err(_) => [0; 3],
         })

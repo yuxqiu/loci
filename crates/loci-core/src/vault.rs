@@ -99,20 +99,13 @@ impl Vault {
                 .ok_or_else(|| not_found("no loci.toml in this directory or any parent".into()))?,
         };
         let root = root.canonicalize().map_err(|e| not_found(e.to_string()))?;
-        match crate::git::toplevel(&root) {
-            Ok(top) if top == root => {}
-            Ok(_) => {
-                return Err(Refusal::refused(
-                    "vault.not-git",
-                    format!("{} is not the root of a git work tree", root.display()),
-                ));
-            }
-            Err(e) => {
-                return Err(Refusal::refused(
-                    "vault.not-git",
-                    format!("{} is not in a git work tree: {e}", root.display()),
-                ));
-            }
+        let why = match crate::git::toplevel(&root) {
+            Ok(top) if top == root => None,
+            Ok(_) => Some("is not the root of a git work tree".to_string()),
+            Err(e) => Some(format!("is not in a git work tree: {e}")),
+        };
+        if let Some(why) = why {
+            return Err(Refusal::refused("vault.not-git", format!("{} {why}", root.display())));
         }
         // loci never reads or writes through a symlink, and reads every file it lists
         // (m0 §3). Checked here, once, so that no command has to: a vault breaking either
@@ -252,15 +245,14 @@ fn walk(root: &Path) -> Result<Walk, Refusal> {
 
 /// A refusal message listing `items`, one per line under `header`.
 fn listed(header: &str, items: &[String]) -> String {
-    let lines: Vec<String> = items.iter().map(|i| format!("\n  {i}")).collect();
-    format!("{header}:{}", lines.concat())
+    format!("{header}:\n  {}", items.join("\n  "))
 }
 
 /// Writes a file via a temporary sibling and a rename, so readers never see a partial file.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     // A uniquely named file in the same folder, synced before it replaces `path`.
-    let mut tmp = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(Path::new(".")))?;
+    let mut tmp = tempfile::NamedTempFile::new_in(path.parent().expect("an absolute file path has a folder"))?;
     tmp.write_all(bytes)?;
     tmp.as_file().sync_all()?;
     tmp.persist(path).map(|_| ()).map_err(|e| e.error)

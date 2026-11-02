@@ -2,7 +2,7 @@
 source: crates/loci/tests/lint_fixtures.rs
 expression: diag_lines(&env)
 ---
-concepts/a/c.md:10:21 error link.dangling-heading: `sources/docs/guide` has no heading `nope`
+concepts/a/c.md:10:21 error link.dangling-heading: `sources/docs/guide` has no heading `nope` (hint: its headings are: Guide, Setup)
 concepts/a/c.md:10:53 error link.dangling: `sources/papers/missing.pdf` does not resolve
 sources/Talks/intro.md error sources.layout: not a `sources/<type>/<slug>.<ext>` file
 sources/clippings/nested/page.md error sources.layout: not a `sources/<type>/<slug>.<ext>` file

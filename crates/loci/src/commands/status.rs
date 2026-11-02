@@ -22,7 +22,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     let mut human = String::new();
 
     // 1. The agent entry point.
-    if !files.iter().any(|f| f == loci_core::vault::AGENTS) {
+    if !files.iter().any(|f| f.as_str() == loci_core::vault::AGENTS) {
         diags.push(
             Diagnostic::warning("install.missing", "`AGENTS.md` is missing")
                 .with_hint("run `loci init` in a new vault"),
@@ -104,8 +104,9 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     }
 
     // 5. Vault updates waiting for the user's decision (`loci updates`).
-    let waiting = match super::updates::status(vault.config.updates) {
-        Ok(waiting) => waiting,
+    let list = super::updates::all();
+    let waiting: Vec<_> = match super::updates::waiting(vault.config.updates, &list) {
+        Ok(waiting) => waiting.iter().map(|u| u.id).collect(),
         Err(newer) => {
             diags.push(Diagnostic::warning(&newer.error.code, newer.error.message));
             vec![]

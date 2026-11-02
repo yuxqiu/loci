@@ -7,7 +7,6 @@ repository.workspace = true
 
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
-ctrlc = "3.5.2"
 fsrs = "6.6"
 jiff = { version = "0.2.38", features = ["serde"] }
 loci-core = { path = "../loci-core" }

@@ -7,19 +7,19 @@ use super::{Ctx, update_code};
 use crate::config::{Editions, UpdateId};
 use crate::envelope::{Applicability, Diagnostic, Fix};
 use crate::id::Ulid;
-use crate::parse::{BOM, FmValue, Note, prereq_item};
+use crate::parse::{FmValue, Note, prereq_item};
 use crate::path::VaultPath;
 
 /// A concept frontmatter field (m0 §6.1) and the editions it belongs to.
-pub struct Field {
-    pub name: &'static str,
-    pub editions: Editions,
+pub(super) struct Field {
+    name: &'static str,
+    pub(super) editions: Editions,
 }
 
 /// The concept fields, current and removed. A field a vault update removes keeps its
 /// row with `Editions::until` that update: before it, the field is valid and reported
 /// as outdated (`update.<id>`, with a fix); after it, it is an unknown field.
-pub const CONCEPT_FIELDS: &[Field] = &[
+pub(super) const CONCEPT_FIELDS: &[Field] = &[
     Field { name: "id", editions: Editions::ALWAYS },
     Field { name: "prereqs", editions: Editions::ALWAYS },
     Field { name: "digest", editions: Editions::until(UpdateId::new(1)) },
@@ -59,7 +59,7 @@ pub(super) fn concept_fields(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
                         Fix::new(Applicability::Safe, "add a new id").edit(path, at..at, id)
                     }
                     None => {
-                        let at = if note.bom { BOM.len() } else { 0 };
+                        let at = note.body_start();
                         Fix::new(Applicability::Safe, "add frontmatter with a new id").edit(
                             path,
                             at..at,
@@ -125,27 +125,28 @@ pub(super) fn outdated_fields(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
 /// Concept ids and slugs unique in the vault.
 pub(super) fn duplicates(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     let index = ctx.index;
-    let mut ids: BTreeMap<Ulid, Vec<&str>> = BTreeMap::new();
+    let mut ids: BTreeMap<Ulid, Vec<&Note>> = BTreeMap::new();
     for n in index.concepts() {
         if let Some(id) = n.id() {
-            ids.entry(id).or_default().push(n.path.as_str());
+            ids.entry(id).or_default().push(n);
         }
     }
-    for (id, paths) in &ids {
-        if paths.len() > 1 {
-            // Unsafe: plugin data (a review log) may refer to the id of either note.
-            let mut fix = Fix::new(Applicability::Unsafe, "give the other notes new ids");
-            for p in &paths[1..] {
-                let note = index.parsed(&VaultPath::new(p.to_string()).expect("an index path")).expect("a concept");
-                let span = note.fm("id").expect("the note has the id").span();
-                fix = fix.edit(*p, span, Ulid::generate().to_string());
-            }
-            out.push(
-                Diagnostic::error("fm.id-duplicate", format!("id `{id}` is used by {}", paths[1..].join(", ")))
-                    .at_path(paths[0])
-                    .with_fix(fix),
+    for (id, notes) in ids.iter().filter(|(_, ns)| ns.len() > 1) {
+        // Unsafe: plugin data (a review log) may refer to the id of either note.
+        let mut fix = Fix::new(Applicability::Unsafe, "give the other notes new ids");
+        for n in &notes[1..] {
+            fix = fix.edit(
+                n.path.as_str(),
+                n.fm("id").expect("the note has the id").span(),
+                Ulid::generate().to_string(),
             );
         }
+        let others: Vec<&str> = notes[1..].iter().map(|n| n.path.as_str()).collect();
+        out.push(
+            Diagnostic::error("fm.id-duplicate", format!("id `{id}` is used by {}", others.join(", ")))
+                .at_path(notes[0].path.as_str())
+                .with_fix(fix),
+        );
     }
     for (slug, paths) in &index.slugs {
         if paths.len() > 1 {

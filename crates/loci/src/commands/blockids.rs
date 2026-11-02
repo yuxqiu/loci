@@ -14,7 +14,7 @@ pub fn run(ctx: &Ctx, note: &str, section: &str) -> Result<Report, Refusal> {
     let arg = VaultPath::from_arg(note)?;
     // Like every note argument: a path (`.md` optional) or a concept slug (m0 §9.9).
     let index = Index::open(&vault);
-    let parsed = index.note(&arg).map_err(|e| e.refusal("block-ids.kind", &arg))?;
+    let parsed = index.note(&arg, "block-ids.kind")?;
     if !parsed.kind.is_managed() {
         return Err(Refusal::refused("block-ids.kind", format!("`{}` is not a managed note", parsed.path)));
     }
@@ -22,10 +22,8 @@ pub fn run(ctx: &Ctx, note: &str, section: &str) -> Result<Report, Refusal> {
     let Some((out, assigned)) = blockids::assign(parsed, section, loci_core::id::Ulid::monotonic()) else {
         return Err(Refusal::refused("block-ids.no-section", format!("`{path}` has no `## {section}`")));
     };
-    if !assigned.is_empty()
-        && let Err(e) = write_atomic(&vault.abs(&path), out.as_bytes())
-    {
-        return Err(Refusal::io(e));
+    if !assigned.is_empty() {
+        write_atomic(&vault.abs(&path), out.as_bytes()).map_err(Refusal::io)?;
     }
     let data = json!({
         "path": path,

@@ -47,31 +47,20 @@ pub fn closure(index: &Index, root: &VaultPath, max_depth: Option<usize>) -> Clo
     }
     // Topological order over the members, prerequisites first: repeatedly emit the
     // smallest-slug member whose prerequisites (within the closure) are all emitted.
-    let slug = |p: &VaultPath| p.stem().to_string();
-    let members: BTreeSet<VaultPath> = depth.keys().cloned().collect();
-    let mut emitted: BTreeSet<VaultPath> = BTreeSet::new();
+    let mut emitted: BTreeSet<&VaultPath> = BTreeSet::new();
     let mut order: Vec<VaultPath> = vec![];
-    while emitted.len() < members.len() {
-        let ready = members
-            .iter()
-            .filter(|m| !emitted.contains(*m))
-            .filter(|m| edges.get(*m).is_none_or(|ps| ps.iter().all(|p| !members.contains(p) || emitted.contains(p))))
-            .min_by_key(|m| slug(m));
-        let next = match ready {
-            Some(m) => m.clone(),
-            None => {
-                // A cycle: break it at the smallest remaining slug.
-                out.cyclic = true;
-                members
-                    .iter()
-                    .filter(|m| !emitted.contains(*m))
-                    .min_by_key(|m| slug(m))
-                    .cloned()
-                    .expect("members remain")
-            }
-        };
-        emitted.insert(next.clone());
-        order.push(next);
+    while emitted.len() < depth.len() {
+        let remaining = || depth.keys().filter(|m| !emitted.contains(m));
+        let ready = remaining()
+            .filter(|m| edges.get(*m).is_none_or(|ps| ps.iter().all(|p| !depth.contains_key(p) || emitted.contains(p))))
+            .min_by_key(|m| m.stem());
+        // None ready: a cycle, broken at the smallest remaining slug.
+        let next = ready.unwrap_or_else(|| {
+            out.cyclic = true;
+            remaining().min_by_key(|m| m.stem()).expect("members remain")
+        });
+        emitted.insert(next);
+        order.push(next.clone());
     }
     out.members = order.into_iter().map(|p| Member { depth: depth[&p], path: p }).collect();
     if edges.values().flatten().any(|p| p == root) {

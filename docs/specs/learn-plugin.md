@@ -142,10 +142,11 @@ was computed from (§4.2), in timestamp order; empty for `unknown`.
    answer, read a self-grade (`again`, `hard`, `good` or `easy`).
 5. Appends each grade at once, through the same validation and append code as
    `log`, without committing.
-6. If any line was appended, commits once, at the end of the session or on
-   interrupt (SIGINT), as `log` does. If that commit fails, the appended lines stay
-   in the working tree and the command exits 3. If no line was appended, nothing is
-   committed, `commit` is `null`, and the command exits 0.
+6. If any line was appended, commits once, at the end of the session, as `log`
+   does. If that commit fails, the appended lines stay in the working tree and the
+   command exits 3. If no line was appended, nothing is committed, `commit` is
+   `null`, and the command exits 0. An interrupted session (Ctrl-C) loses no grade:
+   each was appended at once, and the next `log` or `review` commits the whole log.
 
 `data`: `{"reviewed", "new", "due_left", "commit"}`.
 
@@ -214,4 +215,4 @@ A concept has no FSRS state of its own. Its estimate is derived:
 | `version` | an incompatible `LOCI_VERSION` is `plugin.version`; an unset `LOCI_VERSION` is `plugin.direct` |
 | `log` | an unknown grade, or both or neither of `card` and `concept`, is `learn.bad-input`; the first line ever creates `plugins/learn/` and its `.gitattributes`, and the line and `.gitattributes` are committed alone; nothing outside `plugins/learn/` is written; later lines likewise; other uncommitted and intent-to-add changes stay untouched; `learn.bad-input`, `learn.unknown-card`, `learn.unknown-concept` |
 | `state` | each `estimate` kind; mean R over reviewed cards only; the lines behind the estimate; an unknown slug |
-| `review` | due cards by due time (a card becomes due when its predicted retrievability reaches `desired_retention`), then at most `new_per_day` new cards in note-path and position order; a line for a deleted card is ignored; grades are appended one by one and committed once at the end, and once on interrupt; a failed final commit leaves the lines and exits 3; a session with no grades commits nothing and exits 0; no note is written |
+| `review` | due cards by due time (a card becomes due when its predicted retrievability reaches `desired_retention`), then at most `new_per_day` new cards in note-path and position order; a line for a deleted card is ignored; grades are appended one by one and committed once at the end; a failed final commit leaves the lines and exits 3; a session with no grades commits nothing and exits 0; no note is written |

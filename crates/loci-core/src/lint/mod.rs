@@ -8,8 +8,9 @@ mod links;
 mod notes;
 mod paths;
 
-pub use concepts::{CONCEPT_FIELDS, Field};
-pub use disk::{DISK_CODES, disk_rules};
+use concepts::CONCEPT_FIELDS;
+use disk::DISK_CODES;
+pub use disk::disk_rules;
 
 use crate::config::{Budgets, Config, Editions, UpdateId};
 use crate::envelope::{Diagnostic, sort_diagnostics};
@@ -19,15 +20,15 @@ use crate::parse::Note;
 /// A lint rule (m0 §7.3): the codes it reports, the editions it applies to, and its
 /// check. Adding a rule is adding a row; a rule a vault update retires gets
 /// `Editions::until` that update.
-pub struct Rule {
-    pub codes: &'static [&'static str],
-    pub editions: Editions,
-    pub check: fn(&Ctx, &mut Vec<Diagnostic>),
+struct Rule {
+    codes: &'static [&'static str],
+    editions: Editions,
+    check: fn(&Ctx, &mut Vec<Diagnostic>),
 }
 
 /// The index rules, by category (one submodule each); the output is sorted. The rules
 /// that read file bytes or git are [`disk_rules`] ([`DISK_CODES`]).
-pub const RULES: &[Rule] = &[
+const RULES: &[Rule] = &[
     // Paths.
     Rule {
         codes: &["kind.unknown", "sources.layout", "slug.format", "journal.path", "path.not-nfc", "inbox.root-file"],
@@ -71,10 +72,12 @@ pub fn update_code(id: UpdateId) -> String {
 }
 
 /// Whether `code` is a code core lint reports: one in a rule's row, or `update.<id>`
-/// for an update id, which the caller checks against the updates it knows.
+/// for an update the tables name.
 pub fn known_code(code: &str) -> bool {
-    code.strip_prefix("update.").is_some_and(|id| id.parse::<UpdateId>().is_ok())
-        || RULES.iter().flat_map(|r| r.codes).chain(DISK_CODES).any(|c| *c == code)
+    match code.strip_prefix("update.").map(str::parse::<UpdateId>) {
+        Some(id) => id.is_ok_and(|id| update_ids().contains(&id)),
+        None => RULES.iter().flat_map(|r| r.codes).chain(DISK_CODES).any(|c| *c == code),
+    }
 }
 
 /// Every vault update the tables name, for the check that each has its entry.
@@ -88,10 +91,10 @@ pub fn update_ids() -> Vec<UpdateId> {
 
 /// What a rule sees: the index, the budgets, and the vault's edition (its `updates`
 /// mark).
-pub struct Ctx<'a> {
-    pub index: &'a Index,
-    pub budgets: &'a Budgets,
-    pub mark: Option<UpdateId>,
+struct Ctx<'a> {
+    index: &'a Index,
+    budgets: &'a Budgets,
+    mark: Option<UpdateId>,
 }
 
 /// The rules of the vault's edition over the index (§7.3), sorted.

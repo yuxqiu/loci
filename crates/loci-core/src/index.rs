@@ -9,32 +9,6 @@ use crate::parse::{self, Fragment, Link, LinkForm, Note};
 use crate::path::VaultPath;
 use crate::vault::{self, Kind};
 
-/// A note argument as a note path: `.md` added when missing.
-/// Why [`Index::concept`] found no single concept.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConceptLookup {
-    Unknown,
-    /// The slug names several concepts (lint reports `slug.duplicate`).
-    Ambiguous(Vec<VaultPath>),
-    /// The argument names a note that is not a concept: its path.
-    NotConcept(VaultPath),
-}
-
-impl ConceptLookup {
-    /// The refusal for argument `arg`: `unknown_code` when no note matches or the note
-    /// is not a concept, `concept.ambiguous` when a slug names several.
-    pub fn refusal(&self, unknown_code: &str, arg: &VaultPath) -> Refusal {
-        match self {
-            ConceptLookup::Unknown => Refusal::refused(unknown_code, format!("no note named `{arg}`")),
-            ConceptLookup::NotConcept(path) => Refusal::refused(unknown_code, format!("`{path}` is not a concept")),
-            ConceptLookup::Ambiguous(paths) => Refusal::refused(
-                "concept.ambiguous",
-                format!("`{arg}` names several concepts ({}); name one by path", paths.join(", ")),
-            ),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Index {
     /// Every file core reads, sorted.
@@ -109,17 +83,20 @@ impl Index {
     }
 
     /// The note a note argument names (m0 §8): a vault path to any note (`.md`
-    /// optional), else a concept slug, written exactly. A slug shared by several
-    /// concepts is ambiguous.
-    pub fn note(&self, arg: &VaultPath) -> Result<&Note, ConceptLookup> {
+    /// optional), else a concept slug, written exactly. Refused with `unknown_code`
+    /// when none matches, and `concept.ambiguous` when a slug names several concepts.
+    pub fn note(&self, arg: &VaultPath, unknown_code: &str) -> Result<&Note, Refusal> {
         if let Some(note) = self.markdown.get(&arg.as_note()) {
             return Ok(note);
         }
         // No markdown file at that path: the argument may be a concept slug.
         match arg.as_str().parse::<Slug>().ok().and_then(|s| self.slugs.get(&s)).map(Vec::as_slice) {
-            None | Some([]) => Err(ConceptLookup::Unknown),
+            None | Some([]) => Err(Refusal::refused(unknown_code, format!("no note named `{arg}`"))),
             Some([p]) => Ok(&self.markdown[p]),
-            Some(ps) => Err(ConceptLookup::Ambiguous(ps.to_vec())),
+            Some(ps) => Err(Refusal::refused(
+                "concept.ambiguous",
+                format!("`{arg}` names several concepts ({}); name one by path", ps.join(", ")),
+            )),
         }
     }
 
@@ -128,11 +105,14 @@ impl Index {
         self.markdown.get(path)
     }
 
-    /// The concept a note argument names: [`Index::note`], refused when that note is
-    /// not a concept.
-    pub fn concept(&self, arg: &VaultPath) -> Result<&Note, ConceptLookup> {
-        let note = self.note(arg)?;
-        if note.kind == Kind::Concept { Ok(note) } else { Err(ConceptLookup::NotConcept(note.path.clone())) }
+    /// The concept a note argument names: [`Index::note`], refused with `unknown_code`
+    /// too when that note is not a concept.
+    pub fn concept(&self, arg: &VaultPath, unknown_code: &str) -> Result<&Note, Refusal> {
+        let note = self.note(arg, unknown_code)?;
+        match note.kind {
+            Kind::Concept => Ok(note),
+            _ => Err(Refusal::refused(unknown_code, format!("`{}` is not a concept", note.path))),
+        }
     }
 
     /// The `prereqs` of concept `note`: resolved note paths, and the raw targets that do
@@ -215,12 +195,11 @@ impl Index {
     /// The existing concept slug most like `name`, if one is close (Jaro-Winkler
     /// similarity of at least 0.85, letter case aside): a likely typo, a shortened name
     /// or a capitalised one.
-    pub fn closest_slug(&self, name: &str) -> Option<&Slug> {
+    fn closest_slug(&self, name: &str) -> Option<&Slug> {
         let name = name.to_lowercase();
         self.slugs
-            .iter()
-            .filter(|(_, paths)| !paths.is_empty())
-            .map(|(s, _)| (strsim::jaro_winkler(&name, s.as_str()), s))
+            .keys()
+            .map(|s| (strsim::jaro_winkler(&name, s.as_str()), s))
             .filter(|(score, _)| *score >= 0.85)
             .max_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(a.1)))
             .map(|(_, s)| s)
@@ -257,12 +236,6 @@ impl Index {
         out.retain(|(_, r)| !ranges.iter().any(|o| o != r && o.start <= r.start && r.end <= o.end));
         out.sort_by_key(|(c, r)| (r.start, c.path.clone()));
         out
-    }
-
-    /// Whether `slug` is already a concept's slug, other than paths `moving` accepts,
-    /// which are being renamed (§9.5, §9.7).
-    pub fn name_taken(&self, slug: &Slug, moving: impl Fn(&VaultPath) -> bool) -> bool {
-        self.slugs.get(slug).is_some_and(|ps| ps.iter().any(|p| !moving(p)))
     }
 
     /// Every markdown note (concepts, area files, views, journal entries, rule files,
@@ -523,7 +496,7 @@ mod tests {
             ("views/plan.md", "# P\n"),
         ]);
         let n = i.markdown["views/learn/bfs.md"].clone();
-        assert_eq!(i.resolve(&n, &n.links[0]), Ok(Resolved::Note("concepts/a/bfs.md".to_string().try_into().unwrap())));
+        assert_eq!(i.resolve(&n, &n.links[0]), Ok(Resolved::Note(VaultPath::new("concepts/a/bfs.md".into()).unwrap())));
         assert!(matches!(i.resolve(&n, &n.links[1]), Err(LinkError::Dangling { .. })));
     }
 
@@ -537,7 +510,7 @@ mod tests {
         let n = i.markdown["views/v.md"].clone();
         let Err(LinkError::Dangling { hint: Some(hint), .. }) = i.resolve(&n, &n.links[0]) else { panic!("resolved") };
         assert!(hint.contains("link by path"), "{hint}");
-        assert_eq!(i.resolve(&n, &n.links[1]), Ok(Resolved::Note("concepts/b/bfs.md".to_string().try_into().unwrap())));
+        assert_eq!(i.resolve(&n, &n.links[1]), Ok(Resolved::Note(VaultPath::new("concepts/b/bfs.md".into()).unwrap())));
     }
 
     #[test]
@@ -567,7 +540,7 @@ mod tests {
         let (n, l) = first_link(&i, "concepts/a/x.md");
         assert_eq!(
             i.resolve(&n, &l),
-            Ok(Resolved::File("concepts/a/attachments/p.png".to_string().try_into().unwrap()))
+            Ok(Resolved::File(VaultPath::new("concepts/a/attachments/p.png".into()).unwrap()))
         );
     }
 }

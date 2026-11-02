@@ -12,7 +12,7 @@ use crate::splice::Edit;
 
 /// Plans merging concept `from` into concept `into` (each a concept path or slug).
 pub fn plan(index: &Index, from: &VaultPath, into: &VaultPath) -> Result<Merge, Refusal> {
-    let concept = |arg: &VaultPath| index.concept(arg).map_err(|e| e.refusal("merge.not-concept", arg));
+    let concept = |arg: &VaultPath| index.concept(arg, "merge.not-concept");
     let (from, into) = (concept(from)?, concept(into)?);
     let (from, into) = (from.path.clone(), into.path.clone());
     if from == into {

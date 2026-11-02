@@ -2,7 +2,6 @@
 
 use loci_core::envelope::{Diagnostic, Refusal, Report, sort_diagnostics};
 use loci_core::index::Index;
-use loci_core::path::VaultPath;
 use loci_core::plugin;
 use loci_core::vault::Vault;
 use loci_core::{fix, git, lint, relink};
@@ -68,12 +67,8 @@ pub fn run(ctx: &Ctx, fix: Option<FixArgs>) -> Result<Report, Refusal> {
         let (data, human) = (linted.data(), linted.summary());
         return Ok(Report::ok(data, human).with_diagnostics(linted.diagnostics));
     };
-    if let Some(code) = &args.only {
-        let update =
-            code.strip_prefix("update.").map(|id| super::updates::all().iter().any(|u| id.parse() == Ok(u.id)));
-        if !lint::known_code(code) || update == Some(false) {
-            return Err(Refusal::refused("lint.unknown-code", format!("`{code}` is not a code core lint reports")));
-        }
+    if let Some(code) = args.only.as_ref().filter(|c| !lint::known_code(c)) {
+        return Err(Refusal::refused("lint.unknown-code", format!("`{code}` is not a code core lint reports")));
     }
     // As `cargo fix`: on a clean tree the diff is exactly the fixes. A dry run writes
     // nothing, so it may run on a dirty one.
@@ -89,9 +84,7 @@ pub fn run(ctx: &Ctx, fix: Option<FixArgs>) -> Result<Report, Refusal> {
     }
     let index = Index::open(&vault);
     let opts = fix::Options { unsafe_fixes: args.unsafe_fixes, only: args.only.as_deref() };
-    let ignored = |p: &VaultPath| git::is_ignored(&vault.root, p).map_err(Refusal::git);
-    let exists = |p: &VaultPath| vault.abs(p).symlink_metadata().is_ok();
-    let plan = fix::plan(&index, &vault.config, &opts, ignored, exists)?;
+    let plan = fix::plan(&index, &vault.config, &opts)?;
     let mut human: String = plan
         .applied
         .iter()

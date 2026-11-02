@@ -259,8 +259,7 @@ fn export_html_is_rendered_in_process() {
         assert!(page.contains("<msub>") && page.contains("O(V+E)"), "math is MathML, source kept: {page}");
         assert!(!page.contains("http"), "nothing from the network: {page}");
     }
-    let (code, _, err) = v.run_raw(&["export", "views/plan", "--to", "pdf"]);
-    assert!(code == 2 && err.contains("possible values: md, html"), "pdf is no longer a format: {err}");
+    assert!(!v.exists("assets"), "no images, no assets folder");
 }
 
 #[test]

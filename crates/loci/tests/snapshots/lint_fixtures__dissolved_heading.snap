@@ -2,6 +2,6 @@
 source: crates/loci/tests/lint_fixtures.rs
 expression: diag_lines(&env)
 ---
-concepts/a/linker.md:10:5 error link.dangling-heading: `target` has no heading `Removed Heading`
-concepts/a/linker.md:12:5 error link.dangling-block: `target` has no block `^gone`
-concepts/a/linker.md:14:5 error link.dangling-heading: `linker` has no heading `missing-local`
+concepts/a/linker.md:10:5 error link.dangling-heading: `target` has no heading `Removed Heading` (hint: its headings are: Target, Kept Heading, Another one)
+concepts/a/linker.md:12:5 error link.dangling-block: `target` has no block `^gone` (hint: the block was removed or its id changed; link the note, or another block by the `^id` that ends it)
+concepts/a/linker.md:14:5 error link.dangling-heading: `linker` has no heading `missing-local` (hint: its headings are: Linker, Local Section)

@@ -64,11 +64,6 @@ pub fn waiting(mark: Option<UpdateId>, list: &[Update]) -> Result<Vec<&Update>, 
     Ok(list.iter().filter(|u| Some(u.id) > mark).collect())
 }
 
-/// The mark as written in messages.
-fn shown(mark: Option<UpdateId>) -> String {
-    mark.map_or("none".into(), |m| m.to_string())
-}
-
 pub fn run(ctx: &Ctx, every: bool, handled: Option<&str>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let list = all();
@@ -99,7 +94,10 @@ pub fn run(ctx: &Ctx, every: bool, handled: Option<&str>) -> Result<Report, Refu
             if !waiting.iter().any(|u| u.id == target.id) {
                 return Err(Refusal::refused(
                     "updates.order",
-                    format!("`{id}` is already handled (this vault is through {})", shown(mark)),
+                    format!(
+                        "`{id}` is already handled (this vault is through {})",
+                        mark.expect("a handled update is at or before the mark")
+                    ),
                 ));
             }
             let path = vault.root.join(config::FILE);
@@ -110,12 +108,6 @@ pub fn run(ctx: &Ctx, every: bool, handled: Option<&str>) -> Result<Report, Refu
             Ok(Report::ok(json!({"handled": target.id}), format!("handled updates through {}\n", target.id)))
         }
     }
-}
-
-/// The `loci status` part: the waiting update ids, or the refusal `loci updates` gives
-/// a vault newer than this loci.
-pub fn status(mark: Option<UpdateId>) -> Result<Vec<UpdateId>, Refusal> {
-    Ok(waiting(mark, &all())?.iter().map(|u| u.id).collect())
 }
 
 #[cfg(test)]

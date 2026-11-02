@@ -36,10 +36,6 @@ pub fn find_on_path(name: &str) -> PathBuf {
         .unwrap_or_else(|| panic!("`{name}` is not on PATH"))
 }
 
-fn copy_dir(from: &Path, to: &Path) {
-    loci_core::vault::copy_dir(from, to, &[]).unwrap();
-}
-
 impl TestVault {
     /// An empty vault directory (no `loci.toml`), for the binary `exe`.
     pub fn empty(exe: &str) -> Self {
@@ -59,7 +55,7 @@ impl TestVault {
         let v = Self::empty(exe);
         let src = fixtures_dir().join(name);
         assert!(src.join("loci.toml").is_file(), "fixture {name} has no loci.toml");
-        copy_dir(&src, &v.root);
+        loci_core::vault::copy_dir(&src, &v.root, &[]).unwrap();
         v
     }
 
@@ -130,11 +126,9 @@ impl TestVault {
     }
 
     pub fn run_in(&self, cwd: &Path, args: &[&str]) -> (i32, Value) {
-        let (code, stdout, stderr) = self.run_raw_in(cwd, &[&["--json"], args].concat());
-        let env: Value = serde_json::from_str(&stdout)
-            .unwrap_or_else(|e| panic!("loci {args:?}: invalid JSON ({e}):\n{stdout}\nstderr:\n{stderr}"));
-        check_envelope(&env, code);
-        (code, env)
+        let mut c = self.command();
+        c.current_dir(cwd).arg("--json").args(args);
+        self.run_command(c, "")
     }
 
     /// Runs `loci <args>` (no implicit `--json`). Returns (exit code, stdout, stderr).
@@ -209,14 +203,6 @@ impl TestVault {
         out
     }
 
-    /// Paths of every file in the vault (minus `.git/`), sorted.
-    pub fn paths(&self) -> Vec<String> {
-        let mut files = vec![];
-        collect(&self.root, &self.root, &mut files);
-        files.sort();
-        files
-    }
-
     /// Installs the stub plugin `loci-stub` in the `PATH` dir.
     pub fn install_stub(&self, stub: &Stub) {
         let p = self.bin().join("loci-stub");
@@ -273,7 +259,7 @@ fn map_strings(v: &Value, f: &dyn Fn(&str) -> String) -> Value {
 }
 
 /// Checks the envelope shape of m0 §8.
-pub fn check_envelope(env: &Value, code: i32) {
+fn check_envelope(env: &Value, code: i32) {
     assert_eq!(env["schema"], 1, "{env:#}");
     assert_eq!(env["loci"], env!("CARGO_PKG_VERSION"), "{env:#}");
     assert!(env["command"].is_string(), "{env:#}");

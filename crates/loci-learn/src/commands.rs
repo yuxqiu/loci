@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, Read, Write};
-use std::sync::{Arc, Mutex};
 
 use jiff::Timestamp;
 use loci_core::envelope::{Diagnostic, Refusal, Report};
@@ -104,7 +103,7 @@ pub fn log(vault: &Vault, mut stdin: impl Read) -> Result<Report, Refusal> {
 pub fn state(vault: &Vault, slug: &str) -> Result<Report, Refusal> {
     let index = Index::open(vault);
     let slug = loci_core::path::VaultPath::from_arg(slug)?;
-    let note = index.concept(&slug).map_err(|e| e.refusal("learn.unknown-concept", &slug))?;
+    let note = index.concept(&slug, "learn.unknown-concept")?;
     let Some(concept) = note.id() else {
         return Err(Refusal::refused("learn.unknown-concept", format!("`{slug}` has no valid id")));
     };
@@ -113,17 +112,12 @@ pub fn state(vault: &Vault, slug: &str) -> Result<Report, Refusal> {
     let (note_cards, _) = cards::of_note(note);
     let (estimate, used) =
         schedule::estimate(&note_cards, concept, &lines, &Scheduler::new(config.desired_retention), Timestamp::now());
-    let est_json = match &estimate {
-        Estimate::Cards { r } => json!({"kind": "cards", "r": r}),
-        Estimate::Item { grade, age_days } => json!({"kind": "item", "grade": grade, "age_days": age_days}),
-        Estimate::Unknown => json!({"kind": "unknown"}),
-    };
     let human = match &estimate {
         Estimate::Cards { r } => format!("{slug}: recall {:.0}% (from {} line(s))\n", r * 100.0, used.len()),
         Estimate::Item { grade, age_days } => format!("{slug}: last quiz {} {age_days:.1} days ago\n", grade.outcome()),
         Estimate::Unknown => format!("{slug}: unknown\n"),
     };
-    Ok(Report::ok(json!({"concept": concept, "estimate": est_json, "lines": used}), human))
+    Ok(Report::ok(json!({"concept": concept, "estimate": estimate, "lines": used}), human))
 }
 
 pub fn review(vault: &Vault) -> Result<Report, Refusal> {
@@ -134,51 +128,12 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
     let scheduler = Scheduler::new(config.desired_retention);
     let (session, new_count) = schedule::select(&all, &lines, &scheduler, config.new_per_day, Timestamp::now());
 
-    // Lines appended so far; committed at the end or on interrupt (§2.6 step 6).
-    let appended = Arc::new(Mutex::new(0usize));
-    let root = vault.root.clone();
-    let on_interrupt = Arc::clone(&appended);
-    let handler = ctrlc::set_handler(move || {
-        let n = *on_interrupt.lock().expect("the counter lock is never poisoned");
-        if n == 0 {
-            std::process::exit(0);
-        }
-        match reviewlog::commit(&root, "review") {
-            Ok(_) => std::process::exit(0),
-            Err(e) => {
-                eprintln!("loci learn review: committing the review log failed: {e}");
-                std::process::exit(loci_core::envelope::Exit::Internal as i32);
-            }
-        }
-    });
-    handler.map_err(|e| Refusal::io(format!("cannot install the interrupt handler: {e}")))?;
-
-    let stdin = std::io::stdin();
-    let mut input = stdin.lock();
-    let mut err = std::io::stderr();
-    // The session stops at the end, on `q` or end of input (`Ok`), or on an I/O error.
-    let stopped: std::io::Result<()> = (|| {
-        for (i, card) in session.iter().enumerate() {
-            let progress = format!("{}/{}", i + 1, session.len());
-            let Some(grade) = ask(card, &progress, &mut input, &mut err)? else { return Ok(()) };
-            let id = card.id.valid().expect("only cards with valid ids are scheduled");
-            let line = Line { t: Timestamp::now(), subject: Subject::Card(id), grade };
-            // The interrupt handler takes this lock, so it waits for a line being written
-            // and always sees whole lines.
-            let mut n = appended.lock().expect("the counter lock is never poisoned");
-            reviewlog::append(&vault.root, &line)?;
-            *n += 1;
-        }
-        Ok(())
-    })();
-    let mut pending = appended.lock().expect("the counter lock is never poisoned");
-    let reviewed = *pending;
+    // Each grade is appended at once; the lines are committed at the end (§2.6 step 6).
+    let mut reviewed = 0;
+    let stopped = grade_cards(&session, &vault.root, &mut reviewed);
     // Lines already appended are committed even when the session stopped on an error.
     let commit =
         if reviewed > 0 { Some(reviewlog::commit(&vault.root, "review").map_err(Refusal::git)?) } else { None };
-    // Committed: a later interrupt has nothing to commit.
-    *pending = 0;
-    drop(pending);
     if let Err(e) = stopped {
         let committed = commit.map_or(String::new(), |sha| format!(" ({reviewed} grades committed in {sha})"));
         return Err(Refusal::io(format!("the session stopped: {e}{committed}")));
@@ -186,6 +141,21 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
     let due_left = session.len() - reviewed;
     let data = json!({"reviewed": reviewed, "new": new_count, "due_left": due_left, "commit": commit});
     Ok(Report::ok(data, format!("reviewed {reviewed}, {due_left} left\n")))
+}
+
+/// Asks for a grade on each card of `session` and appends it to the log, counting in
+/// `appended`. Stops at the end, on `q` or end of input (`Ok`), or on an I/O error.
+fn grade_cards(session: &[&Card], root: &std::path::Path, appended: &mut usize) -> std::io::Result<()> {
+    let (mut input, mut err) = (std::io::stdin().lock(), std::io::stderr());
+    for (i, card) in session.iter().enumerate() {
+        let progress = format!("{}/{}", i + 1, session.len());
+        let Some(grade) = ask(card, &progress, &mut input, &mut err)? else { return Ok(()) };
+        let id = card.id.valid().expect("only cards with valid ids are scheduled");
+        let line = Line { t: Timestamp::now(), subject: Subject::Card(id), grade };
+        reviewlog::append(root, &line)?;
+        *appended += 1;
+    }
+    Ok(())
 }
 
 /// Shows one card and reads the user's grade. `None` when the user stops (`q` or end

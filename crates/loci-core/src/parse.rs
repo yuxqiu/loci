@@ -6,7 +6,6 @@ use std::sync::LazyLock;
 use pulldown_cmark::{CodeBlockKind, Event, LinkType, MetadataBlockKind, Options, Parser, Tag, TagEnd};
 use regex::Regex;
 use saphyr::{LoadableYamlNode, MarkedYaml, Scalar, YamlData};
-use unicode_normalization::UnicodeNormalization;
 
 use crate::id::Ulid;
 use crate::path::VaultPath;
@@ -225,14 +224,9 @@ impl Note {
         self.fm_str("id")?.parse().ok()
     }
 
-    /// The raw text of the first H1, if any.
-    pub fn h1(&self) -> Option<&str> {
-        self.headings.iter().find(|h| h.level == 1).map(|h| h.text.as_str())
-    }
-
     /// The note's title (§9.3): the first H1's raw text, else the file stem.
     pub fn title(&self) -> &str {
-        self.h1().unwrap_or_else(|| self.path.stem())
+        self.headings.iter().find(|h| h.level == 1).map_or_else(|| self.path.stem(), |h| h.text.as_str())
     }
 
     /// The section under `self.headings[i]`: the heading through the next heading of the
@@ -287,8 +281,8 @@ pub fn options() -> Options {
 }
 
 /// The slug of a `prereqs` item, if it is a quoted `"[[<slug>]]"` written verbatim
-/// (m0 §6.1). Only such an item is a link.
-pub fn prereq_item<'a>(text: &str, item: &'a FmValue) -> Option<&'a str> {
+/// (m0 §6.1), and its bytes in `text`. Only such an item is a link.
+pub fn prereq_item<'a>(text: &str, item: &'a FmValue) -> Option<(&'a str, Range<usize>)> {
     let FmValue::Str { value, span, quoted: true } = item else { return None };
     // Escapes and folded lines would make offsets into the value wrong for the file.
     let raw = &text[span.clone()];
@@ -296,18 +290,20 @@ pub fn prereq_item<'a>(text: &str, item: &'a FmValue) -> Option<&'a str> {
         return None;
     }
     let inner = value.strip_prefix("[[")?.strip_suffix("]]")?;
-    inner.parse::<crate::id::Slug>().ok().map(|_| inner)
+    inner.parse::<crate::id::Slug>().ok()?;
+    let start = span.start + "\"[[".len();
+    Some((inner, start..start + inner.len()))
 }
 
 /// Normalises a link target (§5.2): returns (target, fragment), or `None` for `[[]]`.
-pub fn normalize_target(raw: &str) -> Option<(String, Option<Fragment>)> {
+fn normalize_target(raw: &str) -> Option<(String, Option<Fragment>)> {
     let s = raw.trim_matches(|c: char| c.is_ascii_whitespace());
     let (t, frag) = match s.find('#') {
         Some(i) => (&s[..i], Some(Fragment::parse(&s[i + 1..]))),
         None => (s, None),
     };
     let t = t.strip_suffix(".md").unwrap_or(t);
-    let t: String = t.nfc().collect();
+    let t = crate::vault::nfc(t);
     if t.is_empty() && frag.is_none() {
         return None;
     }
@@ -410,8 +406,7 @@ fn walk_body(text: &str, base: usize) -> Body {
             (Some(content), _) if b.headings.last().is_some_and(|h| h.range.start <= range.start) => {
                 *content = Some(content.as_ref().map_or(range.clone(), |c| c.start..range.end));
             }
-            (Some(_), _) => {}
-            (None, _) => {}
+            _ => {}
         }
         match event {
             Event::Start(tag) => {
@@ -446,6 +441,7 @@ fn walk_body(text: &str, base: usize) -> Body {
                         b.top_blocks.push((block, range.clone()));
                     }
                 };
+                let image = matches!(tag, Tag::Image { .. });
                 let open = match tag {
                     Tag::MetadataBlock(MetadataBlockKind::YamlStyle) => {
                         in_metadata = true;
@@ -493,17 +489,10 @@ fn walk_body(text: &str, base: usize) -> Body {
                         }
                         Open::Other
                     }
-                    Tag::Link { link_type, dest_url, .. } => {
-                        let before = b.md_links.len();
-                        handle_link(&mut b, text, link_type, &dest_url, range, false);
-                        links_open.push(((b.md_links.len() > before).then_some(before), None));
-                        Open::Other
-                    }
-                    Tag::Image { link_type, dest_url, .. } => {
-                        b.counts.images += 1;
-                        let before = b.md_links.len();
-                        handle_link(&mut b, text, link_type, &dest_url, range, true);
-                        links_open.push(((b.md_links.len() > before).then_some(before), None));
+                    Tag::Link { link_type, dest_url, .. } | Tag::Image { link_type, dest_url, .. } => {
+                        b.counts.images += usize::from(image);
+                        let md = handle_link(&mut b, text, link_type, &dest_url, range, image);
+                        links_open.push((md, None));
                         Open::Other
                     }
                     _ => {
@@ -577,16 +566,13 @@ fn frontmatter_links(text: &str, fm: &Frontmatter) -> Vec<Link> {
         _ => &[],
     };
     for item in items {
-        if let Some(inner) = prereq_item(text, item)
+        if let Some((inner, target_range)) = prereq_item(text, item)
             && let Some((target, fragment)) = normalize_target(inner)
         {
-            let span = item.span();
-            // After the opening `"[[`.
-            let start = span.start + 3;
             out.push(Link {
                 form: LinkForm::Prereq,
-                range: span.clone(),
-                target_range: start..start + inner.len(),
+                range: item.span(),
+                target_range,
                 raw: inner.to_string(),
                 target,
                 fragment,
@@ -597,13 +583,22 @@ fn frontmatter_links(text: &str, fm: &Frontmatter) -> Vec<Link> {
     out
 }
 
-fn handle_link(b: &mut Body, text: &str, link_type: LinkType, dest: &str, range: Range<usize>, image: bool) {
+/// Records the link at `range`: a wikilink in `links`, a markdown link to a vault file
+/// in `md_links`. Returns the index of a new markdown link.
+fn handle_link(
+    b: &mut Body,
+    text: &str,
+    link_type: LinkType,
+    dest: &str,
+    range: Range<usize>,
+    image: bool,
+) -> Option<usize> {
     match link_type {
         LinkType::WikiLink { .. } => {
-            let open = if image { 3 } else { 2 };
-            let start = range.start + open;
+            let open = if image { "![[" } else { "[[" };
+            let start = range.start + open.len();
             let slice = &text[start..range.end];
-            let close = slice.find("]]").unwrap_or(slice.len());
+            let close = slice.find("]]").expect("pulldown-cmark reports a wikilink with its closing `]]`");
             let pipe = slice[..close].find('|');
             let label = pipe.map(|p| start + p + 1..start + close);
             // In a table the `|` is escaped (`\|`); the `\` is table syntax, not target.
@@ -621,12 +616,13 @@ fn handle_link(b: &mut Body, text: &str, link_type: LinkType, dest: &str, range:
                     label,
                 });
             }
+            None
         }
-        LinkType::Autolink | LinkType::Email => {}
+        LinkType::Autolink | LinkType::Email => None,
+        _ if URL_SCHEME.is_match(dest) => None,
         _ => {
-            if !URL_SCHEME.is_match(dest) {
-                b.md_links.push(MdLink { label: range.end..range.end, range, url: dest.to_string(), image });
-            }
+            b.md_links.push(MdLink { label: range.end..range.end, range, url: dest.to_string(), image });
+            Some(b.md_links.len() - 1)
         }
     }
 }
@@ -691,7 +687,7 @@ impl<'a> Yaml<'a> {
     }
 
     fn span(&self, n: &MarkedYaml) -> Range<usize> {
-        let byte = |ci: usize| self.offset + self.bytes[ci.min(self.bytes.len() - 1)];
+        let byte = |ci: usize| self.offset + self.bytes[ci];
         byte(n.span.start.index())..byte(n.span.end.index())
     }
 

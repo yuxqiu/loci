@@ -11,8 +11,9 @@ them under its version.
 - `loci lint --fix`: applies the fixes that keep the meaning (a missing id, a
   markdown link to a vault file, an unquoted prereq, a byte-order mark, a name not in
   NFC), checks that nothing got worse, then writes. `--unsafe-fixes` adds likely
-  fixes (a misspelt slug or heading, duplicate ids), `--only <code>`
-  keeps one code, `--dry-run` writes nothing. Like `cargo fix`, it refuses a working
+  fixes (a misspelt slug, duplicate ids), `--only <code>`
+  keeps one code, `--dry-run` writes nothing. A name not in NFC is renamed with
+  `loci mv`, which its diagnostic's hint gives. Like `cargo fix`, it refuses a working
   tree with uncommitted changes unless given `--allow-dirty`. `lint --json` shows each diagnostic's
   fixes as exact edits.
 - `update.<id>` warnings: what a waiting vault update changes (u0001's `digest:`),
@@ -30,6 +31,10 @@ them under its version.
 
 ### Changed
 
+- `link.dangling-heading` lists the target note's headings in its hint, so a renamed
+  heading can be relinked without opening the note.
+- `link.dangling-block` says what likely happened (the block was removed or its id
+  changed) and how to relink.
 - `loci learn log` refuses a `card` or `concept` that is not a ULID
   (`learn.bad-input`), and a review-log line with such an id is `learn.log`.
 - A concept whose file name is not a slug (`a_b.md`, `BFS.md`, already

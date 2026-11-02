@@ -8,7 +8,8 @@ use serde_json::json;
 use super::Ctx;
 use crate::assets;
 
-const GITIGNORE_LINES: [&str; 1] = ["/.loci/"];
+/// The line `.gitignore` needs: exports are written under `.loci/`.
+const GITIGNORE_LINE: &str = "/.loci/";
 
 pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     let dir = match &ctx.explicit_vault {
@@ -57,20 +58,14 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
         Err(e) => return Err(Refusal::io(format!("reading `.gitignore`: {e}"))),
     };
-    let has =
-        |line: &str| existing.split(|b| *b == b'\n').any(|l| l.strip_suffix(b"\r").unwrap_or(l) == line.as_bytes());
-    let missing: Vec<&str> = GITIGNORE_LINES.iter().copied().filter(|l| !has(l)).collect();
-    if missing.is_empty() {
+    if existing.split(|b| *b == b'\n').any(|l| l.strip_suffix(b"\r").unwrap_or(l) == GITIGNORE_LINE.as_bytes()) {
         skipped.push(".gitignore".to_string());
     } else {
         let mut bytes = existing;
         if !bytes.is_empty() && !bytes.ends_with(b"\n") {
             bytes.push(b'\n');
         }
-        for l in missing {
-            bytes.extend_from_slice(l.as_bytes());
-            bytes.push(b'\n');
-        }
+        bytes.extend_from_slice(format!("{GITIGNORE_LINE}\n").as_bytes());
         std::fs::write(&gi, bytes).map_err(Refusal::io)?;
         created.push(".gitignore".to_string());
     }
