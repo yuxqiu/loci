@@ -51,7 +51,12 @@ enum Cmd {
     /// Lint the working tree (core rules and every installed plugin).
     Lint,
     /// End an agent task: lint, then record the agent's work for review.
-    Done,
+    Done {
+        /// Something that was hard in the task (a search that missed, an unclear
+        /// rule, work a command could do); repeat for each.
+        #[arg(long)]
+        note: Vec<String>,
+    },
     /// Print the framework rules (read at session start).
     Rules,
     /// Move or rename a file or directory, rewriting links.
@@ -146,7 +151,7 @@ fn main() -> ExitCode {
     let (name, report) = match cli.command {
         Cmd::Init => ("init", commands::init::run(&ctx)),
         Cmd::Lint => ("lint", commands::lint::run(&ctx)),
-        Cmd::Done => ("done", commands::done::run(&ctx)),
+        Cmd::Done { note } => ("done", commands::done::run(&ctx, &note)),
         Cmd::Rules => ("rules", commands::rules::run()),
         Cmd::Mv { from, to } => ("mv", commands::mv::run(&ctx, &from, &to)),
         Cmd::Status => ("status", commands::status::run(&ctx)),

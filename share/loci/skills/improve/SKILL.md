@@ -30,6 +30,11 @@ month of commits):
   Skip refs whose base is not an ancestor (rewritten history). Show each correction
   with its diff, and ask before learning from one: an unrelated edit to the same
   file is not a correction.
+- **Agents' notes.** What agents found hard, from their `loci done --note`
+  (`git log -1 --format=%B <ref>` for each ref above: one `- <note>` line each).
+  A note is a hypothesis, not a finding: propose a change from it only when it
+  recurs across tasks or matches a correction, a standing warning or a failing
+  benchmark case.
 - **Lessons.** The `## Lessons` section of `RULES.md`, and `STYLE.md`. A lesson
   that keeps being restated or broken is a gap.
 - **Repeated work.** Steps done by hand again and again: the same searches, edits

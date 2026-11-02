@@ -12,11 +12,11 @@ use super::lint::lint_vault;
 /// Records older than this are deleted.
 const KEEP_SECS: u64 = 90 * 24 * 60 * 60;
 
-pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
+pub fn run(ctx: &Ctx, notes: &[String]) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let mut linted = lint_vault(&vault);
     let now = SystemTime::now().duration_since(UNIX_EPOCH).expect("the clock is after 1970").as_secs();
-    let record = git::record_agent_tree(&vault.root, now).unwrap_or_else(|e| {
+    let record = git::record_agent_tree(&vault.root, now, notes).unwrap_or_else(|e| {
         linted.diagnostics.push(Diagnostic::warning("done.record", format!("the agent's work was not recorded: {e}")));
         None
     });

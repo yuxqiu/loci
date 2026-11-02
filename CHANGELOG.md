@@ -41,6 +41,8 @@ them under its version.
   collision, names the note that has the slug. A dangling `[[slug]]` suggests the
   closest concept. `loci status` ends with the next step. Every argument has a
   `--help` description.
+- `loci done --note "<text>"` records what the agent found hard in the task, in
+  its local record; the `improve` skill reads these notes.
 - Every command exits 1 when it reports an error diagnostic, not only `lint`:
   `loci skill` now exits 1 when a plugin's `skills` hook fails.
 - Source types and journal streams are any slug you choose; nothing is declared

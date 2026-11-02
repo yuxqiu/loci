@@ -32,7 +32,10 @@ This vault is a loci knowledge base. These rules apply to every agent working in
 3. Check your work with `loci lint` as you go. Finish every task by running
    `loci done` and fixing what it reports: it lints, then records your result as a
    local git ref so the user's later corrections can be found (the `improve`
-   skill). Never run `loci done` for work the user did.
+   skill). If something in the task was hard (a search that missed, a rule that
+   was unclear or conflicting, work a command could do), say so, one item each:
+   `loci done --note "<what was hard>"`. Never run `loci done` for work the user
+   did.
 4. The user reviews with `git diff`, then commits or discards (`git reset --hard`).
 5. The user edits notes by hand at any time; there is nothing to sync. Change text
    the user wrote only when the request covers it (adding a link to a new concept

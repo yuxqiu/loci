@@ -260,6 +260,30 @@ fn done_records_the_agent_work_without_touching_the_index() {
     assert_eq!(env["data"]["agent_records"], 1);
 }
 
+/// The agent's notes on what was hard go into the record, carried across runs on the
+/// same base, and are recorded even when nothing changed.
+#[test]
+fn done_keeps_the_agents_notes() {
+    let v = TestVault::committed(BIN, "agent-workflow");
+    let head = v.git(&["rev-parse", "HEAD"]).trim().to_string();
+    let reference = format!("refs/loci/agent/{head}");
+    let message = || v.git(&["log", "-1", "--format=%B", &reference]);
+    // Nothing changed, but a note: recorded.
+    let (code, env) = v.run(&["done", "--note", "rg found nothing for FIFO"]);
+    assert_eq!((code, env["data"]["record"].clone()), (0, json!(reference)), "{env:#}");
+    assert_eq!(message(), "loci done: the agent's work\n\n- rg found nothing for FIFO\n\n");
+    // A later run adds its notes to those already there, once each.
+    v.write("views/new.md", "# New\n");
+    v.run(&["done", "--note", "unclear  when to\ncreate a sub-folder", "--note", "rg found nothing for FIFO"]);
+    assert_eq!(
+        message(),
+        "loci done: the agent's work\n\n- rg found nothing for FIFO\n- unclear when to create a sub-folder\n\n"
+    );
+    // A run without notes keeps them.
+    v.run(&["done"]);
+    assert!(message().contains("- unclear when to create a sub-folder"), "{}", message());
+}
+
 #[test]
 fn done_prunes_old_records() {
     let v = TestVault::committed(BIN, "agent-workflow");

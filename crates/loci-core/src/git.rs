@@ -45,11 +45,27 @@ pub fn head(root: &Path) -> Result<String, String> {
     run(root, &["rev-parse", "HEAD"]).map(trimmed)
 }
 
+/// The first line of a record's commit message; the agent's notes follow, one
+/// `- <note>` line each.
+const RECORD_SUBJECT: &str = "loci done: the agent's work";
+
+/// The agent's notes in the record `name`, or none if it has no notes or does not
+/// exist.
+pub fn agent_notes(root: &Path, name: &str) -> Result<Vec<String>, String> {
+    if !answer(root, &["rev-parse", "--verify", "-q", name])? {
+        return Ok(vec![]);
+    }
+    let message = String::from_utf8_lossy(&run(root, &["log", "-1", "--format=%B", name])?).into_owned();
+    Ok(message.lines().filter_map(|l| l.strip_prefix("- ")).map(str::to_string).collect())
+}
+
 /// Records the working tree as a commit whose parent is HEAD, under
 /// `refs/loci/agent/<HEAD id>` (replacing an earlier record for the same HEAD),
 /// without touching the index or any branch. `now` (Unix seconds) dates the record.
-/// Returns the ref, or `None` when there is no HEAD or the tree equals HEAD's.
-pub fn record_agent_tree(root: &Path, now: u64) -> Result<Option<String>, String> {
+/// `notes` (what was hard in the task) join those of the record it replaces. Returns
+/// the ref, or `None` when there is no HEAD, or when the tree equals HEAD's and there
+/// are no notes.
+pub fn record_agent_tree(root: &Path, now: u64, notes: &[String]) -> Result<Option<String>, String> {
     if !has_head(root)? {
         return Ok(None);
     }
@@ -66,8 +82,20 @@ pub fn record_agent_tree(root: &Path, now: u64) -> Result<Option<String>, String
         _ => {}
     }
     let tree = tree?;
-    if tree == trimmed(run(root, &["rev-parse", &format!("{head}^{{tree}}")])?) {
+    let name = format!("{AGENT_REFS}{head}");
+    let mut all = agent_notes(root, &name)?;
+    for n in notes.iter().map(|n| n.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|n| !n.is_empty()) {
+        if !all.contains(&n) {
+            all.push(n);
+        }
+    }
+    if all.is_empty() && tree == trimmed(run(root, &["rev-parse", &format!("{head}^{{tree}}")])?) {
         return Ok(None);
+    }
+    let mut message = RECORD_SUBJECT.to_string();
+    if !all.is_empty() {
+        message.push_str("\n\n");
+        message.push_str(&all.iter().map(|n| format!("- {n}\n")).collect::<String>());
     }
     let date = format!("@{now} +0000");
     let commit = exec(
@@ -78,10 +106,9 @@ pub fn record_agent_tree(root: &Path, now: u64) -> Result<Option<String>, String
             .env("GIT_COMMITTER_NAME", "loci")
             .env("GIT_COMMITTER_EMAIL", "loci@localhost")
             .env("GIT_COMMITTER_DATE", &date)
-            .args(["commit-tree", &tree, "-p", &head, "--no-gpg-sign", "-m", "loci done: the agent's work"]),
+            .args(["commit-tree", &tree, "-p", &head, "--no-gpg-sign", "-m", &message]),
         "commit-tree",
     )?;
-    let name = format!("{AGENT_REFS}{head}");
     run(root, &["update-ref", &name, &trimmed(commit)])?;
     Ok(Some(name))
 }
