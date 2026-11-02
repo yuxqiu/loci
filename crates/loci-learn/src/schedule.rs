@@ -4,8 +4,11 @@ use std::collections::BTreeMap;
 
 use fsrs::{FSRS, FSRS6_DEFAULT_DECAY, FSRSItem, FSRSReview, MemoryState, current_retrievability};
 use jiff::{Timestamp, ToSpan, tz::TimeZone};
+use loci_core::id::Ulid;
 
 use crate::cards::Card;
+#[cfg(test)]
+use crate::cards::CardId;
 use crate::reviewlog::{Grade, Line, Subject};
 
 const SECONDS_PER_DAY: f64 = 86_400.0;
@@ -68,11 +71,11 @@ fn add_days(t: Timestamp, days: f64) -> Timestamp {
 }
 
 /// Groups card lines by card id, in timestamp order.
-fn lines_by_card(lines: &[Line]) -> BTreeMap<&str, Vec<&Line>> {
-    let mut out: BTreeMap<&str, Vec<&Line>> = BTreeMap::new();
+fn lines_by_card(lines: &[Line]) -> BTreeMap<Ulid, Vec<&Line>> {
+    let mut out: BTreeMap<Ulid, Vec<&Line>> = BTreeMap::new();
     for l in lines {
-        if let Subject::Card(c) = &l.subject {
-            out.entry(c.as_str()).or_default().push(l);
+        if let Subject::Card(c) = l.subject {
+            out.entry(c).or_default().push(l);
         }
     }
     out
@@ -89,7 +92,7 @@ pub enum Estimate {
 /// A concept's estimate and the lines it was computed from (§4.2).
 pub fn estimate<'a>(
     note_cards: &[Card],
-    concept: &str,
+    concept: Ulid,
     lines: &'a [Line],
     scheduler: &Scheduler,
     now: Timestamp,
@@ -98,7 +101,7 @@ pub fn estimate<'a>(
     let mut rs = vec![];
     let mut used: Vec<&Line> = vec![];
     for c in note_cards {
-        let Some(card_lines) = c.id.as_deref().and_then(|id| by_card.get(id)) else { continue };
+        let Some(card_lines) = c.id.valid().and_then(|id| by_card.get(&id)) else { continue };
         if let Some(state) = scheduler.state(card_lines) {
             rs.push(retrievability(&state, now));
             used.extend(card_lines.iter().copied());
@@ -109,8 +112,7 @@ pub fn estimate<'a>(
         let r = rs.iter().sum::<f32>() / rs.len() as f32;
         return (Estimate::Cards { r }, used);
     }
-    let items: Vec<&Line> =
-        lines.iter().filter(|l| matches!(&l.subject, Subject::Concept(c) if c == concept)).collect();
+    let items: Vec<&Line> = lines.iter().filter(|l| l.subject == Subject::Concept(concept)).collect();
     match items.last() {
         Some(last) => {
             let age_days = (now.as_second() - last.t.as_second()).max(0) as f64 / SECONDS_PER_DAY;
@@ -120,7 +122,8 @@ pub fn estimate<'a>(
     }
 }
 
-/// Cards for a session (§2.6 step 3): due cards by due time, then new cards.
+/// Cards for a session (§2.6 step 3): due cards by due time, then new cards in the
+/// order of `all` ([`crate::cards::all`]'s order: by note path, then in note order).
 pub fn select<'a>(
     all: &'a [Card],
     lines: &[Line],
@@ -132,15 +135,14 @@ pub fn select<'a>(
     let mut due: Vec<(Timestamp, &Card)> = vec![];
     let mut fresh: Vec<&Card> = vec![];
     for c in all {
-        let Some(id) = c.id.as_deref() else { continue };
-        match by_card.get(id).and_then(|ls| scheduler.state(ls)) {
+        let Some(id) = c.id.valid() else { continue };
+        match by_card.get(&id).and_then(|ls| scheduler.state(ls)) {
             Some(state) if state.due <= now => due.push((state.due, c)),
             Some(_) => {}
             None => fresh.push(c),
         }
     }
-    due.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.id.cmp(&b.1.id)));
-    fresh.sort_by(|a, b| a.path.cmp(&b.path).then(a.position.cmp(&b.position)));
+    due.sort_by_key(|(due, c)| (*due, c.id.valid()));
     let today = now.to_zoned(TimeZone::UTC).date();
     let introduced_today =
         by_card.values().filter(|ls| ls.first().is_some_and(|l| l.t.to_zoned(TimeZone::UTC).date() == today)).count();
@@ -155,8 +157,13 @@ pub fn select<'a>(
 mod tests {
     use super::*;
 
+    /// Test id `n`.
+    fn id(n: u8) -> Ulid {
+        format!("01ARZ3NDEKTSV4RRFFQ69G5F{n:02}").parse().unwrap()
+    }
+
     fn line(t: &str, grade: Grade) -> Line {
-        Line { t: t.parse().unwrap(), subject: Subject::Card("C".into()), grade }
+        Line { t: t.parse().unwrap(), subject: Subject::Card(id(0)), grade }
     }
 
     #[test]
@@ -189,37 +196,36 @@ mod tests {
         assert!(a.due < e.due);
     }
 
-    fn card(path: &str, pos: usize, id: &str) -> Card {
+    fn card(path: &str, n: u8) -> Card {
         Card {
             path: path.to_string().try_into().unwrap(),
             range: 0..0,
-            position: pos,
-            id: Some(id.into()),
+            id: CardId::Valid(id(n)),
             question: "q".into(),
             answer: "a".into(),
         }
     }
 
-    fn card_line(card: &str, t: &str, grade: Grade) -> Line {
-        Line { t: t.parse().unwrap(), subject: Subject::Card(card.into()), grade }
+    fn card_line(card: u8, t: &str, grade: Grade) -> Line {
+        Line { t: t.parse().unwrap(), subject: Subject::Card(id(card)), grade }
     }
 
     #[test]
     fn selection_order_and_new_limit() {
         let all = vec![
-            card("concepts/a/z.md", 0, "N1"),
-            card("concepts/a/b.md", 1, "N2"),
-            card("concepts/a/b.md", 0, "N3"),
-            card("concepts/a/x.md", 0, "D1"),
+            card("concepts/a/b.md", 3),
+            card("concepts/a/b.md", 2),
+            card("concepts/a/x.md", 4),
+            card("concepts/a/z.md", 1),
         ];
         let lines = vec![
-            card_line("D1", "2026-01-01T00:00:00Z", Grade::Again),
-            card_line("GONE", "2026-01-01T00:00:00Z", Grade::Good),
+            card_line(4, "2026-01-01T00:00:00Z", Grade::Again),
+            card_line(9, "2026-01-01T00:00:00Z", Grade::Good), // no such card
         ];
         let s = Scheduler::new(0.9);
         let (sel, n) = select(&all, &lines, &s, 2, "2026-10-30T00:00:00Z".parse().unwrap());
-        let ids: Vec<&str> = sel.iter().map(|c| c.id.as_deref().unwrap()).collect();
-        assert_eq!(ids, vec!["D1", "N3", "N2"]);
+        let ids: Vec<Ulid> = sel.iter().map(|c| c.id.valid().unwrap()).collect();
+        assert_eq!(ids, [id(4), id(3), id(2)], "the due card, then new ones in card order");
         assert_eq!(n, 2);
     }
 
@@ -227,15 +233,15 @@ mod tests {
     fn estimates() {
         let s = Scheduler::new(0.9);
         let now: Timestamp = "2026-10-30T00:00:00Z".parse().unwrap();
-        let cs = vec![card("concepts/a/x.md", 0, "C1"), card("concepts/a/x.md", 1, "C2")];
-        let lines = vec![card_line("C1", "2026-10-29T00:00:00Z", Grade::Good)];
-        let (e, used) = estimate(&cs, "K", &lines, &s, now);
+        let cs = vec![card("concepts/a/x.md", 1), card("concepts/a/x.md", 2)];
+        let lines = vec![card_line(1, "2026-10-29T00:00:00Z", Grade::Good)];
+        let k = id(7);
+        let (e, used) = estimate(&cs, k, &lines, &s, now);
         assert!(matches!(e, Estimate::Cards { r } if r > 0.5 && r <= 1.0));
         assert_eq!(used.len(), 1);
-        let quiz =
-            vec![Line { subject: Subject::Concept("K".into()), ..card_line("x", "2026-10-28T00:00:00Z", Grade::Hard) }];
-        let (e, _) = estimate(&[], "K", &quiz, &s, now);
+        let quiz = vec![Line { subject: Subject::Concept(k), ..card_line(8, "2026-10-28T00:00:00Z", Grade::Hard) }];
+        let (e, _) = estimate(&[], k, &quiz, &s, now);
         assert!(matches!(e, Estimate::Item { grade: Grade::Hard, age_days } if (age_days - 2.0).abs() < 1e-9));
-        assert_eq!(estimate(&[], "K", &[], &s, now).0, Estimate::Unknown);
+        assert_eq!(estimate(&[], k, &[], &s, now).0, Estimate::Unknown);
     }
 }

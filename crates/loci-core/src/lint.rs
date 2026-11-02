@@ -8,23 +8,28 @@ use unicode_normalization::is_nfc;
 use crate::config::Budgets;
 use crate::envelope::{Diagnostic, sort_diagnostics};
 use crate::git;
+use crate::id::Ulid;
 use crate::index::{Index, LinkError};
 use crate::parse::{FmError, FmValue, Note, TopBlock, prereq_item};
 use crate::path::VaultPath;
-use crate::vault::{self, Kind};
+use crate::vault::Kind;
 
 const CONCEPT_FIELDS: [&str; 2] = ["id", "prereqs"];
 
-/// The rules over the index (§7.3). The rules that read file bytes or git are
+/// The rules over the index (§7.3), sorted. The rules that read file bytes or git are
 /// [`disk_rules`].
-pub struct Lint<'a> {
-    pub index: &'a Index,
-    pub budgets: &'a Budgets,
+pub fn run(index: &Index, budgets: &Budgets) -> Vec<Diagnostic> {
+    Lint { index, budgets }.run()
+}
+
+/// The index rules, sharing the index and the budgets.
+struct Lint<'a> {
+    index: &'a Index,
+    budgets: &'a Budgets,
 }
 
 impl Lint<'_> {
-    /// Sorted diagnostics.
-    pub fn run(&self) -> Vec<Diagnostic> {
+    fn run(&self) -> Vec<Diagnostic> {
         let mut out = vec![];
         self.files(&mut out);
         for note in self.index.notes() {
@@ -147,8 +152,8 @@ impl Lint<'_> {
         match get("id") {
             None => out.push(d("fm.missing-field", "concept has no `id`".into())),
             Some(FmValue::Str { value, span, .. }) => {
-                if !vault::is_ulid(value) {
-                    out.push(d("fm.id-format", format!("`id` `{value}` is not a ULID")).at(text, span.clone()));
+                if let Err(e) = value.parse::<Ulid>() {
+                    out.push(d("fm.id-format", format!("`id` {e}")).at(text, span.clone()));
                 }
             }
             Some(v) => out.push(ty("id", "a string", v.span())),
@@ -195,15 +200,11 @@ impl Lint<'_> {
                 }
                 Err(LinkError::Heading) => out.push(at(
                     "link.dangling-heading",
-                    format!(
-                        "`{}` has no heading `{}`",
-                        target_name(note, link),
-                        link.fragment.as_deref().unwrap_or("")
-                    ),
+                    format!("`{}` has no heading `{}`", target_name(note, link), fragment(link)),
                 )),
                 Err(LinkError::Block) => out.push(at(
                     "link.dangling-block",
-                    format!("`{}` has no block `{}`", target_name(note, link), link.fragment.as_deref().unwrap_or("")),
+                    format!("`{}` has no block `{}`", target_name(note, link), fragment(link)),
                 )),
             }
         }
@@ -212,10 +213,10 @@ impl Lint<'_> {
     fn vault_rules(&self, out: &mut Vec<Diagnostic>) {
         let index = self.index;
         // Duplicate ids.
-        let mut ids: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+        let mut ids: BTreeMap<Ulid, Vec<&str>> = BTreeMap::new();
         for n in index.concepts() {
-            if let Some(id) = n.fm_str("id") {
-                ids.entry(id.to_string()).or_default().push(n.path.as_str());
+            if let Some(id) = n.id() {
+                ids.entry(id).or_default().push(n.path.as_str());
             }
         }
         for (id, paths) in &ids {
@@ -244,6 +245,11 @@ impl Lint<'_> {
         // Prereq cycles.
         prereq_cycles(index, out);
     }
+}
+
+/// A link's fragment as written after the `#`.
+fn fragment(link: &crate::parse::Link) -> String {
+    link.fragment.as_ref().map(ToString::to_string).unwrap_or_default()
 }
 
 fn target_name(from: &Note, link: &crate::parse::Link) -> String {
@@ -305,30 +311,37 @@ fn prereq_cycles(index: &Index, out: &mut Vec<Diagnostic>) {
     // Concept path -> prerequisite paths.
     let graph: BTreeMap<VaultPath, Vec<VaultPath>> =
         index.concepts().map(|n| (n.path.clone(), index.prereqs(n).0)).collect();
-    // Iterative DFS with colours; report each cycle once, from its member with the
-    // smallest slug.
-    let mut state: BTreeMap<&VaultPath, u8> = BTreeMap::new();
+    // Iterative DFS; report each cycle once, from its member with the smallest slug.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Visit {
+        Unseen,
+        /// On the current DFS path: an edge back to it closes a cycle.
+        OnPath,
+        Done,
+    }
+    let mut state: BTreeMap<&VaultPath, Visit> = BTreeMap::new();
+    let visit = |state: &BTreeMap<&VaultPath, Visit>, p: &VaultPath| state.get(p).copied().unwrap_or(Visit::Unseen);
     let mut reported: BTreeSet<Vec<VaultPath>> = BTreeSet::new();
     for start in graph.keys() {
-        if state.get(start).copied().unwrap_or(0) != 0 {
+        if visit(&state, start) != Visit::Unseen {
             continue;
         }
         let mut stack: Vec<(&VaultPath, usize)> = vec![(start, 0)];
         let mut path: Vec<&VaultPath> = vec![start];
-        state.insert(start, 1);
+        state.insert(start, Visit::OnPath);
         while let Some((node, i)) = stack.last_mut() {
             let edges = &graph[*node];
             if *i < edges.len() {
                 let next = &edges[*i];
                 *i += 1;
-                match state.get(next).copied().unwrap_or(0) {
-                    0 if graph.contains_key(next) => {
-                        state.insert(next, 1);
+                match visit(&state, next) {
+                    Visit::Unseen if graph.contains_key(next) => {
+                        state.insert(next, Visit::OnPath);
                         stack.push((next, 0));
                         path.push(next);
                     }
-                    1 => {
-                        let pos = path.iter().position(|p| *p == next).expect("a grey node is on the path");
+                    Visit::OnPath => {
+                        let pos = path.iter().position(|p| *p == next).expect("an `OnPath` node is on the path");
                         let mut cycle: Vec<VaultPath> = path[pos..].iter().map(|p| (*p).clone()).collect();
                         let min = cycle
                             .iter()
@@ -346,10 +359,10 @@ fn prereq_cycles(index: &Index, out: &mut Vec<Diagnostic>) {
                             );
                         }
                     }
-                    _ => {}
+                    Visit::Unseen | Visit::Done => {}
                 }
             } else {
-                state.insert(node, 2);
+                state.insert(node, Visit::Done);
                 stack.pop();
                 path.pop();
             }
@@ -360,7 +373,7 @@ fn prereq_cycles(index: &Index, out: &mut Vec<Diagnostic>) {
 /// The rules that compare the working tree with HEAD (§7.3): `sources.changed` and
 /// `material-dropped`. Without a HEAD there is nothing to compare; a git failure is
 /// warning `git.failed`, and neither rule is checked. Unsorted; the caller merges them
-/// with [`Lint::run`].
+/// with [`run`]'s.
 pub fn disk_rules(index: &Index, root: &Path) -> Vec<Diagnostic> {
     let mut out = vec![];
     let changes = match git::has_head(root).and_then(|head| head.then(|| git::status(root)).transpose()) {
@@ -394,12 +407,11 @@ fn sources_changed(changes: &git::Changes, out: &mut Vec<Diagnostic>) {
 /// file the index lists, whose counts the index already holds. Only reading `HEAD` can
 /// fail.
 fn check_material(index: &Index, root: &Path, changes: &git::Changes, out: &mut Vec<Diagnostic>) -> Result<(), String> {
-    const CATEGORIES: [&str; 3] = ["math spans", "images", "fenced code blocks"];
-    let of = |c: &crate::parse::Counts| [c.math, c.images, c.code];
+    use crate::parse::Counts;
     // A `HEAD` blob that is not UTF-8 holds no parsed material.
     let head = |p: &VaultPath| {
         git::show(root, "HEAD", p).map(|b| match String::from_utf8(b) {
-            Ok(text) => of(&crate::parse::parse(p, p.kind().expect("a vault path"), text).counts),
+            Ok(text) => crate::parse::parse(p, p.kind().expect("a vault path"), text).counts.values(),
             Err(_) => [0; 3],
         })
     };
@@ -408,8 +420,7 @@ fn check_material(index: &Index, root: &Path, changes: &git::Changes, out: &mut 
     // Per category, the first deleted path that held any (§7.1: vault-level rules
     // report on the first involved path).
     let mut first: [Option<&str>; 3] = [None; 3];
-    let mut deleted_paths: Vec<&VaultPath> =
-        changes.deleted.iter().filter(|p| p.as_str().ends_with(".md") && p.is_core()).collect();
+    let mut deleted_paths: Vec<&VaultPath> = changes.deleted.iter().filter(|p| p.is_note() && p.is_core()).collect();
     deleted_paths.sort();
     for p in deleted_paths {
         for (i, n) in head(p)?.into_iter().enumerate() {
@@ -421,15 +432,15 @@ fn check_material(index: &Index, root: &Path, changes: &git::Changes, out: &mut 
     }
     let new_files = changes.added.iter().chain(&changes.untracked).map(|p| (p, false));
     let changed = changes.modified.iter().map(|p| (p, true)).chain(new_files);
-    let listed = |p: &VaultPath| index.files.binary_search(p).is_ok();
-    for (p, in_head) in changed.filter(|(p, _)| p.as_str().ends_with(".md") && listed(p)) {
-        let now = of(&index.parsed(p).expect("a listed `.md` file is parsed").counts);
+    let listed = |p: &VaultPath| index.contains(p);
+    for (p, in_head) in changed.filter(|(p, _)| p.is_note() && listed(p)) {
+        let now = index.parsed(p).expect("a listed `.md` file is parsed").counts.values();
         let before = if in_head { head(p)? } else { [0; 3] };
         for i in 0..3 {
             added[i] += now[i].saturating_sub(before[i]);
         }
     }
-    for (i, name) in CATEGORIES.iter().enumerate() {
+    for (i, name) in Counts::NAMES.iter().enumerate() {
         if deleted[i] > added[i] {
             let path = first[i].expect("deleted[i] > 0 implies a deleted file held some");
             out.push(
@@ -451,11 +462,7 @@ mod tests {
     fn lint(files: &[(&str, &str)]) -> Vec<(String, String)> {
         let index = crate::index::from_texts(files);
         let budgets = Budgets::default();
-        Lint { index: &index, budgets: &budgets }
-            .run()
-            .into_iter()
-            .map(|d| (d.path().unwrap_or_default().to_string(), d.code))
-            .collect()
+        run(&index, &budgets).into_iter().map(|d| (d.path().unwrap_or_default().to_string(), d.code)).collect()
     }
 
     #[test]
@@ -466,7 +473,10 @@ mod tests {
             let d = lint(&files);
             assert!(d.contains(&("concepts/a/y.md".into(), "fm.field-type".into())), "{bad}: {d:?}");
             let index = crate::index::from_texts(&files);
-            assert!(index.parsed("concepts/a/y.md").unwrap().links.is_empty(), "{bad} is not a link");
+            assert!(
+                index.parsed(&VaultPath::new("concepts/a/y.md".into()).unwrap()).unwrap().links.is_empty(),
+                "{bad} is not a link"
+            );
         }
     }
 
@@ -478,7 +488,10 @@ mod tests {
         let x = |code: &str| d.iter().filter(|(p, c)| p == "concepts/a/x.md" && c == code).count();
         assert_eq!(x("fm.field-type"), 1, "{d:?}");
         let index = crate::index::from_texts(&files);
-        assert!(index.parsed("concepts/a/x.md").unwrap().links.is_empty(), "no link from an escaped scalar");
+        assert!(
+            index.parsed(&VaultPath::new("concepts/a/x.md".into()).unwrap()).unwrap().links.is_empty(),
+            "no link from an escaped scalar"
+        );
     }
 
     const OK: &str = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# A\n\nSee [[journal/r/2025/03/25-03-14]].\n";

@@ -87,14 +87,15 @@ Reads exactly one JSON object from stdin:
 
 | Key | Required | Meaning |
 |---|---|---|
-| `card` | one of `card`, `concept` | card id (§1.2) |
+| `card` | one of `card`, `concept` | card id (§1.2), a ULID |
 | `concept` | one of `card`, `concept` | concept ULID, for a graded question on a concept that has no card |
 | `grade` | yes | `again`, `hard`, `good` or `easy` |
 
 It adds `t` (now, UTC), validates, and appends the line to
 `plugins/learn/reviews.jsonl`.
 
-- Input that does not match the table: `learn.bad-input`.
+- Input that does not match the table, including a `card` or `concept` that is not a
+  ULID: `learn.bad-input`.
 - A `card` that is not a card id in the working tree: `learn.unknown-card`.
 - A `concept` that does not name a concept note in the working tree:
   `learn.unknown-concept`.
@@ -159,7 +160,7 @@ recomputed from it and from the notes; nothing computed is stored.
   on its own (per call for `log`, per session for `review`).
 - **`plugins/learn/.gitattributes` marks the file `merge=union`,** so appends from
   two machines merge cleanly. Lines are processed in timestamp order.
-- **A line that does not parse** (a bad merge, a hand edit) is `learn.log` (exit 1)
+- **A line that does not parse** (a bad merge, a hand edit, an id that is not a ULID) is `learn.log` (exit 1)
   for every command that reads the log; it names the line.
 
 A line has the keys of the `log` input (§2.4) plus `t` (UTC, RFC 3339). How a grade

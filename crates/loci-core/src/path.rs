@@ -10,7 +10,8 @@ use relative_path::{Component, RelativePath};
 
 use crate::config;
 use crate::envelope::Refusal;
-use crate::vault::{Kind, SLUG_PATTERN, is_slug, nfc};
+use crate::id::{SLUG_PATTERN, Slug};
+use crate::vault::{self, Kind, nfc};
 
 /// A vault-relative path: `/`-separated UTF-8, with no empty, `.` or `..` segment and
 /// no leading or trailing `/`. Not necessarily NFC: git lists the names as stored, and
@@ -112,7 +113,7 @@ impl VaultPath {
         if first == "plugins" || first == ".git" || path == config::FILE || path == ".gitignore" {
             return None;
         }
-        let is_md = self.rel().extension() == Some("md");
+        let is_md = self.is_note();
         match first {
             "sources" => return Some(Kind::Source),
             "inbox" => return Some(Kind::Inbox),
@@ -123,7 +124,7 @@ impl VaultPath {
         }
         if parts.len() == 1 {
             return Some(match first {
-                "RULES.md" | "STYLE.md" | "AGENTS.md" => Kind::Rules,
+                vault::AGENTS | vault::RULES | vault::STYLE => Kind::Rules,
                 _ => Kind::Unknown,
             });
         }
@@ -147,12 +148,30 @@ impl VaultPath {
         (parts.next() == Some("concepts")).then(|| parts.next()).flatten()
     }
 
+    /// Whether this is a markdown note: its extension is `md` (a file named `.md` has
+    /// none, so is not one).
+    pub fn is_note(&self) -> bool {
+        self.rel().extension() == Some("md")
+    }
+
+    /// This path as a note argument means it (m0 §8): itself if it is a note, else with
+    /// `.md` added.
+    pub fn as_note(&self) -> VaultPath {
+        if self.is_note() { self.clone() } else { self.with_suffix(".md") }
+    }
+
     /// A note's name: the file name without `.md` (a concept's slug); any other file's
     /// full name.
     pub fn stem(&self) -> &str {
         let p = self.rel();
-        let name = if p.extension() == Some("md") { p.file_stem() } else { p.file_name() };
+        let name = if self.is_note() { p.file_stem() } else { p.file_name() };
         name.expect("a vault path ends in a name")
+    }
+
+    /// The slug a concept file names: its stem, if that is a slug (§6.2; an upper-case
+    /// stem is none).
+    pub fn slug(&self) -> Option<Slug> {
+        self.stem().parse().ok()
     }
 
     /// The extension of a source file `sources/<type>/<slug>.<ext>` (m0 §6.4): `<type>`
@@ -172,7 +191,7 @@ impl VaultPath {
     /// are the user's.
     pub fn journal_ok(&self) -> bool {
         let parts: Vec<&str> = self.components().collect();
-        parts.len() >= 3 && parts[0] == "journal" && is_slug(parts[1])
+        parts.len() >= 3 && parts[0] == "journal" && parts[1].parse::<Slug>().is_ok()
     }
 
     /// The path rule this path breaks, if any, as (lint code, message): a file under
@@ -187,9 +206,10 @@ impl VaultPath {
         }
         match self.kind() {
             Some(Kind::Unknown) => Some(("kind.unknown", "file is outside every known folder".to_string())),
-            Some(Kind::Concept) if !is_slug(self.stem()) => {
-                Some(("slug.format", format!("slug `{}` does not match the slug pattern", self.stem())))
-            }
+            Some(Kind::Concept) => match self.stem().parse::<Slug>() {
+                Ok(_) => None,
+                Err(e) => Some(("slug.format", format!("slug {e}"))),
+            },
             Some(Kind::Journal) if !self.journal_ok() => Some((
                 "journal.path",
                 "journal entry is not inside a `journal/<stream>/` folder whose name is a slug".to_string(),
@@ -308,6 +328,13 @@ mod tests {
         ] {
             assert_eq!(VaultPath::from_arg(bad).unwrap_err().code(), code, "{bad}");
         }
+    }
+
+    #[test]
+    fn notes() {
+        assert!(vp("views/v.md").is_note() && !vp("views/.md").is_note() && !vp("a/x.png").is_note());
+        assert_eq!(vp("concepts/a/x").as_note(), vp("concepts/a/x.md"));
+        assert_eq!(vp("concepts/a/x.md").as_note(), vp("concepts/a/x.md"));
     }
 
     #[test]

@@ -34,11 +34,14 @@ fn names() {
     let (v, code, env) = lint("names");
     assert_eq!(code, 1);
     let dfs = "concepts/algo/dfs.md";
-    // `[[slug]]` resolves to a concept (case-insensitively); paths resolve.
+    // `[[slug]]` resolves to a concept, written exactly (`[[BFS]]` does not); paths
+    // resolve.
     let dangling = covered_by(&v, &env, "link.dangling", dfs);
-    assert_eq!(dangling, ["plan", "25-03-14", "diagram.png", "breadth-first"]);
-    // Nothing close to suggest: create the concept, or link a non-concept by path.
-    for d in with_code(&env, "link.dangling") {
+    assert_eq!(dangling, ["BFS", "plan", "25-03-14", "diagram.png", "breadth-first"]);
+    let hints: Vec<&str> = with_code(&env, "link.dangling").iter().map(|d| d["hint"].as_str().unwrap()).collect();
+    assert_eq!(hints[0], "no concept is named `BFS`; did you mean [[bfs]]?");
+    // Nothing close to suggest for the rest: create the concept, or link a non-concept by path.
+    for d in &with_code(&env, "link.dangling")[1..] {
         let hint = d["hint"].as_str().unwrap();
         assert!(hint.starts_with("no concept is named") && hint.ends_with("or link a non-concept by path"), "{hint}");
     }
@@ -49,7 +52,7 @@ fn names() {
     assert_eq!(path_of(dups[0]), "concepts/algo/dup.md");
     assert!(dups[0]["message"].as_str().unwrap().contains("concepts/other/dup.md"));
     assert!(on_path(&env, "views/learn/bfs.md").is_empty());
-    assert_eq!(env["data"]["errors"], 7);
+    assert_eq!(env["data"]["errors"], 8);
     assert_eq!(env["data"]["warnings"], 0);
     assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
 }
@@ -391,10 +394,10 @@ fn vault_found_from_a_subdirectory_and_by_flag() {
     let v = TestVault::committed(BIN, "names");
     let (code, env) = v.run_in(&v.root.join("concepts/algo"), &["lint"]);
     assert_eq!(code, 1);
-    assert_eq!(env["data"]["errors"], 7);
+    assert_eq!(env["data"]["errors"], 8);
     let elsewhere = v.home();
     let (_, env) = v.run_in(&elsewhere, &["--vault", v.root.to_str().unwrap(), "lint"]);
-    assert_eq!(env["data"]["errors"], 7);
+    assert_eq!(env["data"]["errors"], 8);
     let (code, env) = v.run_in(&elsewhere, &["lint"]);
     assert_eq!((code, error_code(&env)), (1, "vault.not-found"));
 }

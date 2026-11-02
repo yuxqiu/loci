@@ -27,7 +27,7 @@ pub fn plan(
     if ignored(to)? {
         return Err(Refusal::refused("path.ignored", format!("`{to}` is ignored by git")));
     }
-    let is_file = index.files.binary_search(from).is_ok();
+    let is_file = index.contains(from);
     let dir_files: Vec<&VaultPath> = index.files.iter().filter(|f| f.starts_with_folder(from)).collect();
     if !is_file && dir_files.is_empty() {
         return Err(Refusal::refused("mv.from", format!("`{from}` does not exist or is ignored")));
@@ -51,9 +51,9 @@ pub fn plan(
     }
     // A file stays what it is: a note keeps its `.md`, and another file does not gain
     // one (it would be read as a note that is not one).
-    let md = |p: &VaultPath| p.as_str().ends_with(".md");
-    if let Some((old, new)) = map.iter().find(|(old, new)| md(old) != md(new)) {
-        let what = if md(old) { "a note keeps the `.md` extension" } else { "only a note has the `.md` extension" };
+    if let Some((old, new)) = map.iter().find(|(old, new)| old.is_note() != new.is_note()) {
+        let what =
+            if old.is_note() { "a note keeps the `.md` extension" } else { "only a note has the `.md` extension" };
         return Err(Refusal::refused("mv.to", format!("`{new}`: {what}")));
     }
     // A concept stays a concept (as `new` checks before the path rules).
@@ -107,17 +107,15 @@ pub fn plan(
     // concept that stays nor with another moved file.
     let mut new_slugs = BTreeSet::new();
     for new in map.values().filter(|n| n.kind() == Some(Kind::Concept)) {
-        let new_slug = new.stem();
-        if index.name_taken(new_slug, |p| map.contains_key(p)) || !new_slugs.insert(new_slug.to_lowercase()) {
+        let new_slug = new.slug().expect("`problem` refused a concept whose stem is no slug");
+        if index.name_taken(&new_slug, |p| map.contains_key(p)) || !new_slugs.insert(new_slug.clone()) {
             return Err(Refusal::refused("mv.collision", format!("slug `{new_slug}` is already used")));
         }
     }
 
-    let mut change = Change { moves: map.clone(), ..Change::default() };
-    let edits = relink::link_edits(index, &map, &BTreeSet::new());
-    relink::add_writes(index, &mut change, edits)?;
-    relink::verify(index, &map, &change, "mv.verify")?;
-    Ok(change)
+    let change = Change { moves: map.clone(), ..Change::default() };
+    let edits = relink::link_edits(index, &map, &change);
+    relink::finish(index, change, &map, edits, "mv.verify")
 }
 
 /// The stored spelling of `from`: itself when a file or folder has that name, else the
@@ -160,7 +158,7 @@ mod tests {
         let i =
             from_texts(&[("concepts/a/old.md", C), ("views/v.md", "# V\n\n[[old]] [[old#T|x]] [[concepts/a/old]]\n")]);
         let p = plan(&i, &vp("concepts/a/old.md"), &vp("concepts/a/new.md"), |_| Ok(false), |_| false).unwrap();
-        assert_eq!(p.writes["views/v.md"], "# V\n\n[[new]] [[new#T|x]] [[concepts/a/new]]\n");
+        assert_eq!(p.writes["views/v.md"].text, "# V\n\n[[new]] [[new#T|x]] [[concepts/a/new]]\n");
         assert!(!p.writes.contains_key("concepts/a/new.md"), "a rename does not edit the note");
     }
 
@@ -169,14 +167,17 @@ mod tests {
         let i =
             from_texts(&[("concepts/a/dfs.md", C), ("views/w.md", "[[dfs#Typo]] [[concepts/a/dfs#^nope]] [[dfs]]\n")]);
         let p = plan(&i, &vp("concepts/a/dfs.md"), &vp("concepts/a/depth-first.md"), |_| Ok(false), |_| false).unwrap();
-        assert_eq!(p.writes["views/w.md"], "[[depth-first#Typo]] [[concepts/a/depth-first#^nope]] [[depth-first]]\n");
+        assert_eq!(
+            p.writes["views/w.md"].text,
+            "[[depth-first#Typo]] [[concepts/a/depth-first#^nope]] [[depth-first]]\n"
+        );
     }
 
     #[test]
     fn rename_back_is_allowed() {
         let i = from_texts(&[("concepts/a/new.md", C), ("views/v.md", "[[new]]\n")]);
         let p = plan(&i, &vp("concepts/a/new.md"), &vp("concepts/a/old.md"), |_| Ok(false), |_| false).unwrap();
-        assert_eq!(p.writes["views/v.md"], "[[old]]\n");
+        assert_eq!(p.writes["views/v.md"].text, "[[old]]\n");
     }
 
     #[test]
@@ -288,14 +289,14 @@ mod tests {
         let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# T\n\nSee [[sources/papers/p.pdf#p3]].\n";
         let i = from_texts(&[("concepts/a/x.md", c), ("sources/papers/p.pdf", "")]);
         let p = plan(&i, &vp("sources/papers/p.pdf"), &vp("sources/papers/q.pdf"), |_| Ok(false), |_| false).unwrap();
-        assert!(p.writes["concepts/a/x.md"].contains("[[sources/papers/q.pdf#p3]]"));
+        assert!(p.writes["concepts/a/x.md"].text.contains("[[sources/papers/q.pdf#p3]]"));
     }
 
     #[test]
     fn table_pipe_kept() {
         let i = from_texts(&[("concepts/a/old.md", C), ("views/v.md", "# V\n\n| a |\n|---|\n| [[old\\|x]] |\n")]);
         let p = plan(&i, &vp("concepts/a/old.md"), &vp("concepts/a/new.md"), |_| Ok(false), |_| false).unwrap();
-        assert!(p.writes["views/v.md"].contains("[[new\\|x]]"));
+        assert!(p.writes["views/v.md"].text.contains("[[new\\|x]]"));
     }
 
     #[test]
@@ -308,6 +309,6 @@ mod tests {
         ]);
         let p = plan(&i, &vp("concepts/a/g"), &vp("concepts/a/h"), |_| Ok(false), |_| false).unwrap();
         assert_eq!(p.moves.len(), 2);
-        assert_eq!(p.writes["views/v.md"], "# V\n\n[[x]] ![[concepts/a/h/p.png]]\n");
+        assert_eq!(p.writes["views/v.md"].text, "# V\n\n[[x]] ![[concepts/a/h/p.png]]\n");
     }
 }

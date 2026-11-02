@@ -19,6 +19,18 @@ them under its version.
 
 ### Changed
 
+- `loci learn log` refuses a `card` or `concept` that is not a ULID
+  (`learn.bad-input`), and a review-log line with such an id is `learn.log`.
+- A concept whose file name is not a slug (`a_b.md`, `BFS.md`, already
+  `slug.format`) can no longer be named by a bare link or a slug argument; link it
+  by path until it is renamed.
+- A card's `::` is found as markdown reads the item: a lone backtick is literal text
+  (`` what is ` :: x `` is now a card), and `::` inside math does not split it.
+- `loci bench` refuses a cases file with no cases (`bench.none`) instead of
+  reporting a pass rate of 0.
+- Slugs are matched exactly: `[[BFS]]` no longer names `bfs.md` (lint says
+  `link.dangling` and suggests `[[bfs]]`); the same for slug arguments and
+  `prereqs` items.
 - The `--json` diagnostics nest their location: `"location": {"path", "span":
   {"line", "col", "byte_start", "byte_end"}}`, or `null`, instead of five flat
   fields that could be partly `null`.

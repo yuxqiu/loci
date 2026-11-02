@@ -2,11 +2,11 @@
 
 use std::process::ExitCode;
 
-use loci_core::envelope::{Refusal, Report};
+use loci_core::envelope::{Exit, Refusal, Report};
 use loci_core::plugin;
 
 use super::{Ctx, plugins};
-use crate::{CORE_COMMANDS, VERSION};
+use crate::{VERSION, core_commands};
 
 pub fn run(ctx: &Ctx, args: Vec<String>) -> ExitCode {
     let (name, rest) = args.split_first().expect("clap gives an external subcommand a name");
@@ -15,7 +15,7 @@ pub fn run(ctx: &Ctx, args: Vec<String>) -> ExitCode {
         let names: Vec<&str> = installed.iter().map(|p| p.name.as_str()).collect();
         let msg = format!(
             "unknown command `{name}`; core commands: {}; installed plugins: {}",
-            CORE_COMMANDS.join(", "),
+            core_commands().join(", "),
             if names.is_empty() { "none".to_string() } else { names.join(", ") }
         );
         return fail(ctx, name, Refusal::refused("cmd.unknown", msg));
@@ -30,7 +30,7 @@ pub fn run(ctx: &Ctx, args: Vec<String>) -> ExitCode {
         cmd.arg("--json");
     }
     match cmd.status() {
-        Ok(status) => ExitCode::from(status.code().map_or(3, |c| c.clamp(0, 255) as u8)),
+        Ok(status) => ExitCode::from(status.code().map_or(Exit::Internal as u8, |c| c.clamp(0, 255) as u8)),
         Err(e) => fail(ctx, name, Refusal::internal("plugin.failed", format!("cannot run {}: {e}", p.path.display()))),
     }
 }

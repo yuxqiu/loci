@@ -6,6 +6,7 @@ use std::path::Path;
 use jiff::Timestamp;
 use loci_core::envelope::Refusal;
 use loci_core::git;
+use loci_core::id::Ulid;
 use serde::{Deserialize, Serialize};
 
 pub const DIR: &str = "plugins/learn";
@@ -56,8 +57,8 @@ impl Grade {
 /// What a line grades: a card, or a question on a concept that has no card.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Subject {
-    Card(String),
-    Concept(String),
+    Card(Ulid),
+    Concept(Ulid),
 }
 
 /// One line of the review log (§3): the `log` input plus `t`. Stored as `card` or
@@ -76,9 +77,9 @@ pub struct Line {
 struct RawLine {
     t: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    card: Option<String>,
+    card: Option<Ulid>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    concept: Option<String>,
+    concept: Option<Ulid>,
     grade: Grade,
 }
 
@@ -109,8 +110,8 @@ impl From<Line> for RawLine {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Input {
-    pub card: Option<String>,
-    pub concept: Option<String>,
+    pub card: Option<Ulid>,
+    pub concept: Option<Ulid>,
     pub grade: Grade,
 }
 
@@ -188,14 +189,15 @@ mod tests {
 
     #[test]
     fn validation() {
-        assert!(input(r#"{"card":"X","grade":"good"}"#).is_ok());
-        assert!(input(r#"{"concept":"C","grade":"hard"}"#).is_ok());
+        assert!(input(r#"{"card":"01JB9XQ7Z3K4M5N6P7Q8R9S0TV","grade":"good"}"#).is_ok());
+        assert!(input(r#"{"concept":"01JBA2K7N4P8R3T6W9X2Z5C8DF","grade":"hard"}"#).is_ok());
         for bad in [
-            r#"{"card":"X","grade":"great"}"#,
-            r#"{"card":"X","concept":"C","grade":"good"}"#,
+            r#"{"card":"01JB9XQ7Z3K4M5N6P7Q8R9S0TV","grade":"great"}"#,
+            r#"{"card":"01JB9XQ7Z3K4M5N6P7Q8R9S0TV","concept":"01JBA2K7N4P8R3T6W9X2Z5C8DF","grade":"good"}"#,
             r#"{"grade":"good"}"#,
-            r#"{"card":"X"}"#,
-            r#"{"card":"X","grade":"good","note":"x"}"#,
+            r#"{"card":"01JB9XQ7Z3K4M5N6P7Q8R9S0TV"}"#,
+            r#"{"card":"01JB9XQ7Z3K4M5N6P7Q8R9S0TV","grade":"good","note":"x"}"#,
+            r#"{"card":"X","grade":"good"}"#,
         ] {
             assert!(input(bad).is_err(), "{bad}");
         }
@@ -204,8 +206,9 @@ mod tests {
     #[test]
     fn a_stored_line_needs_exactly_one_subject() {
         for bad in [
-            r#"{"t":"1970-01-01T00:00:00Z","card":"X","concept":"C","grade":"good"}"#,
+            r#"{"t":"1970-01-01T00:00:00Z","card":"01JB9XQ7Z3K4M5N6P7Q8R9S0TV","concept":"01JBA2K7N4P8R3T6W9X2Z5C8DF","grade":"good"}"#,
             r#"{"t":"1970-01-01T00:00:00Z","grade":"good"}"#,
+            r#"{"t":"1970-01-01T00:00:00Z","card":"X","grade":"good"}"#,
         ] {
             assert!(serde_json::from_str::<Line>(bad).is_err(), "{bad}");
         }
@@ -213,9 +216,9 @@ mod tests {
 
     #[test]
     fn line_round_trip() {
-        let l = input(r#"{"card":"X","grade":"easy"}"#).unwrap();
+        let l = input(r#"{"card":"01JB9XQ7Z3K4M5N6P7Q8R9S0TV","grade":"easy"}"#).unwrap();
         let s = serde_json::to_string(&l).unwrap();
-        assert_eq!(s, r#"{"t":"1970-01-01T00:00:00Z","card":"X","grade":"easy"}"#);
+        assert_eq!(s, r#"{"t":"1970-01-01T00:00:00Z","card":"01JB9XQ7Z3K4M5N6P7Q8R9S0TV","grade":"easy"}"#);
         assert_eq!(serde_json::from_str::<Line>(&s).unwrap(), l);
     }
 }

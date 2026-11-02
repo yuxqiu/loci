@@ -2,9 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
-use regex::Regex;
 use relative_path::RelativePath;
 use unicode_normalization::UnicodeNormalization;
 
@@ -61,30 +59,15 @@ impl serde::Serialize for Kind {
     }
 }
 
-/// A slug, unanchored: lowercase letters, other letters and digits, in `-`-joined words.
-pub(crate) const SLUG_PATTERN: &str = r"[\p{Ll}\p{Lo}\p{N}]+(?:-[\p{Ll}\p{Lo}\p{N}]+)*";
-static SLUG: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!("^{SLUG_PATTERN}$")).unwrap());
-/// A slug (m0 §6.2): lowercase letters, other letters and digits, in `-`-joined words.
-pub fn is_slug(s: &str) -> bool {
-    SLUG.is_match(s)
-}
-
-/// A ULID in canonical form (Crockford base32, uppercase, 26 characters).
-pub fn is_ulid(s: &str) -> bool {
-    // Canonical Crockford base32, 26 characters, at most 128 bits (so the first is
-    // 0-7). Not `ulid::Ulid::from_string`: it accepts lowercase and drops the bits
-    // past 128 without an error.
-    s.len() == 26 && s.as_bytes()[0] <= b'7' && s.bytes().all(|b| b"0123456789ABCDEFGHJKMNPQRSTVWXYZ".contains(&b))
-}
+/// The rule files at the vault root (m0 §3): the agent entry point, the user's rules
+/// and the user's style.
+pub const AGENTS: &str = "AGENTS.md";
+pub const RULES: &str = "RULES.md";
+pub const STYLE: &str = "STYLE.md";
 
 /// NFC form of a string.
 pub fn nfc(s: &str) -> String {
     s.nfc().collect()
-}
-
-/// A new concept id: a ULID (m0 §6.1).
-pub fn new_concept_id() -> String {
-    ulid::Ulid::generate().to_string()
 }
 
 #[derive(Debug, Clone)]
@@ -233,7 +216,7 @@ fn walk(root: &Path) -> Result<Walk, Refusal> {
         if !meta.is_file() {
             continue; // A submodule.
         }
-        if rel.as_str().ends_with(".md") {
+        if rel.is_note() {
             match std::fs::read(&abs).map(String::from_utf8) {
                 Ok(Ok(text)) => {
                     out.markdown.insert(rel.clone(), text);
@@ -296,19 +279,4 @@ pub fn copy_dir(from: &Path, to: &Path, skip: &[&str]) -> std::io::Result<()> {
         if entry.file_type()?.is_dir() { copy_dir(&src, &dst, &[])? } else { std::fs::copy(&src, &dst).map(|_| ())? }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn ulids() {
-        assert!(is_ulid("01JB9XQ7Z3K4M5N6P7Q8R9S0TV"));
-        assert!(!is_ulid("abc"));
-        assert!(!is_ulid("01jb9xq7z3k4m5n6p7q8r9s0tv"));
-        assert!(!is_ulid("81JB9XQ7Z3K4M5N6P7Q8R9S0TV"), "above the 128-bit range");
-        assert!(!is_ulid("01JB9XQ7Z3K4M5N6P7Q8R9S0TI"), "an alias, not the canonical form");
-        assert!(!is_ulid("01JB9XQ7Z3K4M5N6P7Q8R9S0TI"));
-    }
 }

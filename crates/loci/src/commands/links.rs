@@ -15,7 +15,7 @@ pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
     // A note or concept, else any other vault file (an image, a source file).
     let path = match index.note(&target) {
         Ok(n) => n.path.clone(),
-        Err(e) if index.files.binary_search(&target).is_err() => return Err(e.refusal("links.unknown", &target)),
+        Err(e) if !index.contains(&target) => return Err(e.refusal("links.unknown", &target)),
         Err(_) => target,
     };
 

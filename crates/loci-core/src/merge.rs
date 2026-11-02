@@ -20,10 +20,10 @@ pub fn plan(index: &Index, from: &VaultPath, into: &VaultPath) -> Result<Merge, 
     }
     let targets: BTreeMap<VaultPath, VaultPath> = [(from.clone(), into.clone())].into();
     let mut change = Change { deleted: [from.clone()].into(), ..Change::default() };
-    let mut edits = relink::link_edits(index, &targets, &[from.clone()].into());
+    let mut edits = relink::link_edits(index, &targets, &change);
 
     // A prereq of `into` that named `from` would now name `into` itself: remove it.
-    let into_note = index.parsed(into.as_str()).expect("`concept` resolved `into` to a readable note");
+    let into_note = index.parsed(&into).expect("`concept` resolved `into` to a readable note");
     let self_prereqs = self_prereqs(index, into_note, &from);
     let mut into_edits = edits.remove(&into).unwrap_or_default();
     into_edits.retain(|e| !self_prereqs.iter().any(|(_, r)| r.contains(&e.range.start)));
@@ -51,8 +51,7 @@ pub fn plan(index: &Index, from: &VaultPath, into: &VaultPath) -> Result<Merge, 
     if !into_edits.is_empty() {
         edits.insert(into.clone(), into_edits);
     }
-    relink::add_writes(index, &mut change, edits)?;
-    relink::verify(index, &targets, &change, "merge.verify")?;
+    let change = relink::finish(index, change, &targets, edits, "merge.verify")?;
     Ok(Merge { from, into, change })
 }
 
@@ -106,18 +105,18 @@ mod tests {
         // Not a concept: named by its path, not reported as missing.
         let e = plan(&i, &vp("views/v"), &vp("dijkstra")).err().unwrap();
         assert_eq!(e.error.message, "`views/v.md` is not a concept");
-        assert_eq!(c.writes["views/v.md"], "# V\n\n[[dijkstra]] [[concepts/a/dijkstra#A]]\n");
-        let d = &c.writes["concepts/a/dijkstra.md"];
+        assert_eq!(c.writes["views/v.md"].text, "# V\n\n[[dijkstra]] [[concepts/a/dijkstra#A]]\n");
+        let d = &c.writes["concepts/a/dijkstra.md"].text;
         assert!(d.contains("prereqs: [\"[[heap]]\"]"), "{d}");
     }
 
     #[test]
     fn adjacent_self_prereqs_are_removed_together() {
         let id = |n: &str| format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T{n}\n---\n# {n}\n");
-        let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TC\nprereqs: [\"[[w]]\", \"[[y]]\", \"[[Y]]\"]\n---\n# C\n";
+        let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TC\nprereqs: [\"[[w]]\", \"[[y]]\", \"[[y]]\"]\n---\n# C\n";
         let i =
             from_texts(&[("concepts/a/w.md", id("W")), ("concepts/a/y.md", id("Y")), ("concepts/a/c.md", c.into())]);
-        let d = &plan(&i, &vp("y"), &vp("c")).unwrap().change.writes["concepts/a/c.md"];
+        let d = &plan(&i, &vp("y"), &vp("c")).unwrap().change.writes["concepts/a/c.md"].text;
         assert!(d.contains("prereqs: [\"[[w]]\"]\n"), "{d}");
     }
 
@@ -129,7 +128,7 @@ mod tests {
             ("concepts/a/into.md", into),
         ]);
         let c = plan(&i, &vp("old"), &vp("into")).unwrap().change;
-        assert_eq!(c.writes["concepts/a/into.md"], "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T2\n---\n# Into\n");
+        assert_eq!(c.writes["concepts/a/into.md"].text, "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T2\n---\n# Into\n");
     }
 
     #[test]

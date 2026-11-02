@@ -19,7 +19,7 @@ pub fn run(ctx: &Ctx, note: &str, section: &str) -> Result<Report, Refusal> {
         return Err(Refusal::refused("block-ids.kind", format!("`{}` is not a managed note", parsed.path)));
     }
     let path = parsed.path.clone();
-    let Some((out, assigned)) = blockids::assign(parsed, section, blockids::ulid_ids()) else {
+    let Some((out, assigned)) = blockids::assign(parsed, section, loci_core::id::Ulid::monotonic()) else {
         return Err(Refusal::refused("block-ids.no-section", format!("`{path}` has no `## {section}`")));
     };
     if !assigned.is_empty()

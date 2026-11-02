@@ -172,6 +172,9 @@ fn bench_runs_the_agent_on_every_case() {
     assert_eq!((code, error_code(&env)), (1, "bench.case"));
     assert!(env["error"]["message"].as_str().unwrap().contains("line 2"), "{env}");
 
+    v.write("bench/cases.jsonl", "\n");
+    let (code, env) = v.run(&["bench", "true"]);
+    assert_eq!((code, error_code(&env)), (1, "bench.none"), "no cases");
     std::fs::remove_file(v.root.join("bench/cases.jsonl")).unwrap();
     let (code, env) = v.run(&["bench", "true"]);
     assert_eq!((code, error_code(&env)), (1, "bench.none"));

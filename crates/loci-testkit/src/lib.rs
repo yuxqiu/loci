@@ -10,8 +10,6 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value;
 
-pub use loci_core::vault::is_ulid;
-
 const ULID_CHARS: &str = "[0-9A-HJKMNP-TV-Z]{26}";
 static ULID: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r"\b{ULID_CHARS}\b")).unwrap());
 static BLOCK_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!(r" \^{ULID_CHARS}")).unwrap());

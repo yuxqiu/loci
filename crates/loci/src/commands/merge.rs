@@ -17,8 +17,8 @@ pub fn run(ctx: &Ctx, from: &str, into: &str) -> Result<Report, Refusal> {
     let data = json!({
         "from": from,
         "into": into,
-        "edited": change.edit_counts.iter().map(|(p, n)| json!({"path": p, "edits": n})).collect::<Vec<_>>(),
+        "edited": change.writes.iter().map(|(p, w)| json!({"path": p, "edits": w.edits})).collect::<Vec<_>>(),
     });
-    let human = format!("merged {from} into {into}; edited {} file(s)\n", change.edit_counts.len());
+    let human = format!("merged {from} into {into}; edited {} file(s)\n", change.writes.len());
     Ok(Report::ok(data, human))
 }

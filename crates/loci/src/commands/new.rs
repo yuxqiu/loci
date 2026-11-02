@@ -4,24 +4,21 @@ use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::git;
 use loci_core::index::Index;
 use loci_core::path::VaultPath;
-use loci_core::vault::{self, Kind};
+use loci_core::vault::Kind;
 use serde_json::json;
 
 use super::Ctx;
 
 pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
-    let mut path = VaultPath::from_arg(path)?;
-    if !path.as_str().ends_with(".md") {
-        path = path.with_suffix(".md");
-    }
+    let path = VaultPath::from_arg(path)?.as_note();
     if path.kind() != Some(Kind::Concept) {
         return Err(Refusal::refused("new.no-area", format!("`{path}` {}", path.why_not_concept())));
     }
     if let Some((code, message)) = path.problem() {
         return Err(Refusal::refused(code, format!("`{path}`: {message}")));
     }
-    let slug = path.stem().to_string();
+    let slug = path.slug().expect("`problem` refused a concept whose stem is no slug");
     let abs = vault.abs(&path);
     if abs.symlink_metadata().is_ok() {
         return Err(Refusal::refused("new.exists", format!("`{path}` already exists")));
@@ -44,8 +41,8 @@ pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal
         let existing = existing.join(", ");
         return Err(Refusal::refused("new.collision", format!("`{slug}` is already the slug of {existing}")));
     }
-    let id = vault::new_concept_id();
-    let text = format!("---\nid: {id}\nprereqs: []\n---\n# {}\n", title.unwrap_or(&slug));
+    let id = loci_core::id::Ulid::generate();
+    let text = format!("---\nid: {id}\nprereqs: []\n---\n# {}\n", title.unwrap_or(slug.as_str()));
     if let Some(parent) = abs.parent()
         && let Err(e) = std::fs::create_dir_all(parent)
     {

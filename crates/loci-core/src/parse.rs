@@ -8,6 +8,7 @@ use regex::Regex;
 use saphyr::{LoadableYamlNode, MarkedYaml, Scalar, YamlData};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::id::Ulid;
 use crate::path::VaultPath;
 use crate::vault::Kind;
 
@@ -56,8 +57,6 @@ pub enum FmError {
 pub struct Frontmatter {
     /// The whole block, `---` lines included (byte range in the file).
     pub range: Range<usize>,
-    /// The YAML text between the fences.
-    pub yaml_range: Range<usize>,
     pub entries: Vec<FmEntry>,
 }
 
@@ -70,9 +69,13 @@ impl Frontmatter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Heading {
     pub level: u8,
-    /// Raw heading content (§4.6).
+    /// Raw heading content (§4.6): the bytes at `content`, lines joined with `\n`.
     pub text: String,
     pub range: Range<usize>,
+    /// The content's byte range: without the ATX `#` markers or a setext underline.
+    pub content: Range<usize>,
+    /// A setext heading (text over a `===` or `---` underline), not an ATX one.
+    pub setext: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +85,8 @@ pub struct ListItem {
     pub depth: usize,
     /// The item's leading text (§4.6).
     pub lead: Range<usize>,
+    /// Where the item's content starts, after its list marker.
+    pub content_start: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,11 +118,41 @@ pub struct Link {
     pub form: LinkForm,
     pub range: Range<usize>,
     pub target_range: Range<usize>,
-    /// Raw target text (the bytes at `target_range`).
+    /// Raw target text (the bytes at `target_range`; a table's escaping `\` before the
+    /// `|` is outside it).
     pub raw: String,
     /// Normalised target (§5.2), without the fragment.
     pub target: String,
-    pub fragment: Option<String>,
+    pub fragment: Option<Fragment>,
+    /// The byte range of a wikilink's `|label`, without the `|`.
+    pub label: Option<Range<usize>>,
+}
+
+/// A link's `#fragment` (§5.4): a heading, or a block id (`#^id`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fragment {
+    Heading(String),
+    /// The id, without its `^`.
+    Block(String),
+}
+
+impl Fragment {
+    fn parse(s: &str) -> Self {
+        match s.strip_prefix('^') {
+            Some(id) => Self::Block(id.to_string()),
+            None => Self::Heading(s.to_string()),
+        }
+    }
+}
+
+/// As written after the `#`.
+impl std::fmt::Display for Fragment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Heading(h) => f.write_str(h),
+            Self::Block(id) => write!(f, "^{id}"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +167,15 @@ pub struct Counts {
     pub math: usize,
     pub images: usize,
     pub code: usize,
+}
+
+impl Counts {
+    /// The kinds of material counted, named for reports, in the order of [`Counts::values`].
+    pub const NAMES: [&'static str; 3] = ["math spans", "images", "fenced code blocks"];
+
+    pub fn values(&self) -> [usize; 3] {
+        [self.math, self.images, self.code]
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,7 +198,6 @@ pub struct Note {
     /// Top-level blocks after the frontmatter, in order, with their ranges.
     pub top_blocks: Vec<(TopBlock, Range<usize>)>,
     pub items: Vec<ListItem>,
-    pub paragraphs: Vec<Range<usize>>,
     pub block_ids: Vec<BlockId>,
     pub links: Vec<Link>,
     pub md_links: Vec<MdLink>,
@@ -173,6 +216,11 @@ impl Note {
             FmValue::Str { value, .. } => Some(value),
             _ => None,
         }
+    }
+
+    /// The concept id: frontmatter `id`, if it is a ULID (lint reports one that is not).
+    pub fn id(&self) -> Option<Ulid> {
+        self.fm_str("id")?.parse().ok()
     }
 
     /// The raw text of the first H1, if any.
@@ -225,7 +273,8 @@ impl Note {
 static BLOCK_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:^|\s)\^(\w+)\s*$").unwrap());
 static URL_SCHEME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z][A-Za-z0-9+.\-]*:").unwrap());
 
-fn options() -> Options {
+/// The markdown extensions loci reads notes with.
+pub fn options() -> Options {
     Options::ENABLE_WIKILINKS
         | Options::ENABLE_MATH
         | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
@@ -236,7 +285,7 @@ fn options() -> Options {
 }
 
 /// The slug of a `prereqs` item, if it is a quoted `"[[<slug>]]"` written verbatim
-/// (m0 §6.1; slugs match case-insensitively). Only such an item is a link.
+/// (m0 §6.1). Only such an item is a link.
 pub fn prereq_item<'a>(text: &str, item: &'a FmValue) -> Option<&'a str> {
     let FmValue::Str { value, span, quoted: true } = item else { return None };
     // Escapes and folded lines would make offsets into the value wrong for the file.
@@ -245,28 +294,14 @@ pub fn prereq_item<'a>(text: &str, item: &'a FmValue) -> Option<&'a str> {
         return None;
     }
     let inner = value.strip_prefix("[[")?.strip_suffix("]]")?;
-    crate::vault::is_slug(&inner.to_lowercase()).then_some(inner)
-}
-
-/// List item text without its marker (`-`, `*`, `+`, `1.` or `1)`) and leading spaces.
-pub fn strip_list_marker(s: &str) -> &str {
-    let s = s.trim_start();
-    if let Some(rest) = s.strip_prefix(['-', '*', '+']) {
-        return rest.trim_start();
-    }
-    let digits = s.bytes().take_while(u8::is_ascii_digit).count();
-    match s[digits..].strip_prefix(['.', ')']) {
-        Some(rest) if digits > 0 => rest.trim_start(),
-        _ => s,
-    }
+    inner.parse::<crate::id::Slug>().ok().map(|_| inner)
 }
 
 /// Normalises a link target (§5.2): returns (target, fragment), or `None` for `[[]]`.
-pub fn normalize_target(raw: &str) -> Option<(String, Option<String>)> {
-    let s = raw.strip_suffix('\\').unwrap_or(raw);
-    let s = s.trim_matches(|c: char| c.is_ascii_whitespace());
+pub fn normalize_target(raw: &str) -> Option<(String, Option<Fragment>)> {
+    let s = raw.trim_matches(|c: char| c.is_ascii_whitespace());
     let (t, frag) = match s.find('#') {
-        Some(i) => (&s[..i], Some(s[i + 1..].to_string())),
+        Some(i) => (&s[..i], Some(Fragment::parse(&s[i + 1..]))),
         None => (s, None),
     };
     let t = t.strip_suffix(".md").unwrap_or(t);
@@ -299,7 +334,6 @@ pub fn parse(path: &VaultPath, kind: Kind, text: String) -> Note {
         headings: body.headings,
         top_blocks: body.top_blocks,
         items: body.items,
-        paragraphs: body.paragraphs,
         block_ids,
         links,
         md_links: body.md_links,
@@ -334,8 +368,30 @@ fn walk_body(text: &str, base: usize) -> Body {
     let mut b = Body::default();
     let mut stack: Vec<Open> = vec![];
     let mut in_metadata = false;
+    // The heading being read, and the extent of the events inside it so far.
+    let mut heading: Option<Option<Range<usize>>> = None;
+    // An item was just opened: its next event, unless it ends the item, starts its content.
+    let mut item_open = false;
     for (event, range) in Parser::new_ext(&text[base..], options()).into_offset_iter() {
         let range = range.start + base..range.end + base;
+        if std::mem::take(&mut item_open) && !matches!(event, Event::End(_)) {
+            b.items.last_mut().expect("an item is open").content_start = range.start;
+        }
+        match (&mut heading, &event) {
+            (Some(content), Event::End(TagEnd::Heading(_))) => {
+                let h = b.headings.last_mut().expect("a heading is open");
+                // No content (`#`): an empty range where the content would end.
+                let end = h.range.start + text[h.range.clone()].trim_end().len();
+                h.content = content.take().unwrap_or(end..end);
+                h.text = text[h.content.clone()].lines().collect::<Vec<_>>().join("\n");
+                h.setext = !text[h.range.start..h.content.start].trim_start_matches(' ').starts_with('#');
+                heading = None;
+            }
+            (Some(content), _) => {
+                *content = Some(content.as_ref().map_or(range.clone(), |c| c.start..range.end));
+            }
+            (None, _) => {}
+        }
         match event {
             Event::Start(tag) => {
                 let top_level = stack.is_empty();
@@ -378,7 +434,14 @@ fn walk_body(text: &str, base: usize) -> Body {
                     Tag::Heading { level, .. } => {
                         let level = level as u8;
                         top(TopBlock::Heading(level));
-                        b.headings.push(Heading { level, text: heading_text(&text[range.clone()]), range });
+                        b.headings.push(Heading {
+                            level,
+                            text: String::new(),
+                            range: range.clone(),
+                            content: range,
+                            setext: false,
+                        });
+                        heading = Some(None);
                         Open::Other
                     }
                     Tag::Paragraph => {
@@ -392,7 +455,14 @@ fn walk_body(text: &str, base: usize) -> Body {
                     }
                     Tag::Item => {
                         let depth = stack.iter().filter(|o| matches!(o, Open::List)).count();
-                        b.items.push(ListItem { range: range.clone(), depth, lead: range });
+                        // The marker's end is found from the item's first event (below).
+                        b.items.push(ListItem {
+                            range: range.clone(),
+                            depth,
+                            lead: range.clone(),
+                            content_start: range.end,
+                        });
+                        item_open = true;
                         Open::Item { idx: b.items.len() - 1, saw_child: false }
                     }
                     Tag::CodeBlock(kind) => {
@@ -450,8 +520,8 @@ fn frontmatter(text: &str, base: usize, body: &Body) -> (Option<Frontmatter>, Op
     };
     let yaml_range = body.meta_text.clone().unwrap_or(block.start..block.start);
     match parse_yaml(&text[yaml_range.clone()], yaml_range.start) {
-        Ok(entries) => (Some(Frontmatter { range: block, yaml_range, entries }), None),
-        Err(e) => (Some(Frontmatter { range: block, yaml_range, entries: vec![] }), Some(FmError::Yaml(e))),
+        Ok(entries) => (Some(Frontmatter { range: block, entries }), None),
+        Err(e) => (Some(Frontmatter { range: block, entries: vec![] }), Some(FmError::Yaml(e))),
     }
 }
 
@@ -495,6 +565,7 @@ fn frontmatter_links(text: &str, fm: &Frontmatter) -> Vec<Link> {
                 raw: inner.to_string(),
                 target,
                 fragment,
+                label: None,
             });
         }
     }
@@ -508,17 +579,21 @@ fn handle_link(b: &mut Body, text: &str, link_type: LinkType, dest: &str, range:
             let start = range.start + open;
             let slice = &text[start..range.end];
             let close = slice.find("]]").unwrap_or(slice.len());
-            let len = slice[..close].find('|').unwrap_or(close);
-            let tr = start..start + len;
-            let raw = &text[tr.clone()];
-            if let Some((target, fragment)) = normalize_target(raw) {
+            let pipe = slice[..close].find('|');
+            let label = pipe.map(|p| start + p + 1..start + close);
+            // In a table the `|` is escaped (`\|`); the `\` is table syntax, not target.
+            let target = &slice[..pipe.unwrap_or(close)];
+            let target = target.strip_suffix('\\').filter(|_| pipe.is_some()).unwrap_or(target);
+            let tr = start..start + target.len();
+            if let Some((normalized, fragment)) = normalize_target(target) {
                 b.links.push(Link {
                     form: if image { LinkForm::Embed } else { LinkForm::Wiki },
                     range,
                     target_range: tr,
-                    raw: raw.to_string(),
-                    target,
+                    raw: target.to_string(),
+                    target: normalized,
                     fragment,
+                    label,
                 });
             }
         }
@@ -528,25 +603,6 @@ fn handle_link(b: &mut Body, text: &str, link_type: LinkType, dest: &str, range:
                 b.md_links.push(MdLink { range, url: dest.to_string(), image });
             }
         }
-    }
-}
-
-/// Heading text (§4.6): raw content, ATX markers and closing `#`s removed, setext
-/// underline excluded, trimmed.
-fn heading_text(raw: &str) -> String {
-    let raw = raw.trim_end_matches(['\n', '\r']);
-    if raw.trim_start().starts_with('#') {
-        let s = raw.trim_start().trim_start_matches('#');
-        let s = s.trim();
-        // A closing sequence must be preceded by a space.
-        let trimmed = s.trim_end_matches('#');
-        let s = if trimmed.len() != s.len() && (trimmed.is_empty() || trimmed.ends_with(' ')) { trimmed } else { s };
-        s.trim().to_string()
-    } else {
-        // Setext: everything but the underline.
-        let mut lines: Vec<&str> = raw.lines().collect();
-        lines.pop();
-        lines.join("\n").trim().to_string()
     }
 }
 
@@ -641,17 +697,19 @@ mod tests {
 
     #[test]
     fn normalize() {
-        assert_eq!(normalize_target(" a.md#H "), Some(("a".into(), Some("H".into()))));
-        assert_eq!(normalize_target("x\\"), Some(("x".into(), None)));
+        assert_eq!(normalize_target(" a.md#H "), Some(("a".into(), Some(Fragment::Heading("H".into())))));
+        assert_eq!(normalize_target("a#^b1"), Some(("a".into(), Some(Fragment::Block("b1".into())))));
         assert_eq!(normalize_target(""), None);
-        assert_eq!(normalize_target("#h"), Some(("".into(), Some("h".into()))));
+        assert_eq!(normalize_target("#h"), Some(("".into(), Some(Fragment::Heading("h".into())))));
     }
 
     #[test]
     fn heading_texts() {
-        assert_eq!(heading_text("## Hello world ##\n"), "Hello world");
-        assert_eq!(heading_text("# C#\n"), "C#");
-        assert_eq!(heading_text("Title\n=====\n"), "Title");
+        let t = "# T\n\n## Hello world ##\n\n# C#\n\nTitle\nmore\n=====\n\n##\n";
+        let n = p(t);
+        let found: Vec<(&str, bool)> = n.headings.iter().map(|h| (h.text.as_str(), h.setext)).collect();
+        assert_eq!(found, [("T", false), ("Hello world", false), ("C#", false), ("Title\nmore", true), ("", false)]);
+        assert_eq!(&t[n.headings[1].content.clone()], "Hello world");
     }
 
     #[test]
@@ -694,10 +752,21 @@ mod tests {
         assert_eq!(n.links.len(), 2);
         assert_eq!(&t[n.links[0].target_range.clone()], "b#H");
         assert_eq!(n.links[0].target, "b");
-        assert_eq!(n.links[0].fragment.as_deref(), Some("H"));
+        assert_eq!(n.links[0].fragment, Some(Fragment::Heading("H".into())));
         assert_eq!(n.links[1].form, LinkForm::Embed);
         assert_eq!(n.links[1].target, "x/y.png");
+        let labels: Vec<Option<&str>> = n.links.iter().map(|l| l.label.clone().map(|r| &t[r])).collect();
+        assert_eq!(labels, [Some("label"), Some("300")]);
         assert_eq!(n.md_links.len(), 1);
+    }
+
+    #[test]
+    fn a_table_escape_is_outside_the_target() {
+        let t = "# T\n\n| a | [[b\\|label]] |\n|---|---|\n";
+        let n = p(t);
+        let l = &n.links[0];
+        assert_eq!((l.raw.as_str(), l.target.as_str()), ("b", "b"));
+        assert_eq!(l.label.clone().map(|r| &t[r]), Some("label"));
     }
 
     #[test]

@@ -21,11 +21,11 @@ pub fn run(ctx: &Ctx, slug: &str, depth: Option<usize>) -> Result<Report, Refusa
                 .at_path(path.as_str()),
         );
     }
-    let human: String = c.members.iter().map(|m| format!("- [[{}]]\n", m.slug)).collect();
+    let human: String = c.members.iter().map(|m| format!("- [[{}]]\n", m.path.stem())).collect();
     let data = json!({
         "concept": path,
         "closure": c.members.iter().map(|m| json!({
-            "slug": m.slug, "path": m.path, "depth": m.depth,
+            "slug": m.path.stem(), "path": m.path, "depth": m.depth,
         })).collect::<Vec<_>>(),
         "unresolved": c.unresolved.iter().map(|(f, t)| json!({"from": f, "target": t})).collect::<Vec<_>>(),
     });

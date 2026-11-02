@@ -8,6 +8,7 @@ pub mod config;
 pub mod envelope;
 pub mod export;
 pub mod git;
+pub mod id;
 pub mod index;
 pub mod lint;
 pub mod merge;

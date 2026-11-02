@@ -2,7 +2,7 @@
 
 use loci_core::envelope::{Diagnostic, Refusal, Report, sort_diagnostics};
 use loci_core::index::Index;
-use loci_core::lint::{self, Lint};
+use loci_core::lint;
 use loci_core::plugin;
 use loci_core::vault::Vault;
 use serde_json::{Value, json};
@@ -39,7 +39,7 @@ impl Linted {
 
 pub fn lint_vault(vault: &Vault) -> Linted {
     let index = Index::open(vault);
-    let mut diagnostics = Lint { index: &index, budgets: &vault.config.budgets }.run();
+    let mut diagnostics = lint::run(&index, &vault.config.budgets);
     diagnostics.extend(lint::disk_rules(&index, &vault.root));
     let installed = plugins();
     for p in &installed {

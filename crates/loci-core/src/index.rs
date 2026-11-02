@@ -4,15 +4,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::envelope::Refusal;
-use crate::parse::{self, Link, LinkForm, Note};
+use crate::id::Slug;
+use crate::parse::{self, Fragment, Link, LinkForm, Note};
 use crate::path::VaultPath;
 use crate::vault::{self, Kind};
 
 /// A note argument as a note path: `.md` added when missing.
-fn note_path(arg: &VaultPath) -> VaultPath {
-    if arg.as_str().ends_with(".md") { arg.clone() } else { arg.with_suffix(".md") }
-}
-
 /// Why [`Index::concept`] found no single concept.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConceptLookup {
@@ -44,10 +41,8 @@ pub struct Index {
     pub files: Vec<VaultPath>,
     /// Every markdown file core reads, parsed, by path.
     markdown: BTreeMap<VaultPath, Note>,
-    /// Lowercased concept slug -> concept paths.
-    pub slugs: BTreeMap<String, Vec<VaultPath>>,
-    /// Link targets by path: notes without `.md`, other files with their extension.
-    pub targets: BTreeSet<String>,
+    /// Concept slug -> concept paths (a concept whose stem is no slug has none).
+    pub slugs: BTreeMap<Slug, Vec<VaultPath>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,19 +83,15 @@ pub fn from_texts(files: &[(impl AsRef<str>, impl AsRef<str>)]) -> Index {
 
 /// Indexes `files` (sorted vault paths), taking each `.md` file's text from `text`.
 pub fn build(files: Vec<VaultPath>, text: impl Fn(&VaultPath) -> String) -> Index {
-    let mut index =
-        Index { files: files.clone(), markdown: BTreeMap::new(), slugs: BTreeMap::new(), targets: BTreeSet::new() };
+    let mut index = Index { files: files.clone(), markdown: BTreeMap::new(), slugs: BTreeMap::new() };
     for path in files {
         let kind = path.kind().expect("the index holds only paths core reads");
-        if let Some(stripped) = path.as_str().strip_suffix(".md") {
-            index.targets.insert(stripped.to_string());
-            if kind == Kind::Concept {
-                index.slugs.entry(path.stem().to_lowercase()).or_default().push(path.clone());
+        if path.is_note() {
+            if let Some(slug) = path.slug().filter(|_| kind == Kind::Concept) {
+                index.slugs.entry(slug).or_default().push(path.clone());
             }
             let note = parse::parse(&path, kind, text(&path));
             index.markdown.insert(path, note);
-        } else {
-            index.targets.insert(path.into());
         }
     }
     index
@@ -114,14 +105,14 @@ impl Index {
     }
 
     /// The note a note argument names (m0 §8): a vault path to any note (`.md`
-    /// optional), else a concept slug (case-insensitive). A slug shared by several
+    /// optional), else a concept slug, written exactly. A slug shared by several
     /// concepts is ambiguous.
     pub fn note(&self, arg: &VaultPath) -> Result<&Note, ConceptLookup> {
-        if let Some(note) = self.markdown.get(&note_path(arg)) {
+        if let Some(note) = self.markdown.get(&arg.as_note()) {
             return Ok(note);
         }
         // No markdown file at that path: the argument may be a concept slug.
-        match self.slugs.get(&arg.as_str().to_lowercase()).map(Vec::as_slice) {
+        match arg.as_str().parse::<Slug>().ok().and_then(|s| self.slugs.get(&s)).map(Vec::as_slice) {
             None | Some([]) => Err(ConceptLookup::Unknown),
             Some([p]) => Ok(&self.markdown[p]),
             Some(ps) => Err(ConceptLookup::Ambiguous(ps.to_vec())),
@@ -129,10 +120,7 @@ impl Index {
     }
 
     /// The parsed note at vault path `path`, if there is a markdown file there.
-    pub fn parsed<P: Ord + ?Sized>(&self, path: &P) -> Option<&Note>
-    where
-        VaultPath: std::borrow::Borrow<P>,
-    {
+    pub fn parsed(&self, path: &VaultPath) -> Option<&Note> {
         self.markdown.get(path)
     }
 
@@ -177,6 +165,11 @@ impl Index {
         self.files.iter().any(|f| f == path || f.starts_with_folder(path))
     }
 
+    /// Whether `path` is a file the index holds.
+    pub fn contains(&self, path: &VaultPath) -> bool {
+        self.files.binary_search(path).is_ok()
+    }
+
     /// The listed file at `path`, if any.
     fn listed(&self, path: &str) -> Option<&VaultPath> {
         self.files.binary_search_by(|f| f.as_str().cmp(path)).ok().map(|i| &self.files[i])
@@ -215,21 +208,23 @@ impl Index {
         out
     }
 
-    /// The existing concept slug most like `slug`, if one is close (Jaro-Winkler
-    /// similarity of at least 0.85): a likely typo or a shortened name.
-    pub fn closest_slug(&self, slug: &str) -> Option<&str> {
+    /// The existing concept slug most like `name`, if one is close (Jaro-Winkler
+    /// similarity of at least 0.85, letter case aside): a likely typo, a shortened name
+    /// or a capitalised one.
+    pub fn closest_slug(&self, name: &str) -> Option<&Slug> {
+        let name = name.to_lowercase();
         self.slugs
             .iter()
             .filter(|(_, paths)| !paths.is_empty())
-            .map(|(s, _)| (strsim::jaro_winkler(slug, s), s.as_str()))
+            .map(|(s, _)| (strsim::jaro_winkler(&name, s.as_str()), s))
             .filter(|(score, _)| *score >= 0.85)
             .max_by(|a, b| a.0.total_cmp(&b.0).then(b.1.cmp(a.1)))
             .map(|(_, s)| s)
     }
 
-    /// The concept paths that have slug `slug` (case-insensitive).
-    pub fn slug_paths(&self, slug: &str) -> &[VaultPath] {
-        self.slugs.get(&slug.to_lowercase()).map_or(&[], Vec::as_slice)
+    /// The concept paths that have slug `slug`.
+    pub fn slug_paths(&self, slug: &Slug) -> &[VaultPath] {
+        self.slugs.get(slug).map_or(&[], Vec::as_slice)
     }
 
     /// The formed notes ([`Kind::is_formed`]) that mention `target` without linking it,
@@ -262,8 +257,8 @@ impl Index {
 
     /// Whether `slug` is already a concept's slug, other than paths `moving` accepts,
     /// which are being renamed (§9.5, §9.7).
-    pub fn name_taken(&self, slug: &str, moving: impl Fn(&VaultPath) -> bool) -> bool {
-        self.slugs.get(&slug.to_lowercase()).is_some_and(|ps| ps.iter().any(|p| !moving(p)))
+    pub fn name_taken(&self, slug: &Slug, moving: impl Fn(&VaultPath) -> bool) -> bool {
+        self.slugs.get(slug).is_some_and(|ps| ps.iter().any(|p| !moving(p)))
     }
 
     /// Every markdown note (concepts, area files, views, journal entries, rule files,
@@ -294,19 +289,18 @@ impl Index {
             // `[[#frag]]`: the linking note itself.
             Resolved::Note(from.path.clone())
         } else if !target.contains('/') {
-            let key = target.to_lowercase();
-            match self.slugs.get(&key).map(Vec::as_slice) {
+            match target.parse::<Slug>().ok().and_then(|s| self.slugs.get(&s)).map(Vec::as_slice) {
                 Some([path]) => Resolved::Note(path.clone()),
                 // A slug shared by several concepts (`slug.duplicate`) names none of them.
                 Some(paths @ [_, _, ..]) => {
-                    let hint = format!("several concepts are named `{key}` ({}); link by path", paths.join(", "));
+                    let hint = format!("several concepts are named `{target}` ({}); link by path", paths.join(", "));
                     return Err(LinkError::Dangling { hint: Some(hint) });
                 }
                 Some([]) | None => {
-                    let hint = match self.closest_slug(&key) {
-                        Some(s) => format!("no concept is named `{key}`; did you mean [[{s}]]?"),
+                    let hint = match self.closest_slug(target) {
+                        Some(s) => format!("no concept is named `{target}`; did you mean [[{s}]]?"),
                         None => format!(
-                            "no concept is named `{key}`; create it with `loci new`, or link a non-concept by path"
+                            "no concept is named `{target}`; create it with `loci new`, or link a non-concept by path"
                         ),
                     };
                     return Err(LinkError::Dangling { hint: Some(hint) });
@@ -316,28 +310,27 @@ impl Index {
             if target.starts_with('/') || target.split('/').any(|s| s == "..") {
                 return Err(LinkError::PathForm);
             }
-            if !self.targets.contains(target) {
-                return Err(LinkError::Dangling { hint: None });
-            }
+            // A note is linked without `.md`, any other file with its extension.
             match self.listed(&format!("{target}.md")) {
                 Some(note) => Resolved::Note(note.clone()),
-                None => Resolved::File(self.listed(target).expect("a link target names a listed file").clone()),
+                None => match self.listed(target).filter(|_| !target.ends_with(".md")) {
+                    Some(file) => Resolved::File(file.clone()),
+                    None => return Err(LinkError::Dangling { hint: None }),
+                },
             }
         };
         Ok(resolved)
     }
 
     /// Checks a `#fragment` against the headings or block ids of note `path` (§5.4).
-    fn check_fragment(&self, path: &VaultPath, frag: &str) -> Result<(), LinkError> {
+    fn check_fragment(&self, path: &VaultPath, frag: &Fragment) -> Result<(), LinkError> {
         let note = &self.markdown[path];
-        if let Some(id) = frag.strip_prefix('^') {
-            if note.block_ids.iter().any(|b| b.id == id) {
-                return Ok(());
-            }
-            return Err(LinkError::Block);
+        match frag {
+            Fragment::Block(id) if note.block_ids.iter().any(|b| &b.id == id) => Ok(()),
+            Fragment::Block(_) => Err(LinkError::Block),
+            Fragment::Heading(h) if note.headings.iter().any(|n| heading_key(&n.text) == heading_key(h)) => Ok(()),
+            Fragment::Heading(_) => Err(LinkError::Heading),
         }
-        let key = heading_key(frag);
-        if note.headings.iter().any(|h| heading_key(&h.text) == key) { Ok(()) } else { Err(LinkError::Heading) }
     }
 }
 
@@ -410,6 +403,44 @@ mod tests {
     }
 
     #[test]
+    fn path_links_name_notes_and_files_with_their_extension() {
+        // `.md` is optional for a note; a target still ending in `.md` names no file.
+        let i = from_texts(&[
+            ("concepts/a/x.md", "# X\n"),
+            ("sources/papers/p.pdf", ""),
+            (
+                "views/v.md",
+                "# V\n\n[[concepts/a/x.md]] [[sources/papers/p.pdf]] [[concepts/a/x.md.md]] [[sources/papers/p]]\n",
+            ),
+        ]);
+        let n = i.markdown["views/v.md"].clone();
+        let resolved: Vec<_> = n.links.iter().map(|l| i.resolve(&n, l).ok()).collect();
+        let vp = |s: &str| VaultPath::new(s.into()).unwrap();
+        assert_eq!(
+            resolved,
+            [Some(Resolved::Note(vp("concepts/a/x.md"))), Some(Resolved::File(vp("sources/papers/p.pdf"))), None, None]
+        );
+    }
+
+    #[test]
+    fn a_concept_whose_stem_is_no_slug_has_none() {
+        let i = from_texts(&[
+            ("concepts/a/dfs.md", "# DFS\n"),
+            ("concepts/a/BFS.md", "# BFS\n"),
+            ("concepts/a/a_b.md", "# A B\n"),
+            ("views/v.md", "# V\n\n[[dfs]] [[DFS]] [[bfs]] [[BFS]] [[a_b]] [[concepts/a/BFS]] [[concepts/a/a_b]]\n"),
+        ]);
+        let n = i.markdown["views/v.md"].clone();
+        let resolved: Vec<bool> = n.links.iter().map(|l| i.resolve(&n, l).is_ok()).collect();
+        // A slug is written exactly; a misnamed file is reached by path only.
+        assert_eq!(resolved, [true, false, false, false, false, true, true]);
+        match i.resolve(&n, &n.links[1]) {
+            Err(LinkError::Dangling { hint: Some(h) }) => assert!(h.ends_with("did you mean [[dfs]]?"), "{h}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
     fn a_dangling_slug_suggests_the_closest_concept() {
         let i = from_texts(&[
             ("concepts/a/breadth-first-search.md", "# BFS\n"),
@@ -439,7 +470,7 @@ mod tests {
                 "# Dijkstra\n\nOn a graph, take from a priority queue; see [[heap]] and the heap. No graphs here.\n",
             ),
         ]);
-        let n = i.parsed("concepts/a/dijkstra.md").unwrap();
+        let n = i.parsed(&VaultPath::new("concepts/a/dijkstra.md".into()).unwrap()).unwrap();
         let found: Vec<(&str, &str)> =
             i.unlinked_mentions_in(n).into_iter().map(|(c, r)| (c.path.stem(), &n.text[r])).collect();
         // "queue" inside "priority queue" is not a mention of Queue; Heap is linked
@@ -461,7 +492,7 @@ mod tests {
             ("sources/docs/s.md", "# S\n\nBFS in a source.\n"),
         ]);
         let found = |p: &str| -> Vec<(String, usize)> {
-            let n = i.parsed(p).unwrap();
+            let n = i.parsed(&VaultPath::new(p.into()).unwrap()).unwrap();
             i.unlinked_mentions_of(n)
                 .into_iter()
                 .map(|(n, r)| (n.path.to_string(), line_col(&n.text, r.start).0))

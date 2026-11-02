@@ -5,7 +5,7 @@ expression: v.redact(&env)
 {
   "command": "lint",
   "data": {
-    "errors": 7,
+    "errors": 8,
     "files": 11,
     "plugins": [],
     "warnings": 0
@@ -13,12 +13,27 @@ expression: v.redact(&env)
   "diagnostics": [
     {
       "code": "link.dangling",
+      "hint": "no concept is named `BFS`; did you mean [[bfs]]?",
+      "location": {
+        "path": "concepts/algo/dfs.md",
+        "span": {
+          "byte_end": 101,
+          "byte_start": 98,
+          "col": 53,
+          "line": 6
+        }
+      },
+      "message": "`BFS` does not resolve",
+      "severity": "error"
+    },
+    {
+      "code": "link.dangling",
       "hint": "no concept is named `plan`; create it with `loci new`, or link a non-concept by path",
       "location": {
         "path": "concepts/algo/dfs.md",
         "span": {
-          "byte_end": 119,
-          "byte_start": 115,
+          "byte_end": 140,
+          "byte_start": 136,
           "col": 31,
           "line": 8
         }
@@ -32,8 +47,8 @@ expression: v.redact(&env)
       "location": {
         "path": "concepts/algo/dfs.md",
         "span": {
-          "byte_end": 133,
-          "byte_start": 125,
+          "byte_end": 154,
+          "byte_start": 146,
           "col": 41,
           "line": 8
         }
@@ -47,8 +62,8 @@ expression: v.redact(&env)
       "location": {
         "path": "concepts/algo/dfs.md",
         "span": {
-          "byte_end": 150,
-          "byte_start": 139,
+          "byte_end": 171,
+          "byte_start": 160,
           "col": 55,
           "line": 8
         }
@@ -62,8 +77,8 @@ expression: v.redact(&env)
       "location": {
         "path": "concepts/algo/dfs.md",
         "span": {
-          "byte_end": 264,
-          "byte_start": 258,
+          "byte_end": 285,
+          "byte_start": 279,
           "col": 14,
           "line": 12
         }
@@ -77,8 +92,8 @@ expression: v.redact(&env)
       "location": {
         "path": "concepts/algo/dfs.md",
         "span": {
-          "byte_end": 277,
-          "byte_start": 273,
+          "byte_end": 298,
+          "byte_start": 294,
           "col": 29,
           "line": 12
         }
@@ -92,8 +107,8 @@ expression: v.redact(&env)
       "location": {
         "path": "concepts/algo/dfs.md",
         "span": {
-          "byte_end": 307,
-          "byte_start": 294,
+          "byte_end": 328,
+          "byte_start": 315,
           "col": 13,
           "line": 14
         }

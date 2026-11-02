@@ -24,8 +24,6 @@ use loci_core::envelope::Refusal;
 use loci_core::plugin::{self, Plugin};
 use loci_core::vault::Vault;
 
-use crate::CORE_COMMANDS;
-
 pub struct Ctx {
     pub explicit_vault: Option<PathBuf>,
     pub cwd: PathBuf,
@@ -41,5 +39,6 @@ impl Ctx {
 
 /// Installed plugins (m0 §2.2).
 pub fn plugins() -> Vec<Plugin> {
-    plugin::discover(std::env::var_os("PATH").as_deref(), CORE_COMMANDS)
+    let core = crate::core_commands();
+    plugin::discover(std::env::var_os("PATH").as_deref(), &core.iter().map(String::as_str).collect::<Vec<_>>())
 }

@@ -51,7 +51,7 @@ p1
 == views/linker.md ==
 # Linker
 
-- [[renamed-new]] and [[renamed-new|label]] and [[renamed-new]]
+- [[renamed-new]] and [[renamed-new|label]]
 - [[concepts/a/block-target]] and [[concepts/a/block-target#^b]]
 - [[heading-target#Heading]]
 - [markdown](concepts/a/renamed.md) is not edited

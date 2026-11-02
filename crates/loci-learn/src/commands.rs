@@ -11,7 +11,7 @@ use loci_core::plugin::Skill;
 use loci_core::vault::Vault;
 use serde_json::json;
 
-use crate::cards::{self, Card};
+use crate::cards::{self, Card, CardId};
 use crate::config::Config;
 use crate::reviewlog::{self, Grade, Input, Line, Subject};
 use crate::schedule::{self, Estimate, Scheduler};
@@ -40,21 +40,21 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
             .at(text_of(&i.path), i.range.clone()),
         );
     }
-    let mut by_id: BTreeMap<&str, Vec<&Card>> = BTreeMap::new();
+    let mut by_id: BTreeMap<loci_core::id::Ulid, Vec<&Card>> = BTreeMap::new();
     for c in &all {
         let at = |code: &str, msg: String| {
             Diagnostic::error(code, msg).at_path(c.path.as_str()).at(text_of(&c.path), c.range.clone())
         };
         match &c.id {
-            None => diags.push(
+            CardId::Missing => diags.push(
                 at("learn.no-id", "card has no block id".into())
                     .with_hint(format!("loci block-ids {} --section Cards", c.path)),
             ),
-            Some(id) if !loci_core::vault::is_ulid(id) => diags.push(
+            CardId::Malformed(id) => diags.push(
                 at("learn.id-form", format!("card id `^{id}` is not a ULID"))
                     .with_hint(format!("delete the id and run `loci block-ids {} --section Cards`", c.path)),
             ),
-            Some(id) => by_id.entry(id.as_str()).or_default().push(c),
+            CardId::Valid(id) => by_id.entry(*id).or_default().push(c),
         }
     }
     for (id, cs) in by_id.iter().filter(|(_, cs)| cs.len() > 1) {
@@ -72,10 +72,10 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
 /// Validates a line against the working tree: its card or concept must exist.
 fn check_exists(line: &Line, all: &[Card], index: &Index) -> Result<(), Refusal> {
     match &line.subject {
-        Subject::Card(card) if !all.iter().any(|c| c.id.as_deref() == Some(card)) => {
+        Subject::Card(card) if !all.iter().any(|c| c.id.valid() == Some(*card)) => {
             Err(Refusal::refused("learn.unknown-card", format!("no card has id `{card}`")))
         }
-        Subject::Concept(concept) if !index.concepts().any(|n| n.fm_str("id") == Some(concept)) => {
+        Subject::Concept(concept) if !index.concepts().any(|n| n.id() == Some(*concept)) => {
             Err(Refusal::refused("learn.unknown-concept", format!("no concept has id `{concept}`")))
         }
         _ => Ok(()),
@@ -105,14 +105,14 @@ pub fn state(vault: &Vault, slug: &str) -> Result<Report, Refusal> {
     let index = Index::open(vault);
     let slug = loci_core::path::VaultPath::from_arg(slug)?;
     let note = index.concept(&slug).map_err(|e| e.refusal("learn.unknown-concept", &slug))?;
-    let Some(concept) = note.fm_str("id").map(str::to_string) else {
+    let Some(concept) = note.id() else {
         return Err(Refusal::refused("learn.unknown-concept", format!("`{slug}` has no valid id")));
     };
     let config = Config::load(&vault.root)?;
     let lines = reviewlog::read(&vault.root)?;
     let (note_cards, _) = cards::of_note(note);
     let (estimate, used) =
-        schedule::estimate(&note_cards, &concept, &lines, &Scheduler::new(config.desired_retention), Timestamp::now());
+        schedule::estimate(&note_cards, concept, &lines, &Scheduler::new(config.desired_retention), Timestamp::now());
     let est_json = match &estimate {
         Estimate::Cards { r } => json!({"kind": "cards", "r": r}),
         Estimate::Item { grade, age_days } => json!({"kind": "item", "grade": grade, "age_days": age_days}),
@@ -147,7 +147,7 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
             Ok(_) => std::process::exit(0),
             Err(e) => {
                 eprintln!("loci learn review: committing the review log failed: {e}");
-                std::process::exit(3);
+                std::process::exit(loci_core::envelope::Exit::Internal as i32);
             }
         }
     });
@@ -161,7 +161,7 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
         for (i, card) in session.iter().enumerate() {
             let progress = format!("{}/{}", i + 1, session.len());
             let Some(grade) = ask(card, &progress, &mut input, &mut err)? else { return Ok(()) };
-            let id = card.id.clone().expect("only cards with ids are scheduled");
+            let id = card.id.valid().expect("only cards with valid ids are scheduled");
             let line = Line { t: Timestamp::now(), subject: Subject::Card(id), grade };
             // The interrupt handler takes this lock, so it waits for a line being written
             // and always sees whole lines.
@@ -206,5 +206,14 @@ fn ask(card: &Card, progress: &str, input: &mut impl BufRead, err: &mut impl Wri
             Some(g) => return Ok(Some(g)),
             None => writeln!(err, "type again, hard, good, easy, 1-4 or q")?,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_compiled_skills_have_descriptions() {
+        let report = super::skills().unwrap();
+        assert!(report.human.lines().all(|l| l.split_once(": ").is_some_and(|(_, d)| !d.is_empty())));
     }
 }

@@ -1,6 +1,7 @@
 //! Plugin dispatch and the plugin contract (m0 §2.2, §2.3).
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::LazyLock;
@@ -30,14 +31,16 @@ pub struct Skill {
 }
 
 impl Skill {
-    /// A skill from its `SKILL.md`: the description is the `description:` field of the
-    /// frontmatter (empty if absent).
+    /// A skill compiled into a binary, from its `SKILL.md`: the description is the
+    /// `description:` field of the frontmatter. Panics when the frontmatter is broken
+    /// or has no description: the binary was built with a bad skill.
     pub fn from_markdown(name: &str, body: &str) -> Self {
         // Parsed for its frontmatter only; the file is a plugin's, not the vault's.
         let path = crate::path::VaultPath::new("SKILL.md".to_string()).expect("one segment is a vault path");
         let note = crate::parse::parse(&path, crate::vault::Kind::Unknown, body.to_string());
-        let description = note.fm_str("description").unwrap_or_default().to_string();
-        Self { name: name.to_string(), description, body: body.to_string() }
+        assert!(note.fm_error.is_none(), "skill `{name}` has broken frontmatter: {:?}", note.fm_error);
+        let description = note.fm_str("description").unwrap_or_else(|| panic!("skill `{name}` has no description"));
+        Self { name: name.to_string(), description: description.to_string(), body: body.to_string() }
     }
 }
 
@@ -135,20 +138,15 @@ pub fn failed(plugin: &Plugin, command: &str, reason: &str) -> Diagnostic {
     Diagnostic::error("plugin.failed", format!("plugin `{}` `{command}` failed: {reason}", plugin.name))
 }
 
-/// The environment a plugin runs in, checked on the plugin side (§2.3 item 6).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginEnv {
-    pub vault: PathBuf,
-}
-
-/// Checks `LOCI_VERSION` and `LOCI_VAULT`. `built_with` is the workspace version the
-/// plugin was compiled with; the refusal goes into the plugin's envelope.
+/// Checks the environment a plugin runs in, `LOCI_VERSION` and `LOCI_VAULT`, on the
+/// plugin side (§2.3 item 6), and returns the vault root. `built_with` is the workspace
+/// version the plugin was compiled with; the refusal goes into the plugin's envelope.
 pub fn check_env(
-    version: Option<String>,
-    vault: Option<String>,
+    version: Option<OsString>,
+    vault: Option<OsString>,
     name: &str,
     built_with: &str,
-) -> Result<PluginEnv, Refusal> {
+) -> Result<PathBuf, Refusal> {
     let Some(version) = version else {
         return Err(Refusal::refused("plugin.direct", format!("run as `loci {name}`")));
     };
@@ -156,6 +154,7 @@ pub fn check_env(
         return Err(Refusal::refused("vault.not-found", "LOCI_VAULT is not set"));
     };
     let bad = |m: String| Refusal::refused("plugin.version", m);
+    let version = version.into_string().map_err(|v| bad(format!("LOCI_VERSION {v:?} is not UTF-8")))?;
     let core = semver::Version::parse(&version).map_err(|e| bad(format!("bad LOCI_VERSION: {e}")))?;
     let req =
         semver::VersionReq::parse(&format!("^{built_with}")).map_err(|e| bad(format!("bad build version: {e}")))?;
@@ -164,7 +163,7 @@ pub fn check_env(
             "loci {version} is not compatible with the loci-core {built_with} this plugin was built with"
         )));
     }
-    Ok(PluginEnv { vault: PathBuf::from(vault) })
+    Ok(PathBuf::from(vault))
 }
 
 #[cfg(test)]

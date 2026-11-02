@@ -2,24 +2,19 @@
 
 use std::ops::Range;
 
-use crate::parse::{Note, TopBlock, strip_list_marker};
+use crate::id::Ulid;
+use crate::parse::{Note, TopBlock};
 use crate::splice::{self, Edit};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assigned {
     /// 1-based line of the block's id slice end.
     pub line: usize,
-    pub id: String,
-}
-
-/// Fresh ULIDs, monotonic within one run (m0 §9.9).
-pub fn ulid_ids() -> impl FnMut() -> String {
-    let mut generator = ulid::Generator::new();
-    move || generator.generate().expect("a ULID generator does not overflow within one run").to_string()
+    pub id: Ulid,
 }
 
 /// Computes the new text and the assigned ids. Returns `None` when no section matches.
-pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> String) -> Option<(String, Vec<Assigned>)> {
+pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> Ulid) -> Option<(String, Vec<Assigned>)> {
     if note.h2_sections(heading).is_empty() {
         return None;
     }
@@ -30,7 +25,8 @@ pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> String) ->
     // item that starts with a nested block (a quote, a fence) has no leading text to
     // carry an id.
     let mut targets: Vec<(Range<usize>, Range<usize>)> = vec![]; // (block, id slice)
-    for item in items.into_iter().filter(|i| !strip_list_marker(&note.text[i.lead.clone()]).trim().is_empty()) {
+    for item in items.into_iter().filter(|i| !note.text[i.content_start.min(i.lead.end)..i.lead.end].trim().is_empty())
+    {
         if !has_id(&item.range) {
             targets.push((item.range.clone(), item.lead.clone()));
         }
@@ -48,7 +44,7 @@ pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> String) ->
     for (_, slice) in targets {
         let at = slice.start + text[slice.clone()].trim_end().len();
         let id = new_id();
-        assigned.push(Assigned { line: crate::envelope::line_col(text, at).0, id: id.clone() });
+        assigned.push(Assigned { line: crate::envelope::line_col(text, at).0, id });
         edits.push(Edit::insert(at, format!(" ^{id}")));
     }
     let out = splice::apply(text, edits).expect("insertions at distinct block ends never overlap");
@@ -62,14 +58,24 @@ mod tests {
     use crate::path::VaultPath;
     use crate::vault::Kind;
 
+    /// The `k`th test id (1-based).
+    fn id(k: usize) -> Ulid {
+        format!("01ARZ3NDEKTSV4RRFFQ69G5F{k:02}").parse().unwrap()
+    }
+
+    /// Assigns ids, written as `ID1`, `ID2`, … in the returned text.
     fn run(text: &str) -> (String, Vec<Assigned>) {
         let n = parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, text.to_string());
         let mut k = 0;
-        assign(&n, "Cards", || {
+        let (mut out, assigned) = assign(&n, "Cards", || {
             k += 1;
-            format!("ID{k}")
+            id(k)
         })
-        .unwrap()
+        .unwrap();
+        for i in 1..=assigned.len() {
+            out = out.replace(&id(i).to_string(), &format!("ID{i}"));
+        }
+        (out, assigned)
     }
 
     #[test]
@@ -103,7 +109,7 @@ mod tests {
         assert_eq!(ids.len(), 2);
         // Idempotent.
         let n = parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, out.clone());
-        let (again, more) = assign(&n, "Cards", || "X".into()).unwrap();
+        let (again, more) = assign(&n, "Cards", || unreachable!("no new target")).unwrap();
         assert_eq!(again, out);
         assert!(more.is_empty());
     }
@@ -126,6 +132,6 @@ mod tests {
     #[test]
     fn missing_section() {
         let n = parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, "# T\n".into());
-        assert!(assign(&n, "Cards", || "X".into()).is_none());
+        assert!(assign(&n, "Cards", || unreachable!("no section")).is_none());
     }
 }

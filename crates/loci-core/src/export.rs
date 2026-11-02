@@ -5,31 +5,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ops::Range;
 
 use crate::index::{Index, Resolved, heading_key};
-use crate::parse::{Heading, Link, LinkForm, Note};
+use crate::parse::{Fragment, Heading, Link, LinkForm, Note};
 use crate::path::VaultPath;
 use crate::splice::{self, Edit};
-
-/// The part of a note a link includes (m1-m4 §4 step 1).
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Part {
-    Whole,
-    /// The section under a heading (`[[x#heading]]`).
-    Heading(String),
-    /// One block (`[[x#^id]]`).
-    Block(String),
-}
-
-impl Part {
-    fn of(link: &Link) -> Part {
-        match link.fragment.as_deref() {
-            None => Part::Whole,
-            Some(f) => match f.strip_prefix('^') {
-                Some(id) => Part::Block(id.to_string()),
-                None => Part::Heading(f.to_string()),
-            },
-        }
-    }
-}
 
 /// An included note, with how its content is placed in the document.
 struct Unit<'a> {
@@ -48,13 +26,14 @@ impl<'a> Unit<'a> {
         Unit { note, range: note.body_start()..note.text.len(), shift: 0, title: None }
     }
 
-    /// The unit for `part` of `note`, placed under a heading of `level`. `resolve` has
-    /// checked that the fragment exists.
-    fn child(note: &'a Note, part: &Part, level: u8) -> Self {
+    /// The unit for `part` of `note` (m1-m4 §4 step 1: the whole note, the section under
+    /// a heading, or one block), placed under a heading of `level`. `resolve` has checked
+    /// that the fragment exists.
+    fn child(note: &'a Note, part: Option<&Fragment>, level: u8) -> Self {
         let range = match part {
-            Part::Whole => note.body_start()..note.text.len(),
-            Part::Heading(f) => section_range(note, f).expect("resolve checked the heading"),
-            Part::Block(id) => {
+            None => note.body_start()..note.text.len(),
+            Some(Fragment::Heading(f)) => section_range(note, f).expect("resolve checked the heading"),
+            Some(Fragment::Block(id)) => {
                 note.block_ids.iter().find(|b| &b.id == id).expect("resolve checked the block id").block.clone()
             }
         };
@@ -207,7 +186,7 @@ pub fn export(index: &Index, root: &VaultPath, depth: usize) -> Export {
                 continue;
             }
             let level = (parent.level_at(link.range.start) + 1).min(6);
-            children.push((path, Unit::child(note, &Part::of(link), level)));
+            children.push((path, Unit::child(note, link.fragment.as_ref(), level)));
         }
         for (path, unit) in children {
             unit_of.insert(path, units.len());
@@ -234,17 +213,20 @@ pub fn export(index: &Index, root: &VaultPath, depth: usize) -> Export {
             edits.push(Edit::replace(start..b.range.end, ""));
         }
         for (link, resolved) in note_links(index, note, &u.range) {
-            let label = link_label(note, link);
+            let label = link.label.clone().map(|r| note.text[r].to_string());
             let replacement = match resolved {
                 Resolved::File(p) if link.form == LinkForm::Embed && is_image(&p) => {
                     let name = asset_names.entry(p.clone()).or_insert_with(|| unique_name(&p, &mut taken)).clone();
-                    let alt = embed_alt(note, link).unwrap_or_else(|| name.clone());
-                    format!("![{alt}](assets/{name})")
+                    let alt = label.filter(|l| !is_size(l)).unwrap_or_else(|| name.clone());
+                    format!("![{alt}]({ASSETS}/{name})")
                 }
                 Resolved::File(_) => label.unwrap_or_else(|| link.target.clone()),
                 Resolved::Note(p) => {
                     let target = index.parsed(&p).expect("a resolved note");
-                    let heading = link.fragment.as_deref().filter(|f| !f.starts_with('^'));
+                    let heading = match &link.fragment {
+                        Some(Fragment::Heading(h)) => Some(h.as_str()),
+                        Some(Fragment::Block(_)) | None => None,
+                    };
                     let text = label.unwrap_or_else(|| heading.unwrap_or(target.title()).to_string());
                     match unit_of.get(&p) {
                         Some(&j) => {
@@ -278,26 +260,22 @@ pub fn export(index: &Index, root: &VaultPath, depth: usize) -> Export {
 }
 
 /// Edits that give heading `h` the ATX level `level`, touching only its markers so
-/// that links inside the heading text are rewritten separately: an ATX heading's `#`
-/// run is replaced; a setext heading gets a `#` prefix, its text lines are joined and
-/// its underline is dropped.
+/// that links inside the heading text are rewritten separately: everything before the
+/// text (an ATX heading's `#` run) becomes the new `#` run; a setext heading's text
+/// lines are also joined and its underline dropped.
 fn heading_edits(text: &str, h: &Heading, level: u8) -> Vec<Edit> {
     let marks = "#".repeat(level as usize);
-    let start = h.range.start;
-    let raw = text[h.range.clone()].trim_end_matches(['\n', '\r']);
-    let indent = raw.len() - raw.trim_start_matches(' ').len();
-    if raw[indent..].starts_with('#') {
-        let run = raw[indent..].len() - raw[indent..].trim_start_matches('#').len();
-        return vec![Edit::replace(start..start + indent + run, marks)];
+    let prefix = if h.content.is_empty() { marks } else { format!("{marks} ") };
+    let mut edits = vec![Edit::replace(h.range.start..h.content.start, prefix)];
+    if h.setext {
+        let content = &text[h.content.clone()];
+        for (i, _) in content.match_indices('\n') {
+            let cr = usize::from(content[..i].ends_with('\r'));
+            edits.push(Edit::replace(h.content.start + i - cr..h.content.start + i + 1, " "));
+        }
+        let end = h.range.start + text[h.range.clone()].trim_end_matches(['\n', '\r']).len();
+        edits.push(Edit::replace(h.content.end..end, ""));
     }
-    let underline = raw.rfind('\n').expect("a setext heading ends with an underline line");
-    let mut edits = vec![Edit::insert(start, format!("{marks} "))];
-    let content = raw[..underline].trim_end_matches('\r');
-    for (i, _) in content.match_indices('\n') {
-        let cr = usize::from(content[..i].ends_with('\r'));
-        edits.push(Edit::replace(start + i - cr..start + i + 1, " "));
-    }
-    edits.push(Edit::replace(start + content.len()..start + raw.len(), ""));
     edits
 }
 
@@ -305,26 +283,19 @@ fn shift_edits(edits: Vec<Edit>, by: usize) -> Vec<Edit> {
     edits.into_iter().map(|e| Edit { range: e.range.start - by..e.range.end - by, new: e.new }).collect()
 }
 
-/// The `|label` of a wikilink, if any.
-fn link_label(note: &Note, link: &Link) -> Option<String> {
-    let after = &note.text[link.target_range.end..link.range.end];
-    let label = after.strip_prefix('|')?.strip_suffix("]]")?;
-    Some(label.to_string())
-}
+/// The folder, beside the exported file, that holds the images it embeds.
+pub const ASSETS: &str = "assets";
 
-/// The alt text of an image embed: the `|` part when it is not a size.
-fn embed_alt(note: &Note, link: &Link) -> Option<String> {
-    let l = link_label(note, link)?;
-    let is_size = l.split('x').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
-    (!is_size).then_some(l)
+/// Whether an image embed's `|` part is a size (`300` or `300x200`), not alt text.
+fn is_size(label: &str) -> bool {
+    label.split('x').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
 }
 
 fn unique_name(path: &VaultPath, taken: &mut BTreeSet<String>) -> String {
     let name = path.file_name().to_string();
-    let (stem, ext) = match name.rfind('.') {
-        Some(i) => (name[..i].to_string(), name[i..].to_string()),
-        None => (name.clone(), String::new()),
-    };
+    let file = relative_path::RelativePath::new(path.as_str());
+    let stem = file.file_stem().expect("a vault path ends in a name");
+    let ext = file.extension().map_or(String::new(), |e| format!(".{e}"));
     let mut candidate = name.clone();
     let mut n = 1;
     while !taken.insert(candidate.clone()) {

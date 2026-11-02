@@ -206,7 +206,7 @@ fn new_writes_the_skeleton() {
     assert_eq!(env["command"], "new");
     assert_eq!(env["data"]["path"], "concepts/a/sub/fresh.md");
     let id = env["data"]["id"].as_str().unwrap();
-    assert!(is_ulid(id), "{id}");
+    assert!(id.parse::<loci_core::id::Ulid>().is_ok(), "{id}");
     let text = v.read("concepts/a/sub/fresh.md");
     assert_eq!(text, format!("---\nid: {id}\nprereqs: []\n---\n# fresh\n"));
     assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});

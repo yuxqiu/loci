@@ -17,12 +17,18 @@ pub struct Change {
     pub moves: BTreeMap<VaultPath, VaultPath>,
     /// Files deleted from disk.
     pub deleted: BTreeSet<VaultPath>,
-    /// New content of every edited file, keyed by its final path.
-    pub writes: BTreeMap<VaultPath, String>,
-    /// Number of edits per edited file (final path).
-    pub edit_counts: BTreeMap<VaultPath, usize>,
+    /// Every edited file, keyed by its final path.
+    pub writes: BTreeMap<VaultPath, Written>,
     /// Links removed on purpose, as (original path, index into that note's `links`).
     pub removed_links: BTreeSet<(VaultPath, usize)>,
+}
+
+/// The new content of an edited file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Written {
+    pub text: String,
+    /// How many edits made it.
+    pub edits: usize,
 }
 
 impl Change {
@@ -31,15 +37,16 @@ impl Change {
     }
 }
 
-/// Builds the edits for every link, in files outside `sources/` and not in `skip`, whose
-/// resolved target is a key of `targets` (old target path -> new target path).
+/// Builds the edits for every link, in files outside `sources/` that `change` does not
+/// delete, whose resolved target is a key of `targets` (old target path -> new target
+/// path).
 pub fn link_edits(
     index: &Index,
     targets: &BTreeMap<VaultPath, VaultPath>,
-    skip: &BTreeSet<VaultPath>,
+    change: &Change,
 ) -> BTreeMap<VaultPath, Vec<Edit>> {
     let mut edits: BTreeMap<VaultPath, Vec<Edit>> = BTreeMap::new();
-    for note in index.notes().filter(|n| n.kind != Kind::Source && !skip.contains(&n.path)) {
+    for note in index.notes().filter(|n| n.kind != Kind::Source && !change.deleted.contains(&n.path)) {
         for link in &note.links {
             if let Some(new_raw) = rewrite(index, note, link, targets) {
                 edits.entry(note.path.clone()).or_default().push(Edit::replace(link.target_range.clone(), new_raw));
@@ -63,36 +70,38 @@ fn rewrite(index: &Index, note: &Note, link: &Link, targets: &BTreeMap<VaultPath
         // A note is linked without `.md`, any other file with its extension.
         new.as_str().strip_suffix(".md").unwrap_or(new.as_str()).to_string()
     };
-    // The fragment and a table's escaped `\|` stay (a prerequisite, a bare
-    // `"[[slug]]"`, has neither).
+    // The fragment stays (a prerequisite, a bare `"[[slug]]"`, has none); a table's
+    // escaping `\` is outside the target, so it stays too.
     if let Some(f) = &link.fragment {
-        raw.push('#');
-        raw.push_str(f);
-    }
-    if link.raw.ends_with('\\') {
-        raw.push('\\');
+        raw.push_str(&format!("#{f}"));
     }
     (raw != link.raw).then_some(raw)
 }
 
-/// Applies per-file edits into `change.writes`.
-pub fn add_writes(index: &Index, change: &mut Change, edits: BTreeMap<VaultPath, Vec<Edit>>) -> Result<(), Refusal> {
+/// Completes `change` (its moves, deletions and removed links set) with per-file
+/// `edits`, then verifies it ([`verify`], refusing with `code`).
+pub fn finish(
+    index: &Index,
+    mut change: Change,
+    targets: &BTreeMap<VaultPath, VaultPath>,
+    edits: BTreeMap<VaultPath, Vec<Edit>>,
+    code: &'static str,
+) -> Result<Change, Refusal> {
     for (path, file_edits) in edits {
-        let note = index.parsed(path.as_str()).expect("edits are only made to readable notes");
+        let note = index.parsed(&path).expect("edits are only made to readable notes");
         let count = file_edits.len();
         let text =
             splice::apply(&note.text, file_edits).map_err(|e| Refusal::internal("change.edit", e.to_string()))?;
-        let dest = change.final_path(&path);
-        change.edit_counts.insert(dest.clone(), count);
-        change.writes.insert(dest, text);
+        change.writes.insert(change.final_path(&path), Written { text, edits: count });
     }
-    Ok(())
+    verify(index, targets, &change, code)?;
+    Ok(change)
 }
 
 /// Builds the changed tree in memory and checks that every link outside `sources/` that
 /// resolved before resolves to `targets`' image of its old target (m0 §9.5 step 3).
 /// A fragment into a deleted note (the absorbed note of a merge) may stop resolving.
-pub fn verify(
+fn verify(
     index: &Index,
     targets: &BTreeMap<VaultPath, VaultPath>,
     change: &Change,
@@ -106,14 +115,14 @@ pub fn verify(
         .filter(|n| !change.deleted.contains(&n.path))
         .map(|n| {
             let p = change.final_path(&n.path);
-            let text = change.writes.get(&p).cloned().unwrap_or_else(|| n.text.clone());
+            let text = change.writes.get(&p).map_or_else(|| n.text.clone(), |w| w.text.clone());
             (p, text)
         })
         .collect();
     let after = index::build(files, |p| contents[p].clone());
     for note in index.notes().filter(|n| n.kind != Kind::Source && !change.deleted.contains(&n.path)) {
         let new_path = change.final_path(&note.path);
-        let Some(new_note) = after.parsed(new_path.as_str()) else {
+        let Some(new_note) = after.parsed(&new_path) else {
             return Err(Refusal::refused(code, format!("{new_path} would no longer parse as a note")));
         };
         if note.fm_error.is_none() && new_note.fm_error.is_some() {
@@ -160,8 +169,8 @@ pub fn apply(vault: &Vault, change: &Change) -> std::io::Result<()> {
         std::fs::rename(vault.abs(old), &dest)?;
     }
     // Writes before deletions: a failed write leaves the absorbed note in place.
-    for (path, text) in &change.writes {
-        vault::write_atomic(&vault.abs(path), text.as_bytes())?;
+    for (path, written) in &change.writes {
+        vault::write_atomic(&vault.abs(path), written.text.as_bytes())?;
     }
     for path in &change.deleted {
         std::fs::remove_file(vault.abs(path))?;

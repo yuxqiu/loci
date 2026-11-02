@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use loci_core::config::Budgets;
 use loci_core::index::{self, Index};
-use loci_core::lint::Lint;
+use loci_core::lint;
 use loci_core::mv;
 use loci_core::path::VaultPath;
 use loci_core::splice::{self, Edit};
@@ -143,7 +143,7 @@ fn apply_plan(files: &Files, plan: &loci_core::relink::Change) -> Files {
     let mut out = Files::new();
     for (p, t) in files {
         let new = map.get(p.as_str()).map_or(p.clone(), |n| n.to_string());
-        let text = plan.writes.get(new.as_str()).cloned().unwrap_or_else(|| t.clone());
+        let text = plan.writes.get(new.as_str()).map_or_else(|| t.clone(), |w| w.text.clone());
         out.insert(new, text);
     }
     out
@@ -171,7 +171,8 @@ proptest! {
         let map: BTreeMap<&str, &str> = plan.moves.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
         let mapped = |p: &str| map.get(p).map_or(p.to_string(), |n| n.to_string());
         for note in before.notes() {
-            let new_note = after.parsed(mapped(note.path.as_str()).as_str()).expect("every note survives a move");
+            let new_path = plan.moves.get(&note.path).unwrap_or(&note.path);
+            let new_note = after.parsed(new_path).expect("every note survives a move");
             prop_assert_eq!(note.links.len(), new_note.links.len(), "{}", note.path);
             for (old, new) in note.links.iter().zip(&new_note.links) {
                 let Ok(r) = before.resolve(note, old) else { continue };
@@ -185,8 +186,7 @@ proptest! {
         }
         // Lint finds no new link errors.
         let budgets = Budgets::default();
-        let link_errors = |i: &Index| Lint { index: i, budgets: &budgets }
-            .run()
+        let link_errors = |i: &Index| lint::run(i, &budgets)
             .into_iter()
             .filter(|d| d.code.starts_with("link.") || d.code == "prereqs.cycle")
             .count();
@@ -198,7 +198,7 @@ proptest! {
         let budgets = Budgets::default();
         let run = || {
             let i = build(&g.files);
-            serde_json::to_string(&Lint { index: &i, budgets: &budgets }.run()).unwrap()
+            serde_json::to_string(&lint::run(&i, &budgets)).unwrap()
         };
         prop_assert_eq!(run(), run());
     }

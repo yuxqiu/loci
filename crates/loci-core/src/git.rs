@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::path::VaultPath;
 
@@ -38,6 +39,11 @@ pub fn run(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
 /// Refs outside `refs/heads/` and `refs/tags/` are not pushed by default.
 pub const AGENT_REFS: &str = "refs/loci/agent/";
 
+/// Whole seconds since the Unix epoch, as git dates take them.
+fn unix_seconds(t: SystemTime) -> u64 {
+    t.duration_since(UNIX_EPOCH).expect("the clock is after 1970").as_secs()
+}
+
 fn trimmed(out: Vec<u8>) -> String {
     String::from_utf8_lossy(&out).trim().to_string()
 }
@@ -63,27 +69,28 @@ pub fn agent_notes(root: &Path, name: &str) -> Result<Vec<String>, String> {
 
 /// Records the working tree as a commit whose parent is HEAD, under
 /// `refs/loci/agent/<HEAD id>` (replacing an earlier record for the same HEAD),
-/// without touching the index or any branch. `now` (Unix seconds) dates the record.
+/// without touching the index or any branch. `now` dates the record.
 /// `notes` (what was hard in the task) join those of the record it replaces. Returns
 /// the ref, or `None` when there is no HEAD, or when the tree equals HEAD's and there
 /// are no notes.
-pub fn record_agent_tree(root: &Path, now: u64, notes: &[String]) -> Result<Option<String>, String> {
+pub fn record_agent_tree(root: &Path, now: SystemTime, notes: &[String]) -> Result<Option<String>, String> {
     if !has_head(root)? {
         return Ok(None);
     }
     let head = head(root)?;
-    let git_dir = trimmed(run(root, &["rev-parse", "--absolute-git-dir"])?);
-    // A private index, so the user's staging is untouched.
-    let index = Path::new(&git_dir).join(format!("loci-agent-index-{}", std::process::id()));
+    let git_dir = String::from_utf8(run(root, &["rev-parse", "--absolute-git-dir"])?)
+        .map_err(|_| "the git directory's path is not UTF-8".to_string())?;
+    // A private index, so the user's staging is untouched; removed when `scratch` drops.
+    let scratch = tempfile::Builder::new()
+        .prefix("loci-agent-")
+        .tempdir_in(git_dir.trim())
+        .map_err(|e| format!("cannot create a temporary index: {e}"))?;
+    let index = scratch.path().join("index");
     let with_index = |args: &[&str]| exec(git(root).env("GIT_INDEX_FILE", &index).args(args), &args.join(" "));
     let tree = with_index(&["read-tree", &head])
         .and_then(|_| with_index(&["add", "-A"]))
-        .and_then(|_| with_index(&["write-tree"]).map(trimmed));
-    match std::fs::remove_file(&index) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.to_string()),
-        _ => {}
-    }
-    let tree = tree?;
+        .and_then(|_| with_index(&["write-tree"]).map(trimmed))?;
+    scratch.close().map_err(|e| format!("cannot remove the temporary index: {e}"))?;
     let name = format!("{AGENT_REFS}{head}");
     let mut all = agent_notes(root, &name)?;
     for n in notes.iter().map(|n| n.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|n| !n.is_empty()) {
@@ -99,7 +106,7 @@ pub fn record_agent_tree(root: &Path, now: u64, notes: &[String]) -> Result<Opti
         message.push_str("\n\n");
         message.push_str(&all.iter().map(|n| format!("- {n}\n")).collect::<String>());
     }
-    let date = format!("@{now} +0000");
+    let date = format!("@{} +0000", unix_seconds(now));
     let commit = exec(
         git(root)
             .env("GIT_AUTHOR_NAME", "loci")
@@ -115,23 +122,23 @@ pub fn record_agent_tree(root: &Path, now: u64, notes: &[String]) -> Result<Opti
     Ok(Some(name))
 }
 
-/// The agent records (`loci done`), as (ref, Unix seconds of the record), by ref name.
-pub fn agent_refs(root: &Path) -> Result<Vec<(String, u64)>, String> {
+/// The agent records (`loci done`), as (ref, time of the record), by ref name.
+pub fn agent_refs(root: &Path) -> Result<Vec<(String, SystemTime)>, String> {
     let out = run(root, &["for-each-ref", "--format=%(refname) %(committerdate:unix)", AGENT_REFS])?;
     let text = String::from_utf8_lossy(&out);
     text.lines()
         .map(|l| {
             let (name, time) = l.rsplit_once(' ').ok_or_else(|| format!("unexpected for-each-ref line `{l}`"))?;
-            let time = time.parse().map_err(|_| format!("unexpected for-each-ref line `{l}`"))?;
-            Ok((name.to_string(), time))
+            let time: u64 = time.parse().map_err(|_| format!("unexpected for-each-ref line `{l}`"))?;
+            Ok((name.to_string(), UNIX_EPOCH + Duration::from_secs(time)))
         })
         .collect()
 }
 
-/// Deletes agent records older than `max_age` seconds at time `now`; returns how many.
-pub fn prune_agent_refs(root: &Path, now: u64, max_age: u64) -> Result<usize, String> {
-    let old: Vec<String> =
-        agent_refs(root)?.into_iter().filter(|(_, t)| now.saturating_sub(*t) > max_age).map(|(n, _)| n).collect();
+/// Deletes agent records older than `max_age` at time `now`; returns how many.
+pub fn prune_agent_refs(root: &Path, now: SystemTime, max_age: Duration) -> Result<usize, String> {
+    let old = |t: SystemTime| now.duration_since(t).is_ok_and(|age| age > max_age);
+    let old: Vec<String> = agent_refs(root)?.into_iter().filter(|(_, t)| old(*t)).map(|(n, _)| n).collect();
     for name in &old {
         run(root, &["update-ref", "-d", name])?;
     }

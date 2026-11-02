@@ -11,7 +11,7 @@ expression: v.redact(&env)
         "path": "concepts/a/prereq-holder.md"
       },
       {
-        "edits": 3,
+        "edits": 2,
         "path": "views/linker.md"
       }
     ],

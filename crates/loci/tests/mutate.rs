@@ -33,7 +33,7 @@ fn mv_rename_rewrites_links() {
     // never edited.
     assert_eq!(v.read("concepts/a/renamed-new.md"), before);
     let linker = v.read("views/linker.md");
-    assert!(linker.contains("- [[renamed-new]] and [[renamed-new|label]] and [[renamed-new]]\n"), "{linker}");
+    assert!(linker.contains("- [[renamed-new]] and [[renamed-new|label]]\n"), "{linker}");
     assert!(linker.contains("[markdown](concepts/a/renamed.md)"), "{linker}");
     assert!(v.read("concepts/a/prereq-holder.md").contains(r#"prereqs: ["[[renamed-new]]", "[[heading-target]]"]"#));
     assert!(!v.exists("concepts/a/renamed.md"));
@@ -226,7 +226,7 @@ fn block_ids_assigns_top_level_blocks_of_the_section() {
     assert_eq!(strip_block_ids(&after), before);
     let assigned = env["data"]["assigned"].as_array().unwrap();
     let ids: Vec<&str> = assigned.iter().map(|a| a["id"].as_str().unwrap()).collect();
-    assert!(ids.iter().all(|i| is_ulid(i)), "{ids:?}");
+    assert!(ids.iter().all(|i| i.parse::<loci_core::id::Ulid>().is_ok()), "{ids:?}");
     let mut uniq = ids.clone();
     uniq.sort();
     uniq.dedup();

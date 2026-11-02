@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::git;
 use loci_core::path::VaultPath;
+use loci_core::vault::Kind;
 use serde_json::json;
 
 use super::Ctx;
@@ -21,7 +22,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     let mut human = String::new();
 
     // 1. The agent entry point.
-    if !files.iter().any(|f| f == "AGENTS.md") {
+    if !files.iter().any(|f| f == loci_core::vault::AGENTS) {
         diags.push(
             Diagnostic::warning("install.missing", "`AGENTS.md` is missing")
                 .with_hint("run `loci init` in a new vault"),
@@ -61,7 +62,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     };
 
     // 4. Inbox: counts by folder, and the files not yet committed, which block work.
-    let inbox: Vec<&VaultPath> = files.iter().filter(|f| f.as_str().starts_with("inbox/")).collect();
+    let inbox: Vec<&VaultPath> = files.iter().filter(|f| f.kind() == Some(Kind::Inbox)).collect();
     let mut by_folder: BTreeMap<&str, usize> = BTreeMap::new();
     for f in &inbox {
         let parts: Vec<&str> = f.components().collect();
@@ -103,11 +104,21 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     }
 
     // 5. Vault updates waiting for the user's decision (`loci updates`).
-    let (line, waiting, warning) = super::updates::status(vault.config.updates.as_deref());
-    if !line.is_empty() {
-        human.push_str(&format!("\n## Updates\n\n{line}"));
+    let waiting = match super::updates::status(vault.config.updates) {
+        Ok(waiting) => waiting,
+        Err(newer) => {
+            diags.push(Diagnostic::warning(&newer.error.code, newer.error.message));
+            vec![]
+        }
+    };
+    if !waiting.is_empty() {
+        let ids: Vec<String> = waiting.iter().map(ToString::to_string).collect();
+        human.push_str(&format!(
+            "\n## Updates\n\n{} waiting ({}); read them with `loci updates`\n",
+            ids.len(),
+            ids.join(", ")
+        ));
     }
-    diags.extend(warning);
 
     let data = json!({
         "changes": changes.as_ref().map(|c| json!({

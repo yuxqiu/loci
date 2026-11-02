@@ -41,9 +41,9 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
         None => vault.root.join(format!(".loci/export/{}.{}", path.stem(), format.ext())),
     };
     let out_dir = out_path.parent().expect("an absolute file path has a parent").to_path_buf();
-    std::fs::create_dir_all(out_dir.join("assets")).map_err(Refusal::io)?;
+    std::fs::create_dir_all(out_dir.join(export::ASSETS)).map_err(Refusal::io)?;
     for (src, name) in &e.assets {
-        std::fs::copy(vault.abs(src), out_dir.join("assets").join(name)).map_err(Refusal::io)?;
+        std::fs::copy(vault.abs(src), out_dir.join(export::ASSETS).join(name)).map_err(Refusal::io)?;
     }
     let text = match format {
         Format::Md => e.markdown.clone(),
@@ -53,7 +53,7 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
     let data = json!({
         "output": out_path,
         "notes": e.notes,
-        "assets": e.assets.iter().map(|(_, n)| format!("assets/{n}")).collect::<Vec<_>>(),
+        "assets": e.assets.iter().map(|(_, n)| format!("{}/{n}", export::ASSETS)).collect::<Vec<_>>(),
     });
     Ok(Report::ok(data, format!("{}\n", out_path.display())))
 }
@@ -108,5 +108,7 @@ fn mathml(tex: &str, display: bool) -> Result<String, String> {
 
 /// `text` with the characters HTML gives meaning escaped.
 fn escape(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    let mut out = String::new();
+    pulldown_cmark_escape::escape_html(&mut out, text).expect("writing to a String does not fail");
+    out
 }

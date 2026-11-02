@@ -28,17 +28,15 @@ struct Case {
     check: String,
 }
 
+/// The median of `xs`, which is not empty.
 fn median(xs: &mut [f64]) -> f64 {
-    if xs.is_empty() {
-        return 0.0;
-    }
     xs.sort_by(f64::total_cmp);
     xs[xs.len() / 2]
 }
 
 /// Runs `command` through `sh -c` with `question` on stdin; returns stdout, or `None`
 /// on timeout. Failing to start or talk to `sh` is an error.
-fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::Result<Option<String>> {
+fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::Result<Option<Vec<u8>>> {
     let mut child = Command::new("sh")
         .args(["-c", command])
         .current_dir(cwd)
@@ -68,7 +66,7 @@ fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::R
     }
     // A process the agent left running may hold stdout open, so the wait is bounded too.
     match output.recv_timeout(AGENT_TIMEOUT.saturating_sub(start.elapsed())) {
-        Ok(out) => Ok(Some(String::from_utf8_lossy(&out?).into_owned())),
+        Ok(out) => Ok(Some(out?)),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(None),
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("the stdout reader always sends"),
     }
@@ -91,6 +89,9 @@ pub fn run(ctx: &Ctx, agent: &str, cases_file: Option<&Path>) -> Result<Report, 
             .map_err(|e| Refusal::refused("bench.case", format!("{shown} line {}: {e}", n + 1)))?;
         cases.push(case);
     }
+    if cases.is_empty() {
+        return Err(Refusal::refused("bench.none", format!("`{shown}` has no cases")));
+    }
     let (mut passes, mut times, mut results) = (0usize, vec![], vec![]);
     for case in &cases {
         let start = Instant::now();
@@ -99,7 +100,7 @@ pub fn run(ctx: &Ctx, agent: &str, cases_file: Option<&Path>) -> Result<Report, 
         passes += usize::from(pass);
         results.push(json!({"q": case.q, "pass": pass}));
     }
-    let pass_rate = passes as f64 / cases.len().max(1) as f64;
+    let pass_rate = passes as f64 / cases.len() as f64;
     let median_s = median(&mut times);
     let human = format!("{} cases: pass rate {pass_rate:.3}, median {median_s:.1} s\n", cases.len());
     let data = json!({"cases": cases.len(), "pass_rate": pass_rate, "median_s": median_s, "results": results});

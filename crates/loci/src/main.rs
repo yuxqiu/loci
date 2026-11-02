@@ -11,25 +11,13 @@ use loci_core::envelope::Report;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Core command names; any other first argument is dispatched to `loci-<name>`.
-pub const CORE_COMMANDS: &[&str] = &[
-    "init",
-    "lint",
-    "done",
-    "rules",
-    "updates",
-    "mv",
-    "status",
-    "new",
-    "skill",
-    "block-ids",
-    "merge",
-    "closure",
-    "links",
-    "bench",
-    "export",
-    "help",
-];
+/// Core command names, from the CLI definition, and `help`; any other first argument
+/// is dispatched to `loci-<name>`.
+pub fn core_commands() -> Vec<String> {
+    use clap::CommandFactory;
+    let cli = Cli::command();
+    cli.get_subcommands().map(|c| c.get_name().to_string()).chain(["help".to_string()]).collect()
+}
 
 #[derive(Parser)]
 #[command(name = "loci", version, about = "An agent-maintained knowledge base")]
@@ -180,21 +168,4 @@ fn main() -> ExitCode {
         Cmd::External(args) => return commands::dispatch::run(&ctx, args),
     };
     report.unwrap_or_else(Report::from).print(ctx.json, VERSION, name).into()
-}
-
-#[cfg(test)]
-mod tests {
-    use clap::CommandFactory;
-
-    use super::*;
-
-    #[test]
-    fn core_commands_match_the_cli() {
-        let mut cli: Vec<String> = Cli::command().get_subcommands().map(|c| c.get_name().to_string()).collect();
-        cli.push("help".to_string());
-        cli.sort();
-        let mut listed: Vec<String> = CORE_COMMANDS.iter().map(|c| c.to_string()).collect();
-        listed.sort();
-        assert_eq!(listed, cli, "CORE_COMMANDS must list every subcommand, so plugins cannot shadow one");
-    }
 }

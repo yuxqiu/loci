@@ -7,7 +7,7 @@ use crate::path::VaultPath;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Member {
-    pub slug: String,
+    /// The concept's path; its slug is the path's stem.
     pub path: VaultPath,
     /// Shortest number of `prereqs` steps from the concept.
     pub depth: usize,
@@ -35,7 +35,7 @@ pub fn closure(index: &Index, root: &VaultPath, max_depth: Option<usize>) -> Clo
         if max_depth.is_some_and(|m| d >= m) {
             continue;
         }
-        let (ok, bad) = index.prereqs(index.parsed(p.as_str()).expect("closure members are notes"));
+        let (ok, bad) = index.prereqs(index.parsed(&p).expect("closure members are notes"));
         out.unresolved.extend(bad.into_iter().map(|t| (p.clone(), t)));
         for q in &ok {
             if seen.insert(q.clone()) {
@@ -73,7 +73,7 @@ pub fn closure(index: &Index, root: &VaultPath, max_depth: Option<usize>) -> Clo
         emitted.insert(next.clone());
         order.push(next);
     }
-    out.members = order.into_iter().map(|p| Member { slug: slug(&p), depth: depth[&p], path: p }).collect();
+    out.members = order.into_iter().map(|p| Member { depth: depth[&p], path: p }).collect();
     if edges.values().flatten().any(|p| p == root) {
         out.cyclic = true;
     }
@@ -103,7 +103,7 @@ mod tests {
             ("concepts/a/array.md", c(&[])),
         ]);
         let cl = closure(&i, &vp("concepts/a/dijkstra.md"), None);
-        let order: Vec<(&str, usize)> = cl.members.iter().map(|m| (m.slug.as_str(), m.depth)).collect();
+        let order: Vec<(&str, usize)> = cl.members.iter().map(|m| (m.path.stem(), m.depth)).collect();
         assert_eq!(order, vec![("array", 2), ("graph", 1), ("heap", 1)]);
         assert_eq!(cl.unresolved, vec![(vp("concepts/a/dijkstra.md"), "nope".to_string())]);
         let shallow = closure(&i, &vp("concepts/a/dijkstra.md"), Some(1));

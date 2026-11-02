@@ -1,8 +1,11 @@
 //! `loci updates` (m0 §9.11, docs/specs/updates.md): the vault updates compiled into
 //! the binary, offered by the agent and applied on the user's yes.
 
-use loci_core::config::{self, Config};
+use loci_core::config::{self, Config, UpdateId};
 use loci_core::envelope::{Refusal, Report};
+use loci_core::path::VaultPath;
+use loci_core::vault::Kind;
+use serde::Serialize;
 use serde_json::json;
 
 use super::Ctx;
@@ -20,9 +23,9 @@ const PROCEDURE: &str = "\
 ";
 
 /// One entry of `share/loci/updates.md`.
+#[derive(Serialize)]
 pub struct Update {
-    pub id: String,
-    pub number: u32,
+    pub id: UpdateId,
     pub title: String,
     /// The whole entry, heading included.
     pub text: String,
@@ -33,74 +36,48 @@ pub fn all() -> Vec<Update> {
     parse(assets::UPDATES)
 }
 
-/// The entries of `list`: each starts at a level-2 heading (as markdown sees it, so a
-/// `## ` line in a code block is text) and runs to the next one.
+/// The entries of `list`: each is a level-2 heading `<id> · <date> · <title>` and its
+/// section, as loci's markdown parser reads them (a `## ` line in a code block is text).
 fn parse(list: &str) -> Vec<Update> {
-    use pulldown_cmark::{Event, HeadingLevel, Parser, Tag};
-    let starts: Vec<usize> = Parser::new(list)
-        .into_offset_iter()
-        .filter_map(|(e, r)| matches!(e, Event::Start(Tag::Heading { level: HeadingLevel::H2, .. })).then_some(r.start))
-        .collect();
-    let ends = starts.iter().skip(1).copied().chain([list.len()]);
-    starts
-        .iter()
-        .zip(ends)
-        .map(|(&start, end)| {
-            let entry = &list[start..end];
-            let heading = entry.lines().next().expect("an entry has a heading").trim_start_matches("## ");
-            let mut parts = heading.splitn(3, " · ");
-            let id = parts.next().expect("an id").to_string();
-            let number = config::update_number(&id).expect("ids are `u` and four digits");
+    let path = VaultPath::new("updates.md".into()).expect("one segment is a vault path");
+    let note = loci_core::parse::parse(&path, Kind::Unknown, list.to_string());
+    (0..note.headings.len())
+        .filter(|&i| note.headings[i].level == 2)
+        .map(|i| {
+            let mut parts = note.headings[i].text.splitn(3, " · ");
+            let id = parts.next().expect("an id").parse().expect("ids are `u` and four digits");
             let title = parts.nth(1).expect("a date and a title").to_string();
-            Update { id, number, title, text: format!("{}\n", entry.trim_end()) }
+            Update { id, title, text: format!("{}\n", list[note.section(i)].trim_end()) }
         })
         .collect()
 }
 
-/// Where a vault stands against the updates the binary knows.
-pub enum Standing<'a> {
-    /// Updates after the vault's mark (none when it is current).
-    Waiting(Vec<&'a Update>),
-    /// The vault has handled updates this binary does not know: it is older.
-    Newer,
-}
-
-/// The standing of a vault whose `updates` key is `mark` (`None`: none handled).
-pub fn standing<'a>(mark: Option<&str>, list: &'a [Update]) -> Standing<'a> {
-    let m = mark.map_or(0, |id| config::update_number(id).expect("validated when loci.toml was read"));
-    if m > list.last().expect("updates ship").number {
-        Standing::Newer
-    } else {
-        Standing::Waiting(list.iter().filter(|u| u.number > m).collect())
-    }
-}
-
-/// The refusal for a vault that cannot take the updates this binary has.
-fn refusal(standing: &Standing, mark: Option<&str>) -> Option<Refusal> {
-    let mark = mark.unwrap_or("none");
-    match standing {
-        Standing::Waiting(_) => None,
-        Standing::Newer => Some(Refusal::refused(
+/// The updates after mark `mark` (`None`: none handled), oldest first; refused
+/// (`updates.newer`) when the vault has handled updates this binary does not know.
+pub fn waiting(mark: Option<UpdateId>, list: &[Update]) -> Result<Vec<&Update>, Refusal> {
+    if let Some(mark) = mark.filter(|m| *m > list.last().expect("updates ship").id) {
+        return Err(Refusal::refused(
             "updates.newer",
             format!("this vault has handled updates through {mark}, newer than this loci knows; use a newer loci"),
-        )),
+        ));
     }
+    Ok(list.iter().filter(|u| Some(u.id) > mark).collect())
+}
+
+/// The mark as written in messages.
+fn shown(mark: Option<UpdateId>) -> String {
+    mark.map_or("none".into(), |m| m.to_string())
 }
 
 pub fn run(ctx: &Ctx, every: bool, handled: Option<&str>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let list = all();
-    let mark = vault.config.updates.as_deref();
+    let mark = vault.config.updates;
     if every {
         let text: String = list.iter().map(|u| format!("{}\n", u.text)).collect();
-        let entries: Vec<_> = list.iter().map(|u| json!({"id": u.id, "title": u.title, "text": u.text})).collect();
-        return Ok(Report::ok(json!({"updates": entries}), text));
+        return Ok(Report::ok(json!({"updates": list}), text));
     }
-    let standing = standing(mark, &list);
-    if let Some(r) = refusal(&standing, mark) {
-        return Err(r);
-    }
-    let Standing::Waiting(waiting) = standing else { unreachable!("refused above") };
+    let waiting = waiting(mark, &list)?;
     match handled {
         None => {
             let human = if waiting.is_empty() {
@@ -109,13 +86,11 @@ pub fn run(ctx: &Ctx, every: bool, handled: Option<&str>) -> Result<Report, Refu
                 let entries: String = waiting.iter().map(|u| format!("\n{}", u.text)).collect();
                 format!("{} update(s) waiting.\n\n{PROCEDURE}{entries}", waiting.len())
             };
-            let entries: Vec<_> =
-                waiting.iter().map(|u| json!({"id": u.id, "title": u.title, "text": u.text})).collect();
-            Ok(Report::ok(json!({"waiting": entries}), human))
+            Ok(Report::ok(json!({"waiting": waiting}), human))
         }
         Some(id) => {
-            let Some(target) = list.iter().find(|u| u.id == id) else {
-                let ids: Vec<&str> = list.iter().map(|u| u.id.as_str()).collect();
+            let Some(target) = list.iter().find(|u| id.parse() == Ok(u.id)) else {
+                let ids: Vec<String> = list.iter().map(|u| u.id.to_string()).collect();
                 return Err(Refusal::refused(
                     "updates.unknown",
                     format!("no update `{id}`; known: {}", ids.join(", ")),
@@ -124,34 +99,23 @@ pub fn run(ctx: &Ctx, every: bool, handled: Option<&str>) -> Result<Report, Refu
             if !waiting.iter().any(|u| u.id == target.id) {
                 return Err(Refusal::refused(
                     "updates.order",
-                    format!("`{id}` is already handled (this vault is through {})", mark.unwrap_or("none")),
+                    format!("`{id}` is already handled (this vault is through {})", shown(mark)),
                 ));
             }
             let path = vault.root.join(config::FILE);
             let text = std::fs::read_to_string(&path).map_err(Refusal::io)?;
-            let updated = Config::set_updates(&text, id).map_err(|e| Refusal::refused("config.invalid", e))?;
+            let updated = Config::set_updates(&text, target.id).map_err(|e| Refusal::refused("config.invalid", e))?;
             Config::parse(&updated).map_err(|e| Refusal::internal("updates.write", e))?;
             loci_core::vault::write_atomic(&path, updated.as_bytes()).map_err(Refusal::io)?;
-            Ok(Report::ok(json!({"handled": id}), format!("handled updates through {id}\n")))
+            Ok(Report::ok(json!({"handled": target.id}), format!("handled updates through {}\n", target.id)))
         }
     }
 }
 
-/// The `loci status` part: a line when updates are waiting, a warning when the vault
-/// cannot take them.
-pub fn status(mark: Option<&str>) -> (String, Vec<String>, Option<loci_core::envelope::Diagnostic>) {
-    let list = all();
-    let standing = standing(mark, &list);
-    let diag =
-        refusal(&standing, mark).map(|r| loci_core::envelope::Diagnostic::warning(&r.error.code, r.error.message));
-    match standing {
-        Standing::Waiting(w) if !w.is_empty() => {
-            let ids: Vec<String> = w.iter().map(|u| u.id.clone()).collect();
-            let line = format!("{} waiting ({}); read them with `loci updates`\n", ids.len(), ids.join(", "));
-            (line, ids, diag)
-        }
-        _ => (String::new(), vec![], diag),
-    }
+/// The `loci status` part: the waiting update ids, or the refusal `loci updates` gives
+/// a vault newer than this loci.
+pub fn status(mark: Option<UpdateId>) -> Result<Vec<UpdateId>, Refusal> {
+    Ok(waiting(mark, &all())?.iter().map(|u| u.id).collect())
 }
 
 #[cfg(test)]
@@ -163,7 +127,7 @@ mod tests {
         let list = all();
         assert!(!list.is_empty());
         for (i, u) in list.iter().enumerate() {
-            assert_eq!(u.number, list[0].number + i as u32, "ids only increase, one at a time: {}", u.id);
+            assert_eq!(u.id.to_string(), format!("u{:04}", i + 1), "ids are u0001, u0002, … in order");
             for field in ["- **Offer:**", "- **How:**", "- **Done when:**"] {
                 assert!(u.text.contains(field), "{} has {field}", u.id);
             }
@@ -176,20 +140,23 @@ mod tests {
     fn an_entry_runs_to_the_next_heading_not_to_a_code_line() {
         let list =
             parse("# x\n\n## u0001 · 2026-01-01 · A\n\n```\n## not a heading\n```\n\n## u0002 · 2026-01-02 · B\n\nb\n");
-        assert_eq!(list.iter().map(|u| u.id.as_str()).collect::<Vec<_>>(), ["u0001", "u0002"]);
+        assert_eq!(list.iter().map(|u| u.id.to_string()).collect::<Vec<_>>(), ["u0001", "u0002"]);
         assert!(list[0].text.contains("## not a heading") && list[0].text.starts_with("## u0001"));
     }
 
     #[test]
-    fn standing_against_the_list() {
+    fn waiting_against_the_list() {
         let list = parse("# x\n\n## u0001 · 2026-01-01 · A\n\na\n\n## u0002 · 2026-01-02 · B\n\nb\n");
-        let waiting = |m: Option<&str>| match standing(m, &list) {
-            Standing::Waiting(w) => Some(w.iter().map(|u| u.id.as_str()).collect::<Vec<_>>()),
-            _ => None,
+        let ids = |m: Option<&str>| match waiting(m.map(|m| m.parse().unwrap()), &list) {
+            Ok(w) => Some(w.iter().map(|u| u.id.to_string()).collect::<Vec<_>>()),
+            Err(r) => {
+                assert_eq!(r.code(), "updates.newer");
+                None
+            }
         };
-        assert_eq!(waiting(None), Some(vec!["u0001", "u0002"]), "no key: none handled");
-        assert_eq!(waiting(Some("u0001")), Some(vec!["u0002"]));
-        assert_eq!(waiting(Some("u0002")), Some(vec![]));
-        assert!(matches!(standing(Some("u0003"), &list), Standing::Newer));
+        assert_eq!(ids(None), Some(vec!["u0001".into(), "u0002".into()]), "no key: none handled");
+        assert_eq!(ids(Some("u0001")), Some(vec!["u0002".into()]));
+        assert_eq!(ids(Some("u0002")), Some(vec![]));
+        assert_eq!(ids(Some("u0003")), None, "newer than the list");
     }
 }
