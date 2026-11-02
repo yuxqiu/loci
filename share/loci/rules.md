@@ -29,7 +29,13 @@ This vault is a loci knowledge base. These rules apply to every agent working in
    files, stop and ask the user to commit them.
 2. Edit the working tree directly. Never commit. Run `git add -N <path>` on every
    file you create, so `git diff` shows it (`loci new` does this for you).
-3. Check your work with `loci lint` as you go. Finish every task by running
+3. Check your work with `loci lint` as you go; `loci lint --fix --allow-dirty`
+   applies the fixes that keep the meaning to your uncommitted work, and
+   `loci lint --json` shows each diagnostic's other fixes (apply an unsafe one with
+   `--unsafe-fixes --only <code>` added when it is right).
+   An `update.<id>` diagnostic is a vault update's old form: offer the update
+   (`loci updates`) rather than fixing it unasked.
+   Finish every task by running
    `loci done` and fixing what it reports: it lints, then records your result as a
    local git ref so the user's later corrections can be found (the `improve`
    skill). If something in the task was hard (a search that missed, a rule that

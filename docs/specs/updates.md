@@ -52,7 +52,19 @@ framework rules (`share/loci/updates.md`):
   does not apply to a vault, or that is already done, says so to the user when the
   agent finds it from reading the vault.
 - Only changes that need action in a vault become entries; the CHANGELOG still lists
-  every change. A schema change is an entry whose How runs `loci upgrade`.
+  every change. A schema change is not an entry: a vault on an old schema cannot be
+  opened, so it is converted by `loci upgrade` (m0 §11).
+- **A change lint can find is marked in lint's edition tables** (m0 §7.3; research
+  18 §7, research 19): the row of what the update removes gets `until` the update.
+  Before the vault handles it, lint reports each old form as `update.uNNNN` (a
+  warning, with a fix where one can be made); after, the current rules judge the
+  vault. The How runs `loci lint --fix --only update.uNNNN` (with `--unsafe-fixes`
+  when the fix needs a look) and shows the diff; `--fix` wants a clean tree, so the
+  diff is the update's. The Done when names `update.uNNNN`, since a pending update's
+  diagnostics are warnings and "`loci lint` passes" alone does not show them gone; the
+  Offer says what declining means (the old forms become errors of the current rules).
+  A unit test checks all three for every update the tables name. An update that
+  needs judgement has no row.
 
 ## 3. State
 

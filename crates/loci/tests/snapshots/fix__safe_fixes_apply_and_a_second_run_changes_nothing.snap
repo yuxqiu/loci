@@ -1,0 +1,61 @@
+---
+source: crates/loci/tests/fix.rs
+expression: v.tree()
+---
+== concepts/a/attachments/d.png ==
+png
+== concepts/a/bare.md ==
+---
+id: [ulid]
+---
+# Bare
+
+== concepts/a/bom.md ==
+---
+id: [ulid]
+---
+# Bom
+
+== concepts/a/dup.md ==
+---
+id: [ulid]
+---
+# Dup
+
+== concepts/a/no-id.md ==
+---
+id: [ulid]
+prereqs: []
+---
+# No id
+
+== concepts/a/other.md ==
+---
+id: [ulid]
+---
+# Other
+
+## Section
+
+Text ^b1
+
+More ^b1
+
+== concepts/a/unquoted.md ==
+---
+id: [ulid]
+prereqs:
+  - "[[other]]"
+---
+# Unquoted
+
+== loci.toml ==
+schema = 1
+
+== views/untitled.md ==
+No title here.
+
+== views/v.md ==
+# V
+
+See [[concepts/a/other|Other]] and ![[concepts/a/attachments/d.png|diagram]], [[othr]], [[other#Sectoin]].

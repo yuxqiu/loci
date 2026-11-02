@@ -27,7 +27,13 @@ fn mv_refused(v: &TestVault, from: &str, to: &str, code: &str) {
 fn mv_rename_rewrites_links() {
     let v = TestVault::committed(BIN, "mv-rename");
     let before = v.read("concepts/a/renamed.md");
+    // A dry run reports the same plan and writes nothing.
+    let tree = v.tree();
+    let (code, dry) = v.run(&["mv", "concepts/a/renamed.md", "concepts/a/renamed-new.md", "--dry-run"]);
+    assert_eq!(code, 0, "{dry}");
+    assert_eq!(v.tree(), tree);
     let env = mv(&v, "concepts/a/renamed.md", "concepts/a/renamed-new.md");
+    assert_eq!((&dry["data"]["moved"], &dry["data"]["edited"]), (&env["data"]["moved"], &env["data"]["edited"]));
     assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
     // The note itself is unchanged; links by bare slug stay bare; markdown links are
     // never edited.

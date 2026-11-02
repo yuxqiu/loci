@@ -5,6 +5,7 @@ expression: v.redact(&env)
 {
   "command": "mv",
   "data": {
+    "dry_run": false,
     "edited": [
       {
         "edits": 1,

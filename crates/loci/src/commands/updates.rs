@@ -137,6 +137,19 @@ mod tests {
     }
 
     #[test]
+    fn every_update_the_lint_tables_name_has_an_entry_that_applies_and_checks_it() {
+        let list = all();
+        for id in loci_core::lint::update_ids() {
+            let entry = list.iter().find(|u| u.id == id).unwrap_or_else(|| panic!("{id} is in updates.md"));
+            let code = loci_core::lint::update_code(id);
+            assert!(entry.text.contains(&format!("--only {code}")), "{id}'s How runs `loci lint --fix --only {code}`");
+            let done = entry.text.split("**Done when:**").nth(1).expect("an entry has Done when");
+            assert!(done.contains(&format!("`{code}`")), "{id}'s Done when names `{code}`");
+            assert!(entry.text.contains("Declining"), "{id}'s Offer says what declining means");
+        }
+    }
+
+    #[test]
     fn an_entry_runs_to_the_next_heading_not_to_a_code_line() {
         let list =
             parse("# x\n\n## u0001 · 2026-01-01 · A\n\n```\n## not a heading\n```\n\n## u0002 · 2026-01-02 · B\n\nb\n");

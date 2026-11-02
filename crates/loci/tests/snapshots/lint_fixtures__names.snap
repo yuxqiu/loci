@@ -13,6 +13,20 @@ expression: v.redact(&env)
   "diagnostics": [
     {
       "code": "link.dangling",
+      "fixes": [
+        {
+          "applicability": "unsafe",
+          "edits": [
+            {
+              "byte_end": 101,
+              "byte_start": 98,
+              "new": "bfs",
+              "path": "concepts/algo/dfs.md"
+            }
+          ],
+          "message": "link [[bfs]]"
+        }
+      ],
       "hint": "no concept is named `BFS`; did you mean [[bfs]]?",
       "location": {
         "path": "concepts/algo/dfs.md",

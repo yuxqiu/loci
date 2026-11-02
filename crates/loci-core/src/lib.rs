@@ -7,6 +7,7 @@ pub mod closure;
 pub mod config;
 pub mod envelope;
 pub mod export;
+pub mod fix;
 pub mod git;
 pub mod id;
 pub mod index;

@@ -11,7 +11,7 @@ use serde_json::json;
 
 use super::Ctx;
 
-pub fn run(ctx: &Ctx, from: &str, to: &str) -> Result<Report, Refusal> {
+pub fn run(ctx: &Ctx, from: &str, to: &str, dry_run: bool) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let from = VaultPath::from_arg(from)?;
     let to = VaultPath::from_arg(to)?;
@@ -36,12 +36,19 @@ pub fn run(ctx: &Ctx, from: &str, to: &str) -> Result<Report, Refusal> {
             format!("source `{p}` differs from its committed version; restore it before moving it"),
         ));
     }
-    relink::apply(&vault, &plan).map_err(Refusal::io)?;
+    if !dry_run {
+        relink::apply(&vault, &plan).map_err(Refusal::io)?;
+    }
     let data = json!({
         "moved": plan.moves.iter().collect::<Vec<_>>(),
         "edited": plan.writes.iter().map(|(p, w)| json!({"path": p, "edits": w.edits})).collect::<Vec<_>>(),
+        "dry_run": dry_run,
     });
-    let human = format!("moved {} file(s), edited {} file(s)\n", plan.moves.len(), plan.writes.len());
+    let (moved, edited) = if dry_run { ("would move", "edit") } else { ("moved", "edited") };
+    let mut human = format!("{moved} {} file(s), {edited} {} file(s)\n", plan.moves.len(), plan.writes.len());
+    if dry_run {
+        human.push_str(&super::plan_lines(&plan));
+    }
     Ok(Report::ok(data, human))
 }
 

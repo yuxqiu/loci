@@ -34,8 +34,14 @@ fn merge_rewrites_links_and_deletes_the_absorbed_note() {
             ),
         ),
     ]);
+    // A dry run reports the same plan and writes nothing.
+    let before = v.tree();
+    let (code, dry) = v.run(&["merge", "bfs", "graph-search", "--dry-run"]);
+    assert_eq!((code, &dry["data"]["dry_run"]), (0, &serde_json::json!(true)), "{dry}");
+    assert_eq!(v.tree(), before);
     let (code, env) = v.run(&["merge", "bfs", "graph-search"]);
     assert_eq!(code, 0, "{env}");
+    assert_eq!(dry["data"]["edited"], env["data"]["edited"]);
     assert!(!v.exists("concepts/g/bfs.md"));
     let into = v.read("concepts/g/graph-search.md");
     assert!(

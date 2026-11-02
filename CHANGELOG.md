@@ -8,6 +8,17 @@ them under its version.
 
 ### Added
 
+- `loci lint --fix`: applies the fixes that keep the meaning (a missing id, a
+  markdown link to a vault file, an unquoted prereq, a byte-order mark, a name not in
+  NFC), checks that nothing got worse, then writes. `--unsafe-fixes` adds likely
+  fixes (a misspelt slug or heading, duplicate ids), `--only <code>`
+  keeps one code, `--dry-run` writes nothing. Like `cargo fix`, it refuses a working
+  tree with uncommitted changes unless given `--allow-dirty`. `lint --json` shows each diagnostic's
+  fixes as exact edits.
+- `update.<id>` warnings: what a waiting vault update changes (u0001's `digest:`),
+  with its fix, which `loci lint --fix --only update.<id>` applies. Once the update is
+  handled, what is left is an ordinary lint error.
+- `loci mv --dry-run` and `loci merge --dry-run` report the change without writing.
 - `loci links <note>`: a note's links and the links pointing at it.
 - `loci done`: agents finish every task with it. It lints, then records the agent's
   result as a local git ref (`refs/loci/agent/<commit>`), so the `improve` skill

@@ -38,7 +38,24 @@ enum Cmd {
     /// Create a vault in the current directory.
     Init,
     /// Lint the working tree (core rules and every installed plugin).
-    Lint,
+    Lint {
+        /// Apply the safe fixes of core diagnostics, then lint again.
+        #[arg(long)]
+        fix: bool,
+        /// Apply unsafe fixes too (likely, but they may change meaning).
+        #[arg(long, requires = "fix")]
+        unsafe_fixes: bool,
+        /// Only fix diagnostics with this code.
+        #[arg(long, requires = "fix", value_name = "CODE")]
+        only: Option<String>,
+        /// Fix on a working tree with uncommitted changes (refused otherwise, so the diff
+        /// is the fixes').
+        #[arg(long, requires = "fix")]
+        allow_dirty: bool,
+        /// Report the fixes; write nothing.
+        #[arg(long, requires = "fix")]
+        dry_run: bool,
+    },
     /// End an agent task: lint, then record the agent's work for review.
     Done {
         /// Something that was hard in the task (a search that missed, an unclear
@@ -63,6 +80,9 @@ enum Cmd {
         from: String,
         /// Its new vault path.
         to: String,
+        /// Report what would change; write nothing.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Show what has changed: uncommitted changes, agent work to review, the inbox.
     Status,
@@ -94,6 +114,9 @@ enum Cmd {
         from: String,
         /// The concept that keeps the merged content (path or slug).
         into: String,
+        /// Report what would change; write nothing.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// List a note's links and the links pointing at it.
     Links {
@@ -149,16 +172,19 @@ fn main() -> ExitCode {
     let ctx = commands::Ctx { explicit_vault: cli.vault.clone(), cwd, json: cli.json };
     let (name, report) = match cli.command {
         Cmd::Init => ("init", commands::init::run(&ctx)),
-        Cmd::Lint => ("lint", commands::lint::run(&ctx)),
+        Cmd::Lint { fix, unsafe_fixes, only, allow_dirty, dry_run } => {
+            let fix = fix.then_some(commands::lint::FixArgs { unsafe_fixes, only, allow_dirty, dry_run });
+            ("lint", commands::lint::run(&ctx, fix))
+        }
         Cmd::Done { note } => ("done", commands::done::run(&ctx, &note)),
         Cmd::Rules => ("rules", commands::rules::run()),
         Cmd::Updates { all, handled } => ("updates", commands::updates::run(&ctx, all, handled.as_deref())),
-        Cmd::Mv { from, to } => ("mv", commands::mv::run(&ctx, &from, &to)),
+        Cmd::Mv { from, to, dry_run } => ("mv", commands::mv::run(&ctx, &from, &to, dry_run)),
         Cmd::Status => ("status", commands::status::run(&ctx)),
         Cmd::New { path, title } => ("new", commands::new::run(&ctx, &path, title.as_deref())),
         Cmd::Skill { action: SkillCmd::Show { name } } => ("skill show", commands::skill::run(&ctx, name.as_deref())),
         Cmd::BlockIds { note, section } => ("block-ids", commands::blockids::run(&ctx, &note, &section)),
-        Cmd::Merge { from, into } => ("merge", commands::merge::run(&ctx, &from, &into)),
+        Cmd::Merge { from, into, dry_run } => ("merge", commands::merge::run(&ctx, &from, &into, dry_run)),
         Cmd::Links { note } => ("links", commands::links::run(&ctx, &note)),
         Cmd::Closure { concept, depth } => ("closure", commands::closure::run(&ctx, &concept, depth)),
         Cmd::Bench { agent, cases } => ("bench", commands::bench::run(&ctx, &agent, cases.as_deref())),

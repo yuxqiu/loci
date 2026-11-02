@@ -25,6 +25,67 @@ pub struct Diagnostic {
     pub location: Option<Location>,
     pub message: String,
     pub hint: Option<String>,
+    /// Mechanical fixes, best first (research 18 §1); omitted from JSON when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fixes: Vec<Fix>,
+}
+
+/// A mechanical fix for a diagnostic: edits to files' text and file renames.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Fix {
+    pub message: String,
+    pub applicability: Applicability,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edits: Vec<TextEdit>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moves: Vec<Move>,
+}
+
+/// How a fix may be applied (after Ruff's safe and unsafe fixes, and rustc's
+/// `Applicability`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Applicability {
+    /// Keeps the meaning: `loci lint --fix` applies it.
+    Safe,
+    /// A likely fix that may change meaning: applied with `--unsafe-fixes`.
+    Unsafe,
+    /// A starting point for the author, never applied by loci.
+    DisplayOnly,
+}
+
+/// Bytes `byte_start..byte_end` of file `path` replaced by `new`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextEdit {
+    pub path: String,
+    pub byte_start: usize,
+    pub byte_end: usize,
+    pub new: String,
+}
+
+/// A file or folder renamed, links following (as `loci mv`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Move {
+    pub from: String,
+    pub to: String,
+}
+
+impl Fix {
+    pub fn new(applicability: Applicability, message: impl Into<String>) -> Self {
+        Self { message: message.into(), applicability, edits: vec![], moves: vec![] }
+    }
+
+    /// Adds an edit replacing bytes `range` of file `path` with `new`.
+    pub fn edit(mut self, path: impl Into<String>, range: std::ops::Range<usize>, new: impl Into<String>) -> Self {
+        self.edits.push(TextEdit { path: path.into(), byte_start: range.start, byte_end: range.end, new: new.into() });
+        self
+    }
+
+    /// Adds a rename of `from` to `to`.
+    pub fn rename(mut self, from: impl Into<String>, to: impl Into<String>) -> Self {
+        self.moves.push(Move { from: from.into(), to: to.into() });
+        self
+    }
 }
 
 /// A file, and optionally a position in it.
@@ -72,7 +133,7 @@ impl Diagnostic {
     }
 
     fn new(code: &str, severity: Severity, message: impl Into<String>) -> Self {
-        Self { code: code.to_string(), severity, location: None, message: message.into(), hint: None }
+        Self { code: code.to_string(), severity, location: None, message: message.into(), hint: None, fixes: vec![] }
     }
 
     pub fn at_path(mut self, path: impl Into<String>) -> Self {
@@ -90,6 +151,11 @@ impl Diagnostic {
 
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
+        self
+    }
+
+    pub fn with_fix(mut self, fix: Fix) -> Self {
+        self.fixes.push(fix);
         self
     }
 

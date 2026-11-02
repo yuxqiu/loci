@@ -63,7 +63,11 @@ impl Resolved {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkError {
-    Dangling { hint: Option<String> },
+    /// No target; `closest` is the concept slug a bare link most likely meant.
+    Dangling {
+        hint: Option<String>,
+        closest: Option<Slug>,
+    },
     PathForm,
     Heading,
     Block,
@@ -294,16 +298,17 @@ impl Index {
                 // A slug shared by several concepts (`slug.duplicate`) names none of them.
                 Some(paths @ [_, _, ..]) => {
                     let hint = format!("several concepts are named `{target}` ({}); link by path", paths.join(", "));
-                    return Err(LinkError::Dangling { hint: Some(hint) });
+                    return Err(LinkError::Dangling { hint: Some(hint), closest: None });
                 }
                 Some([]) | None => {
-                    let hint = match self.closest_slug(target) {
+                    let closest = self.closest_slug(target).cloned();
+                    let hint = match &closest {
                         Some(s) => format!("no concept is named `{target}`; did you mean [[{s}]]?"),
                         None => format!(
                             "no concept is named `{target}`; create it with `loci new`, or link a non-concept by path"
                         ),
                     };
-                    return Err(LinkError::Dangling { hint: Some(hint) });
+                    return Err(LinkError::Dangling { hint: Some(hint), closest });
                 }
             }
         } else {
@@ -315,7 +320,7 @@ impl Index {
                 Some(note) => Resolved::Note(note.clone()),
                 None => match self.listed(target).filter(|_| !target.ends_with(".md")) {
                     Some(file) => Resolved::File(file.clone()),
-                    None => return Err(LinkError::Dangling { hint: None }),
+                    None => return Err(LinkError::Dangling { hint: None, closest: None }),
                 },
             }
         };
@@ -435,7 +440,7 @@ mod tests {
         // A slug is written exactly; a misnamed file is reached by path only.
         assert_eq!(resolved, [true, false, false, false, false, true, true]);
         match i.resolve(&n, &n.links[1]) {
-            Err(LinkError::Dangling { hint: Some(h) }) => assert!(h.ends_with("did you mean [[dfs]]?"), "{h}"),
+            Err(LinkError::Dangling { hint: Some(h), .. }) => assert!(h.ends_with("did you mean [[dfs]]?"), "{h}"),
             other => panic!("{other:?}"),
         }
     }
@@ -449,7 +454,7 @@ mod tests {
         ]);
         let n = i.markdown["views/v.md"].clone();
         let hint = |k: usize| match i.resolve(&n, &n.links[k]) {
-            Err(LinkError::Dangling { hint: Some(h) }) => h,
+            Err(LinkError::Dangling { hint: Some(h), .. }) => h,
             other => panic!("{other:?}"),
         };
         assert!(hint(0).ends_with("did you mean [[breadth-first-search]]?"), "{}", hint(0));
@@ -530,7 +535,7 @@ mod tests {
             ("views/v.md", "# V\n\n[[bfs]] [[concepts/b/bfs]]\n"),
         ]);
         let n = i.markdown["views/v.md"].clone();
-        let Err(LinkError::Dangling { hint: Some(hint) }) = i.resolve(&n, &n.links[0]) else { panic!("resolved") };
+        let Err(LinkError::Dangling { hint: Some(hint), .. }) = i.resolve(&n, &n.links[0]) else { panic!("resolved") };
         assert!(hint.contains("link by path"), "{hint}");
         assert_eq!(i.resolve(&n, &n.links[1]), Ok(Resolved::Note("concepts/b/bfs.md".to_string().try_into().unwrap())));
     }

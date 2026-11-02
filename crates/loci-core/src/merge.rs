@@ -41,9 +41,9 @@ pub fn plan(index: &Index, from: &VaultPath, into: &VaultPath) -> Result<Merge, 
             into_edits.push(Edit::replace(first.start..last.end, kept.join(", ")));
         } else if self_prereqs.len() == items.len() {
             // An emptied block list would leave `prereqs:` (null): drop the whole entry.
-            into_edits.push(remove_lines(text, entry.key_span.start..last.end));
+            into_edits.push(Edit::remove_lines(text, entry.key_span.start..last.end));
         } else {
-            into_edits.extend(self_prereqs.iter().map(|(_, r)| remove_lines(text, r.clone())));
+            into_edits.extend(self_prereqs.iter().map(|(_, r)| Edit::remove_lines(text, r.clone())));
         }
         change.removed_links.extend(self_prereqs.iter().map(|(i, _)| (into.clone(), *i)));
     }
@@ -72,13 +72,6 @@ fn self_prereqs(index: &Index, into: &Note, from: &VaultPath) -> Vec<(usize, std
         .filter(|(_, l)| index.link_target(into, l).as_ref() == Some(from))
         .map(|(i, l)| (i, l.range.clone()))
         .collect()
-}
-
-/// The edit that removes the whole lines spanned by `range`.
-fn remove_lines(text: &str, range: std::ops::Range<usize>) -> Edit {
-    let line_start = text[..range.start].rfind('\n').map_or(0, |i| i + 1);
-    let line_end = text[range.end..].find('\n').map_or(text.len(), |i| range.end + i + 1);
-    Edit::replace(line_start..line_end, "")
 }
 
 #[cfg(test)]

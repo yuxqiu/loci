@@ -1,0 +1,97 @@
+//! Link rules (m0 §5): wikilinks only, and every link resolves.
+
+use super::{Ctx, managed};
+use crate::envelope::{Applicability, Diagnostic, Fix};
+use crate::index::{Index, LinkError};
+use crate::parse::{Fragment, Note};
+
+pub(super) fn links(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
+    for note in managed(ctx) {
+        note_links(ctx.index, note, out);
+    }
+}
+
+fn note_links(index: &Index, note: &Note, out: &mut Vec<Diagnostic>) {
+    let path = note.path.as_str();
+    let text = note.text.as_str();
+    for m in &note.md_links {
+        // Notes are linked without `.md`; other files keep their extension.
+        let url = m.url.strip_prefix("./").unwrap_or(&m.url);
+        let target = if m.image { url } else { url.strip_suffix(".md").unwrap_or(url) };
+        let bang = if m.image { "!" } else { "" };
+        let wiki = format!("{bang}[[{target}]]");
+        // The link text becomes the label, unless it only repeats the target.
+        let label = text[m.label.clone()].trim();
+        let fixed =
+            if label.is_empty() || label == target { wiki.clone() } else { format!("{bang}[[{target}|{label}]]") };
+        // A percent-encoded URL (`a%20b.md`) names a file only once decoded: a guess.
+        let applicability = if url.contains('%') { Applicability::Unsafe } else { Applicability::Safe };
+        out.push(
+            Diagnostic::error("link.markdown", format!("a vault target must use a wikilink: `{wiki}`"))
+                .at_path(path)
+                .at(text, m.range.clone())
+                .with_hint(format!("write {wiki}"))
+                .with_fix(Fix::new(applicability, format!("write {fixed}")).edit(path, m.range.clone(), fixed.clone())),
+        );
+    }
+    for link in &note.links {
+        let at =
+            |code: &str, msg: String| Diagnostic::error(code, msg).at_path(path).at(text, link.target_range.clone());
+        match index.resolve(note, link) {
+            Ok(_) => {}
+            Err(LinkError::Dangling { hint, closest }) => {
+                let mut diag = at("link.dangling", format!("`{}` does not resolve", link.raw));
+                diag.hint = hint;
+                if let Some(slug) = closest {
+                    let new = format!("{slug}{}", link.fragment.as_ref().map_or(String::new(), |f| format!("#{f}")));
+                    let fix = Fix::new(Applicability::Unsafe, format!("link [[{slug}]]"));
+                    diag = diag.with_fix(fix.edit(path, link.target_range.clone(), new));
+                }
+                out.push(diag);
+            }
+            Err(LinkError::PathForm) => {
+                out.push(at("link.path-form", "`..` or a leading `/` is not allowed in a link".into()))
+            }
+            Err(LinkError::Heading) => {
+                let mut diag = at(
+                    "link.dangling-heading",
+                    format!("`{}` has no heading `{}`", target_name(note, link), fragment(link)),
+                );
+                if let Some(heading) = closest_heading(index, note, link) {
+                    let target = &link.raw[..link.raw.find('#').expect("a heading link has a `#`")];
+                    let fix = Fix::new(Applicability::Unsafe, format!("link the heading `{heading}`"));
+                    diag = diag.with_fix(fix.edit(path, link.target_range.clone(), format!("{target}#{heading}")));
+                }
+                out.push(diag)
+            }
+            Err(LinkError::Block) => out.push(at(
+                "link.dangling-block",
+                format!("`{}` has no block `{}`", target_name(note, link), fragment(link)),
+            )),
+        }
+    }
+}
+
+/// The heading of the note `link` points at most like its fragment (Jaro-Winkler
+/// similarity of at least 0.85 between heading keys), if one is close.
+fn closest_heading<'n>(index: &'n Index, note: &Note, link: &crate::parse::Link) -> Option<&'n str> {
+    let Some(Fragment::Heading(want)) = &link.fragment else { return None };
+    let target = index.parsed(&index.link_target(note, link)?)?;
+    let want = crate::index::heading_key(want);
+    target
+        .headings
+        .iter()
+        .map(|h| (strsim::jaro_winkler(&want, &crate::index::heading_key(&h.text)), h.text.as_str()))
+        .filter(|(score, _)| *score >= 0.85)
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, h)| h)
+}
+
+/// A link's fragment as written after the `#`.
+fn fragment(link: &crate::parse::Link) -> String {
+    link.fragment.as_ref().map(ToString::to_string).unwrap_or_default()
+}
+
+fn target_name(from: &Note, link: &crate::parse::Link) -> String {
+    if link.target.is_empty() { from.path.stem().to_string() } else { link.target.clone() }
+}

@@ -8,17 +8,27 @@ use serde_json::json;
 
 use super::Ctx;
 
-pub fn run(ctx: &Ctx, from: &str, into: &str) -> Result<Report, Refusal> {
+pub fn run(ctx: &Ctx, from: &str, into: &str, dry_run: bool) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
     let (from, into) = (VaultPath::from_arg(from)?, VaultPath::from_arg(into)?);
     let merge::Merge { from, into, change } = merge::plan(&index, &from, &into)?;
-    relink::apply(&vault, &change).map_err(Refusal::io)?;
+    if !dry_run {
+        relink::apply(&vault, &change).map_err(Refusal::io)?;
+    }
     let data = json!({
         "from": from,
         "into": into,
         "edited": change.writes.iter().map(|(p, w)| json!({"path": p, "edits": w.edits})).collect::<Vec<_>>(),
+        "dry_run": dry_run,
     });
-    let human = format!("merged {from} into {into}; edited {} file(s)\n", change.writes.len());
+    let mut human = if dry_run {
+        format!("would merge {from} into {into}; edit {} file(s)\n", change.writes.len())
+    } else {
+        format!("merged {from} into {into}; edited {} file(s)\n", change.writes.len())
+    };
+    if dry_run {
+        human.push_str(&super::plan_lines(&change));
+    }
     Ok(Report::ok(data, human))
 }

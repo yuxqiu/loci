@@ -37,6 +37,15 @@ impl Ctx {
     }
 }
 
+/// The files a planned change would touch, one per line: renames, edits (with how many),
+/// deletions.
+pub fn plan_lines(change: &loci_core::relink::Change) -> String {
+    let moves = change.moves.iter().map(|(from, to)| format!("  rename {from} -> {to}\n"));
+    let writes = change.writes.iter().map(|(p, w)| format!("  edit {p} ({} edit(s))\n", w.edits));
+    let deleted = change.deleted.iter().map(|p| format!("  delete {p}\n"));
+    moves.chain(writes).chain(deleted).collect()
+}
+
 /// Installed plugins (m0 §2.2).
 pub fn plugins() -> Vec<Plugin> {
     let core = crate::core_commands();

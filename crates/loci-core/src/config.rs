@@ -34,6 +34,43 @@ pub struct Config {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct UpdateId(u32);
 
+impl UpdateId {
+    /// Update `n`, as code names one (`UpdateId::new(1)` is `u0001`).
+    pub const fn new(n: u32) -> Self {
+        assert!(n <= 9999, "ids have four digits");
+        Self(n)
+    }
+}
+
+/// The editions a lint rule or format entry belongs to: the vaults whose `updates` mark
+/// (the last update handled, `None` for none) is at or after `from` and before `until`.
+/// A vault's edition moves when it handles an update, accepted or declined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Editions {
+    pub from: Option<UpdateId>,
+    pub until: Option<UpdateId>,
+}
+
+impl Editions {
+    /// Every vault.
+    pub const ALWAYS: Self = Self { from: None, until: None };
+
+    /// Vaults that have handled update `u`.
+    pub const fn from(u: UpdateId) -> Self {
+        Self { from: Some(u), until: None }
+    }
+
+    /// Vaults that have not handled update `u`: it removes what the row describes.
+    pub const fn until(u: UpdateId) -> Self {
+        Self { from: None, until: Some(u) }
+    }
+
+    /// Whether a vault with mark `mark` is in these editions.
+    pub fn contains(&self, mark: Option<UpdateId>) -> bool {
+        self.from.is_none_or(|f| mark >= Some(f)) && self.until.is_none_or(|u| mark < Some(u))
+    }
+}
+
 impl FromStr for UpdateId {
     type Err = String;
 
@@ -134,6 +171,15 @@ mod tests {
         assert!(Config::parse("schema = 1\n[budgets]\nbar = 1\n").is_err());
         assert!(Config::parse("schema = 2\n").is_err());
         assert!(Config::parse("schema = 1\n[learn]\nx = 1\n").is_err());
+    }
+
+    #[test]
+    fn editions_by_mark() {
+        let u = |n| Some(UpdateId::new(n));
+        assert!(Editions::ALWAYS.contains(None) && Editions::ALWAYS.contains(u(5)));
+        assert!(Editions::until(UpdateId::new(2)).contains(None) && Editions::until(UpdateId::new(2)).contains(u(1)));
+        assert!(!Editions::until(UpdateId::new(2)).contains(u(2)));
+        assert!(!Editions::from(UpdateId::new(2)).contains(u(1)) && Editions::from(UpdateId::new(2)).contains(u(2)));
     }
 
     #[test]

@@ -160,6 +160,8 @@ pub struct MdLink {
     pub range: Range<usize>,
     pub url: String,
     pub image: bool,
+    /// The bytes of the link text (an image's alt text); empty when there is none.
+    pub label: Range<usize>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -372,10 +374,26 @@ fn walk_body(text: &str, base: usize) -> Body {
     let mut heading: Option<Option<Range<usize>>> = None;
     // An item was just opened: its next event, unless it ends the item, starts its content.
     let mut item_open = false;
+    // Per open link or image, the markdown link it is (an index into `md_links`), if
+    // any, and the extent of the events inside it so far.
+    let mut links_open: Vec<(Option<usize>, Option<Range<usize>>)> = vec![];
     for (event, range) in Parser::new_ext(&text[base..], options()).into_offset_iter() {
         let range = range.start + base..range.end + base;
         if std::mem::take(&mut item_open) && !matches!(event, Event::End(_)) {
             b.items.last_mut().expect("an item is open").content_start = range.start;
+        }
+        if let Event::End(TagEnd::Link | TagEnd::Image) = event {
+            let (md, label) = links_open.pop().expect("a link is open");
+            if let (Some(i), Some(label)) = (md, label) {
+                b.md_links[i].label = label;
+            }
+        } else {
+            for (md, label) in &mut links_open {
+                let within = md.is_none_or(|i| b.md_links[i].range.start <= range.start);
+                if within {
+                    *label = Some(label.as_ref().map_or(range.clone(), |l| l.start..range.end));
+                }
+            }
         }
         match (&mut heading, &event) {
             (Some(content), Event::End(TagEnd::Heading(_))) => {
@@ -387,9 +405,12 @@ fn walk_body(text: &str, base: usize) -> Body {
                 h.setext = !text[h.range.start..h.content.start].trim_start_matches(' ').starts_with('#');
                 heading = None;
             }
-            (Some(content), _) => {
+            // pulldown-cmark reports a task-list marker inside the heading that follows it,
+            // with the marker's own range, before the heading: only events within count.
+            (Some(content), _) if b.headings.last().is_some_and(|h| h.range.start <= range.start) => {
                 *content = Some(content.as_ref().map_or(range.clone(), |c| c.start..range.end));
             }
+            (Some(_), _) => {}
             (None, _) => {}
         }
         match event {
@@ -473,12 +494,16 @@ fn walk_body(text: &str, base: usize) -> Body {
                         Open::Other
                     }
                     Tag::Link { link_type, dest_url, .. } => {
+                        let before = b.md_links.len();
                         handle_link(&mut b, text, link_type, &dest_url, range, false);
+                        links_open.push(((b.md_links.len() > before).then_some(before), None));
                         Open::Other
                     }
                     Tag::Image { link_type, dest_url, .. } => {
                         b.counts.images += 1;
+                        let before = b.md_links.len();
                         handle_link(&mut b, text, link_type, &dest_url, range, true);
+                        links_open.push(((b.md_links.len() > before).then_some(before), None));
                         Open::Other
                     }
                     _ => {
@@ -600,7 +625,7 @@ fn handle_link(b: &mut Body, text: &str, link_type: LinkType, dest: &str, range:
         LinkType::Autolink | LinkType::Email => {}
         _ => {
             if !URL_SCHEME.is_match(dest) {
-                b.md_links.push(MdLink { range, url: dest.to_string(), image });
+                b.md_links.push(MdLink { label: range.end..range.end, range, url: dest.to_string(), image });
             }
         }
     }
@@ -710,6 +735,9 @@ mod tests {
         let found: Vec<(&str, bool)> = n.headings.iter().map(|h| (h.text.as_str(), h.setext)).collect();
         assert_eq!(found, [("T", false), ("Hello world", false), ("C#", false), ("Title\nmore", true), ("", false)]);
         assert_eq!(&t[n.headings[1].content.clone()], "Hello world");
+        // Found by the parse-span property: a task marker is reported inside the heading.
+        let n = p("- [ ] ---\n  - \n");
+        assert_eq!(n.headings[0].text, "---");
     }
 
     #[test]

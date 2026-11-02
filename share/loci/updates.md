@@ -7,13 +7,16 @@ meet (Done when). `loci updates` prints the waiting ones with the procedure.
 
 ## u0001 · 2026-11-02 · Concepts no longer have a `digest`
 
-- **Offer:** The `digest:` frontmatter field is gone; lint reports it as
-  `fm.unknown-field`. Remove it from every concept.
-- **How:** Delete the `digest:` line from each concept's frontmatter. If a digest
-  says something the note's text does not, ask the user whether to add it to the
-  text first.
+- **Offer:** Concepts no longer have a `digest:` field; until this update is handled,
+  lint warns about each one (`update.u0001`). Remove it from every concept. Declining
+  keeps the fields, which lint then reports as unknown fields (errors) until they are
+  removed by hand.
+- **How:** If a digest says something the note's text does not, ask the user whether
+  to add it to the text first. Then run
+  `loci lint --fix --unsafe-fixes --only update.u0001`, which deletes every `digest:`
+  field, and show the diff.
 - **Done when:**
-  - no concept has a `digest:` field (`rg -l '^digest:' concepts/` lists nothing);
+  - `loci lint` reports no `update.u0001`;
   - anything the user asked to keep from a digest is in that note's text;
   - `loci lint` passes.
 
