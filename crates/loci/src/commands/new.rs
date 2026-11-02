@@ -3,6 +3,7 @@
 use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::git;
 use loci_core::index::Index;
+use loci_core::path::VaultPath;
 use loci_core::vault::{self, Kind};
 use serde_json::json;
 
@@ -10,17 +11,17 @@ use super::Ctx;
 
 pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
-    let mut path = vault::path_arg(path)?;
-    if !path.ends_with(".md") {
-        path.push_str(".md");
+    let mut path = VaultPath::from_arg(path)?;
+    if !path.as_str().ends_with(".md") {
+        path = path.with_suffix(".md");
     }
-    if vault::kind_of(&path) != Some(Kind::Concept) {
-        return Err(Refusal::refused("new.no-area", format!("`{path}` {}", vault::why_not_concept(&path))));
+    if path.kind() != Some(Kind::Concept) {
+        return Err(Refusal::refused("new.no-area", format!("`{path}` {}", path.why_not_concept())));
     }
-    if let Some((code, message)) = vault::path_problem(&path) {
+    if let Some((code, message)) = path.problem() {
         return Err(Refusal::refused(code, format!("`{path}`: {message}")));
     }
-    let slug = vault::stem(&path).to_string();
+    let slug = path.stem().to_string();
     let abs = vault.abs(&path);
     if abs.symlink_metadata().is_ok() {
         return Err(Refusal::refused("new.exists", format!("`{path}` already exists")));
@@ -53,7 +54,7 @@ pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal
     std::fs::write(&abs, text).map_err(Refusal::io)?;
     // Marked for `git diff`, as the framework rules ask of every file an agent creates.
     let mut diags = vec![];
-    if let Err(e) = git::run(&vault.root, &["add", "-N", "--", &path]) {
+    if let Err(e) = git::run(&vault.root, &["add", "-N", "--", path.as_str()]) {
         diags.push(
             Diagnostic::warning("new.git-add", format!("created, but `git add -N` failed: {e}; run it yourself"))
                 .at_path(path.as_str()),

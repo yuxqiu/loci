@@ -3,12 +3,12 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::index::Index;
-use crate::vault;
+use crate::path::VaultPath;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Member {
     pub slug: String,
-    pub path: String,
+    pub path: VaultPath,
     /// Shortest number of `prereqs` steps from the concept.
     pub depth: usize,
 }
@@ -18,24 +18,24 @@ pub struct Closure {
     /// Prerequisites first; ties by slug bytes.
     pub members: Vec<Member>,
     /// (concept path naming it, raw target) for prereqs that do not resolve.
-    pub unresolved: Vec<(String, String)>,
+    pub unresolved: Vec<(VaultPath, String)>,
     /// True if the reachable graph has a cycle (the order breaks it by slug bytes).
     pub cyclic: bool,
 }
 
 /// The closure of concept `root` (a concept path), up to `max_depth`.
-pub fn closure(index: &Index, root: &str, max_depth: Option<usize>) -> Closure {
+pub fn closure(index: &Index, root: &VaultPath, max_depth: Option<usize>) -> Closure {
     // Breadth-first for depths.
-    let mut depth: BTreeMap<String, usize> = BTreeMap::new();
-    let mut edges: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut depth: BTreeMap<VaultPath, usize> = BTreeMap::new();
+    let mut edges: BTreeMap<VaultPath, Vec<VaultPath>> = BTreeMap::new();
     let mut out = Closure::default();
-    let mut queue = VecDeque::from([(root.to_string(), 0usize)]);
-    let mut seen: BTreeSet<String> = [root.to_string()].into();
+    let mut queue = VecDeque::from([(root.clone(), 0usize)]);
+    let mut seen: BTreeSet<VaultPath> = [root.clone()].into();
     while let Some((p, d)) = queue.pop_front() {
         if max_depth.is_some_and(|m| d >= m) {
             continue;
         }
-        let (ok, bad) = index.prereqs(index.parsed(&p).expect("closure members are notes"));
+        let (ok, bad) = index.prereqs(index.parsed(p.as_str()).expect("closure members are notes"));
         out.unresolved.extend(bad.into_iter().map(|t| (p.clone(), t)));
         for q in &ok {
             if seen.insert(q.clone()) {
@@ -47,10 +47,10 @@ pub fn closure(index: &Index, root: &str, max_depth: Option<usize>) -> Closure {
     }
     // Topological order over the members, prerequisites first: repeatedly emit the
     // smallest-slug member whose prerequisites (within the closure) are all emitted.
-    let slug = |p: &str| vault::stem(p).to_string();
-    let members: BTreeSet<String> = depth.keys().cloned().collect();
-    let mut emitted: BTreeSet<String> = BTreeSet::new();
-    let mut order: Vec<String> = vec![];
+    let slug = |p: &VaultPath| p.stem().to_string();
+    let members: BTreeSet<VaultPath> = depth.keys().cloned().collect();
+    let mut emitted: BTreeSet<VaultPath> = BTreeSet::new();
+    let mut order: Vec<VaultPath> = vec![];
     while emitted.len() < members.len() {
         let ready = members
             .iter()
@@ -85,6 +85,10 @@ mod tests {
     use super::*;
     use crate::index::from_texts;
 
+    fn vp(s: &str) -> VaultPath {
+        VaultPath::new(s.to_string()).unwrap()
+    }
+
     fn c(prereqs: &[&str]) -> String {
         let list: Vec<String> = prereqs.iter().map(|p| format!("\"[[{p}]]\"")).collect();
         format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nprereqs: [{}]\n---\n# T\n", list.join(", "))
@@ -98,11 +102,11 @@ mod tests {
             ("concepts/a/graph.md", c(&[])),
             ("concepts/a/array.md", c(&[])),
         ]);
-        let cl = closure(&i, "concepts/a/dijkstra.md", None);
+        let cl = closure(&i, &vp("concepts/a/dijkstra.md"), None);
         let order: Vec<(&str, usize)> = cl.members.iter().map(|m| (m.slug.as_str(), m.depth)).collect();
         assert_eq!(order, vec![("array", 2), ("graph", 1), ("heap", 1)]);
-        assert_eq!(cl.unresolved, vec![("concepts/a/dijkstra.md".to_string(), "nope".to_string())]);
-        let shallow = closure(&i, "concepts/a/dijkstra.md", Some(1));
+        assert_eq!(cl.unresolved, vec![(vp("concepts/a/dijkstra.md"), "nope".to_string())]);
+        let shallow = closure(&i, &vp("concepts/a/dijkstra.md"), Some(1));
         assert_eq!(shallow.members.len(), 2);
         assert!(!cl.cyclic);
     }
@@ -114,7 +118,7 @@ mod tests {
             ("concepts/a/y.md", c(&["z"])),
             ("concepts/a/z.md", c(&["y"])),
         ]);
-        let cl = closure(&i, "concepts/a/x.md", None);
+        let cl = closure(&i, &vp("concepts/a/x.md"), None);
         assert!(cl.cyclic);
         assert_eq!(cl.members.len(), 2);
     }

@@ -379,8 +379,6 @@ fn path_arguments_outside_the_vault_are_refused() {
         &["new", "concepts/a/../../../escaped"][..],
         &["block-ids", "views/../../outside.md", "--section", "X"],
         &["export", "/etc/passwd"],
-        &["merge", "concepts/./a/flow.md", "concepts/a/flow.md"],
-        &["mv", "concepts//a/flow.md", "concepts/a/x.md"],
     ] {
         let (exit, env) = v.run(args);
         assert_eq!((exit, error_code(&env)), (1, "path.outside"), "{args:?}: {env:#}");

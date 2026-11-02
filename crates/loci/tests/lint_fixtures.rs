@@ -167,7 +167,8 @@ fn block_id_of_parent_item_spans_its_children() {
     use loci_core::parse::{BlockKind, parse};
     use loci_core::vault::Kind;
     let text = std::fs::read_to_string(fixtures_dir().join("block-ids/concepts/a/lists.md")).unwrap();
-    let note = parse("concepts/a/lists.md", Kind::Concept, text.clone());
+    let note =
+        parse(&loci_core::path::VaultPath::new("concepts/a/lists.md".into()).unwrap(), Kind::Concept, text.clone());
     let get = |id: &str| note.block_ids.iter().find(|b| b.id == id).unwrap_or_else(|| panic!("no ^{id}"));
     for id in ["tight1", "loose1", "multi1", "parent1", "child1", "para1", "shared"] {
         get(id);
@@ -439,20 +440,23 @@ fn a_vault_with_a_symlink_is_refused() {
     std::fs::write(v.tmp.path().join("log.jsonl"), "").unwrap();
     std::fs::create_dir_all(v.root.join("plugins/learn")).unwrap();
     std::os::unix::fs::symlink(v.tmp.path().join("log.jsonl"), v.root.join("plugins/learn/reviews.jsonl")).unwrap();
-    // A link with a non-UTF-8 name is refused too.
+    // A link with a non-UTF-8 name is refused too, for its name.
     let odd = v.root.join(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"views/odd\xff"));
     std::os::unix::fs::symlink(v.tmp.path().join("secret.md"), &odd).unwrap();
     for args in [&["lint"][..], &["status"], &["mv", "views/linker.md", "views/x.md"]] {
         let (code, env) = v.run(args);
         assert_eq!((code, error_code(&env)), (1, "file.symlink"), "{args:?}: {env:#}");
         let message = env["error"]["message"].as_str().unwrap();
-        for link in ["`views/leak.md`", "`views/synced`", "`plugins/learn/reviews.jsonl`", "`views/odd"] {
+        for link in ["`views/leak.md`", "`views/synced`", "`plugins/learn/reviews.jsonl`"] {
             assert!(message.lines().any(|l| l.trim_start().starts_with(link)), "{link}: {message}");
         }
     }
     std::fs::remove_file(v.root.join("views/leak.md")).unwrap();
     std::fs::remove_file(v.root.join("views/synced")).unwrap();
     std::fs::remove_file(v.root.join("plugins/learn/reviews.jsonl")).unwrap();
+    let (code, env) = v.run(&["lint"]);
+    assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
+    assert!(env["error"]["message"].as_str().unwrap().contains("has a name that is not UTF-8"), "{env:#}");
     std::fs::remove_file(&odd).unwrap();
     let (code, env) = v.run(&["lint"]);
     assert!(error_code(&env).is_empty() && code <= 1, "{env:#}");
@@ -469,23 +473,28 @@ fn material_dropped_ignores_plugin_data() {
     assert!(with_code(&env, "material-dropped").is_empty(), "{}", diag_lines(&env));
 }
 
-/// A file with a non-UTF-8 name where core does not read (`plugins/`) stays out of the
-/// way: it does not switch `material-dropped` off.
+/// Every name git lists must be UTF-8, even where core does not read (`plugins/`): a
+/// vault holding one that is not is refused (`file.unreadable`), naming it.
 #[test]
-fn non_utf8_names_outside_core_stay_out_of_the_way() {
+fn a_non_utf8_name_anywhere_refuses_the_vault() {
     use std::os::unix::ffi::OsStrExt;
     let v = TestVault::committed(BIN, "mv-rename");
     let raw = |p: &[u8]| v.root.join(std::ffi::OsStr::from_bytes(p));
     std::fs::create_dir_all(v.root.join("plugins/x")).unwrap();
     std::fs::write(raw(b"plugins/x/data\xff"), "x").unwrap();
-    v.write("inbox/drafts/d.md", "# D\n\n```\ncode\n```\n");
-    v.commit_all("odd and draft");
-    std::fs::write(raw(b"plugins/x/data\xff"), "y").unwrap();
-    std::fs::remove_file(v.root.join("inbox/drafts/d.md")).unwrap();
-    let (_, env) = v.run(&["lint"]);
-    assert_eq!(with_code(&env, "material-dropped").len(), 1, "{}", diag_lines(&env));
-    assert!(with_code(&env, "git.failed").is_empty(), "{}", diag_lines(&env));
-    assert!(with_code(&env, "file.unreadable").is_empty(), "{}", diag_lines(&env));
+    v.commit_all("odd");
+    for args in [&["lint"][..], &["status"]] {
+        let (code, env) = v.run(args);
+        assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{args:?}: {env:#}");
+        let message = env["error"]["message"].as_str().unwrap();
+        assert!(message.contains("`plugins/x/data\u{fffd}` has a name that is not UTF-8"), "{message}");
+    }
+    std::fs::remove_file(raw(b"plugins/x/data\xff")).unwrap();
+    let (code, env) = v.run(&["lint"]);
+    assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "a tracked name gone from disk: {env:#}");
+    v.commit_all("odd removed");
+    let (code, env) = v.run(&["lint"]);
+    assert!(error_code(&env).is_empty() && code <= 1, "{env:#}");
 }
 
 /// `init` refuses a symlink among the files it manages before writing anything.
@@ -505,8 +514,9 @@ fn init_respects_the_vault_boundary() {
     assert!(!fresh.tmp.path().join("made.md").exists());
 }
 
-/// A tracked file that is gone from disk is a pending deletion, not an unreadable file:
-/// even when its folder became a file, or its name is not UTF-8.
+/// A tracked file that is gone from disk is a pending deletion, not an unreadable file,
+/// even when its folder became a file; but a tracked name that is not UTF-8 refuses the
+/// vault until its deletion is committed, as every name git lists must be UTF-8.
 #[test]
 fn a_deleted_file_does_not_refuse_the_vault() {
     use std::os::unix::ffi::OsStrExt;
@@ -514,11 +524,18 @@ fn a_deleted_file_does_not_refuse_the_vault() {
     v.write("views/a/b.md", "# B\n");
     std::fs::create_dir_all(v.root.join("views/sub")).unwrap();
     std::fs::write(v.root.join(std::ffi::OsStr::from_bytes(b"views/sub/odd\xff.png")), "x").unwrap();
+    v.write("views/sub/gone.png", "x");
     v.write("views/sub/s.md", "# S\n");
     v.commit_all("files to delete");
     std::fs::remove_dir_all(v.root.join("views/a")).unwrap();
     v.write("views/a", "# A\n");
     std::fs::remove_file(v.root.join(std::ffi::OsStr::from_bytes(b"views/sub/odd\xff.png"))).unwrap();
+    let (code, env) = v.run(&["status"]);
+    assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
+    assert!(env["error"]["message"].as_str().unwrap().contains("has a name that is not UTF-8"), "{env:#}");
+    v.git(&["add", "-u", "views/sub"]);
+    v.git(&["commit", "-q", "-m", "odd deleted"]);
+    std::fs::remove_file(v.root.join("views/sub/gone.png")).unwrap();
     let (code, env) = v.run(&["status"]);
     assert_eq!(code, 0, "{env:#}");
     let (code, env) = v.run(&["mv", "views/sub", "views/other"]);

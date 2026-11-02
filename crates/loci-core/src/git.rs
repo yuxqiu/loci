@@ -4,6 +4,8 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+use crate::path::VaultPath;
+
 fn git(root: &Path) -> Command {
     let mut c = Command::new("git");
     c.arg("-C").arg(root);
@@ -138,15 +140,19 @@ pub fn prune_agent_refs(root: &Path, now: u64, max_age: u64) -> Result<usize, St
 
 /// Whether `path` is gitignored (`git check-ignore`: exit 0 ignored, 1 not ignored,
 /// anything else an error).
-pub fn is_ignored(root: &Path, path: &str) -> Result<bool, String> {
-    answer(root, &["check-ignore", "-q", "--", path])
+pub fn is_ignored(root: &Path, path: &VaultPath) -> Result<bool, String> {
+    answer(root, &["check-ignore", "-q", "--", path.as_str()])
 }
+
+/// A name git lists: UTF-8, or the raw bytes of one that is not.
+pub type Listed = Result<String, Vec<u8>>;
 
 /// Every path git sees in the work tree, or under `pathspec` when given: tracked files
 /// and untracked files it does not ignore (`git ls-files -z --cached --others
-/// --exclude-standard`), as raw names, and any warnings git printed (for example about
-/// a directory it could not open).
-pub fn ls_files(root: &Path, pathspec: Option<&str>) -> Result<(Vec<Vec<u8>>, String), String> {
+/// --exclude-standard`), each name as UTF-8 or, when it is not UTF-8, as raw bytes, and
+/// any warnings git printed (for example about a directory it could not open). An
+/// untracked nested repository is listed as its folder, with a trailing `/`.
+pub fn ls_files(root: &Path, pathspec: Option<&VaultPath>) -> Result<(Vec<Listed>, String), String> {
     let what = "ls-files";
     let mut cmd = git(root);
     cmd.args(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"])
@@ -157,7 +163,12 @@ pub fn ls_files(root: &Path, pathspec: Option<&str>) -> Result<(Vec<Vec<u8>>, St
         return Err(failure(what, &out));
     }
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    let paths = out.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()).map(<[u8]>::to_vec).collect();
+    let paths = out
+        .stdout
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .map(|p| String::from_utf8(p.to_vec()).map_err(|e| e.into_bytes()))
+        .collect();
     Ok((paths, stderr))
 }
 
@@ -185,16 +196,27 @@ pub fn toplevel(dir: &Path) -> Result<PathBuf, String> {
 }
 
 /// The content of `<rev>:<path>`, if it exists.
-pub fn show(root: &Path, rev: &str, path: &str) -> Result<Vec<u8>, String> {
+pub fn show(root: &Path, rev: &str, path: &VaultPath) -> Result<Vec<u8>, String> {
     run(root, &["cat-file", "blob", &format!("{rev}:{path}")])
+}
+
+/// A name git lists, as a vault path: an untracked nested repository's trailing `/`
+/// dropped, so that it names the folder.
+pub(crate) fn vault_path(name: String) -> VaultPath {
+    let name = match name.strip_suffix('/') {
+        Some(folder) => folder.to_string(),
+        None => name,
+    };
+    VaultPath::try_from(name)
+        .unwrap_or_else(|n| panic!("git lists relative paths without empty, `.` or `..` segments, not `{n}`"))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Changes {
-    pub modified: Vec<String>,
-    pub deleted: Vec<String>,
-    pub added: Vec<String>,
-    pub untracked: Vec<String>,
+    pub modified: Vec<VaultPath>,
+    pub deleted: Vec<VaultPath>,
+    pub added: Vec<VaultPath>,
+    pub untracked: Vec<VaultPath>,
 }
 
 /// The working tree's changes relative to HEAD (`git -c core.fileMode=false status
@@ -226,9 +248,9 @@ pub fn status(root: &Path) -> Result<Changes, String> {
     } else {
         BTreeSet::new()
     };
-    let mut ch = Changes { untracked, ..Changes::default() };
-    for path in changed {
-        match (head.contains(&path), crate::vault::is_regular_file(root, &path)) {
+    let mut ch = Changes { untracked: untracked.into_iter().map(vault_path).collect(), ..Changes::default() };
+    for path in changed.into_iter().map(vault_path) {
+        match (head.contains(path.as_str()), crate::vault::is_regular_file(root, &path)) {
             (true, true) => ch.modified.push(path),
             (false, true) => ch.added.push(path),
             (true, false) => ch.deleted.push(path),
@@ -367,7 +389,8 @@ mod tests {
         git(&["add", "-N", "a.md"]);
         let ch = status(root).unwrap();
         assert_eq!(ch.modified, ["a.md"]);
-        assert_eq!((ch.deleted, ch.added), (vec!["r.md".to_string()], vec![]));
+        assert_eq!(ch.deleted, ["r.md"]);
+        assert_eq!(ch.added, Vec::<&str>::new());
         git(&["add", "a.md"]);
         git(&["rm", "-q", "--cached", "n.md"]);
 
@@ -391,7 +414,7 @@ mod tests {
 
         // The stash also restores `gone.md`.
         let ch = status(root).unwrap();
-        assert_eq!(ch.modified, Vec::<String>::new());
+        assert_eq!(ch.modified, Vec::<&str>::new());
         assert_eq!(ch.deleted, ["r.md"]);
         assert_eq!(ch.added, ["copy.md", "gone.md", "y.md"]);
     }

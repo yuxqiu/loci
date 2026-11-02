@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use loci_core::envelope::{Refusal, Report};
 use loci_core::export;
 use loci_core::index::Index;
-use loci_core::vault::{self, Kind};
+use loci_core::path::VaultPath;
+use loci_core::vault::Kind;
 use serde_json::json;
 
 use super::Ctx;
@@ -28,7 +29,7 @@ impl Format {
 pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option<PathBuf>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
-    let target = vault::path_arg(target)?;
+    let target = VaultPath::from_arg(target)?;
     let note = index.note(&target).map_err(|e| e.refusal("export.unknown", &target))?;
     let path = note.path.clone();
     if !matches!(note.kind, Kind::View | Kind::Concept) {
@@ -37,7 +38,7 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
     let e = export::export(&index, &path, depth);
     let out_path = match output {
         Some(o) => ctx.cwd.join(o),
-        None => vault.abs(&format!(".loci/export/{}.{}", vault::stem(&path), format.ext())),
+        None => vault.root.join(format!(".loci/export/{}.{}", path.stem(), format.ext())),
     };
     let out_dir = out_path.parent().expect("an absolute file path has a parent").to_path_buf();
     std::fs::create_dir_all(out_dir.join("assets")).map_err(Refusal::io)?;

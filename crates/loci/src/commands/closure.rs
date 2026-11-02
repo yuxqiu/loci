@@ -3,7 +3,7 @@
 use loci_core::closure;
 use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::index::Index;
-use loci_core::vault;
+use loci_core::path::VaultPath;
 use serde_json::json;
 
 use super::Ctx;
@@ -11,7 +11,7 @@ use super::Ctx;
 pub fn run(ctx: &Ctx, slug: &str, depth: Option<usize>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
-    let slug = vault::path_arg(slug)?;
+    let slug = VaultPath::from_arg(slug)?;
     let path = index.concept(&slug).map_err(|e| e.refusal("closure.unknown", &slug))?.path.clone();
     let c = closure::closure(&index, &path, depth);
     let mut diags = vec![];

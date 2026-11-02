@@ -3,7 +3,7 @@
 use loci_core::envelope::{Refusal, Report, line_col};
 use loci_core::index::Index;
 use loci_core::parse::LinkForm;
-use loci_core::vault;
+use loci_core::path::VaultPath;
 use serde_json::json;
 
 use super::Ctx;
@@ -11,7 +11,7 @@ use super::Ctx;
 pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
-    let target = vault::path_arg(target)?;
+    let target = VaultPath::from_arg(target)?;
     // A note or concept, else any other vault file (an image, a source file).
     let path = match index.note(&target) {
         Ok(n) => n.path.clone(),
@@ -25,7 +25,7 @@ pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
         for link in &note.links {
             let line = line_col(&note.text, link.range.start).0;
             let target = index.link_target(note, link);
-            let to = target.as_deref().unwrap_or("(unresolved)");
+            let to = target.as_ref().map_or("(unresolved)", VaultPath::as_str);
             human.push_str(&format!("  {line}: {} -> {to}{}\n", link.raw, form_note(link.form)));
             outgoing.push(json!({"line": line, "form": link.form, "raw": link.raw, "target": target}));
         }
@@ -50,7 +50,7 @@ pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
         for (concept, r) in index.unlinked_mentions_in(note) {
             let line = line_col(&note.text, r.start).0;
             let words = &note.text[r];
-            let slug = loci_core::vault::stem(&concept.path);
+            let slug = concept.path.stem();
             human.push_str(&format!("  {line}: {words} -> [[{slug}]]\n"));
             unlinked_out.push(json!({"line": line, "text": words, "concept": concept.path}));
         }

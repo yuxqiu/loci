@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::git;
+use loci_core::path::VaultPath;
 use serde_json::json;
 
 use super::Ctx;
@@ -60,14 +61,14 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     };
 
     // 4. Inbox: counts by folder, and the files not yet committed, which block work.
-    let inbox: Vec<&String> = files.iter().filter(|f| f.starts_with("inbox/")).collect();
+    let inbox: Vec<&VaultPath> = files.iter().filter(|f| f.as_str().starts_with("inbox/")).collect();
     let mut by_folder: BTreeMap<&str, usize> = BTreeMap::new();
     for f in &inbox {
-        let parts: Vec<&str> = f.split('/').collect();
+        let parts: Vec<&str> = f.components().collect();
         *by_folder.entry(if parts.len() > 2 { parts[1] } else { "" }).or_default() += 1;
     }
-    let uncommitted: Option<Vec<&String>> = changes.as_ref().map(|c| {
-        let changed = |f: &String| c.untracked.contains(f) || c.modified.contains(f) || c.added.contains(f);
+    let uncommitted: Option<Vec<&VaultPath>> = changes.as_ref().map(|c| {
+        let changed = |f: &VaultPath| c.untracked.contains(f) || c.modified.contains(f) || c.added.contains(f);
         inbox.iter().copied().filter(|f| changed(f)).collect()
     });
     let folders: Vec<String> = by_folder

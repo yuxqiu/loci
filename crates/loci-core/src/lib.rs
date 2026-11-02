@@ -13,6 +13,7 @@ pub mod lint;
 pub mod merge;
 pub mod mv;
 pub mod parse;
+pub mod path;
 pub mod plugin;
 pub mod relink;
 pub mod splice;

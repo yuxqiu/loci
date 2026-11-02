@@ -4,13 +4,14 @@ use std::ops::Range;
 
 use loci_core::index::Index;
 use loci_core::parse::{BlockKind, Note, TopBlock, strip_list_marker};
+use loci_core::path::VaultPath;
 
 pub const SECTION: &str = "Cards";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Card {
     /// Concept note path.
-    pub path: String,
+    pub path: VaultPath,
     /// Byte range of the list item.
     pub range: Range<usize>,
     /// Position in the note (0-based, across `## Cards` sections).
@@ -23,7 +24,7 @@ pub struct Card {
 /// A problem with a `## Cards` section, reported by `loci learn lint`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormatIssue {
-    pub path: String,
+    pub path: VaultPath,
     pub range: Range<usize>,
 }
 
@@ -115,7 +116,7 @@ mod tests {
 
     fn cards(body: &str) -> (Vec<Card>, Vec<FormatIssue>) {
         let text = format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# T\n\n{body}");
-        of_note(&parse("concepts/a/x.md", Kind::Concept, text))
+        of_note(&parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, text))
     }
 
     #[test]

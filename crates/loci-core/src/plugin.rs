@@ -33,7 +33,9 @@ impl Skill {
     /// A skill from its `SKILL.md`: the description is the `description:` field of the
     /// frontmatter (empty if absent).
     pub fn from_markdown(name: &str, body: &str) -> Self {
-        let note = crate::parse::parse("SKILL.md", crate::vault::Kind::Unknown, body.to_string());
+        // Parsed for its frontmatter only; the file is a plugin's, not the vault's.
+        let path = crate::path::VaultPath::new("SKILL.md".to_string()).expect("one segment is a vault path");
+        let note = crate::parse::parse(&path, crate::vault::Kind::Unknown, body.to_string());
         let description = note.fm_str("description").unwrap_or_default().to_string();
         Self { name: name.to_string(), description, body: body.to_string() }
     }

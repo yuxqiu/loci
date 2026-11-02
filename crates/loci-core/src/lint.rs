@@ -10,6 +10,7 @@ use crate::envelope::{Diagnostic, sort_diagnostics};
 use crate::git;
 use crate::index::{Index, LinkError};
 use crate::parse::{FmError, FmValue, Note, TopBlock, prereq_item};
+use crate::path::VaultPath;
 use crate::vault::{self, Kind};
 
 const CONCEPT_FIELDS: [&str; 2] = ["id", "prereqs"];
@@ -37,14 +38,14 @@ impl Lint<'_> {
     fn files(&self, out: &mut Vec<Diagnostic>) {
         for path in &self.index.files {
             // Path rules (§3, §6.2, §6.4, §6.6), shared with `new` and `mv`.
-            if let Some((code, message)) = vault::path_problem(path) {
+            if let Some((code, message)) = path.problem() {
                 out.push(Diagnostic::error(code, message).at_path(path.as_str()));
             }
-            if !is_nfc(path) {
+            if !is_nfc(path.as_str()) {
                 out.push(Diagnostic::error("path.not-nfc", "file name is not in Unicode NFC").at_path(path));
             }
-            if vault::kind_of(path) == Some(Kind::Inbox) {
-                let parts: Vec<&str> = path.split('/').collect();
+            if path.kind() == Some(Kind::Inbox) {
+                let parts: Vec<&str> = path.components().collect();
                 let root_file = parts.len() == 2 || (parts.len() == 3 && parts[1] == "journal");
                 if root_file {
                     out.push(
@@ -214,7 +215,7 @@ impl Lint<'_> {
         let mut ids: BTreeMap<String, Vec<&str>> = BTreeMap::new();
         for n in index.concepts() {
             if let Some(id) = n.fm_str("id") {
-                ids.entry(id.to_string()).or_default().push(&n.path);
+                ids.entry(id.to_string()).or_default().push(n.path.as_str());
             }
         }
         for (id, paths) in &ids {
@@ -235,7 +236,7 @@ impl Lint<'_> {
         }
         // Areas.
         for a in index.areas() {
-            let p = format!("concepts/{a}/AREA.md");
+            let p = VaultPath::new(format!("concepts/{a}/AREA.md")).expect("an area is a folder name");
             if index.parsed(&p).is_none() {
                 out.push(Diagnostic::error("area.missing", format!("area `{a}` has no AREA.md")).at_path(p));
             }
@@ -246,7 +247,7 @@ impl Lint<'_> {
 }
 
 fn target_name(from: &Note, link: &crate::parse::Link) -> String {
-    if link.target.is_empty() { vault::stem(&from.path).to_string() } else { link.target.clone() }
+    if link.target.is_empty() { from.path.stem().to_string() } else { link.target.clone() }
 }
 
 fn h1_rules(note: &Note, out: &mut Vec<Diagnostic>) {
@@ -302,22 +303,23 @@ fn area_rules(note: &Note, budgets: &Budgets, out: &mut Vec<Diagnostic>) {
 
 fn prereq_cycles(index: &Index, out: &mut Vec<Diagnostic>) {
     // Concept path -> prerequisite paths.
-    let graph: BTreeMap<String, Vec<String>> = index.concepts().map(|n| (n.path.clone(), index.prereqs(n).0)).collect();
+    let graph: BTreeMap<VaultPath, Vec<VaultPath>> =
+        index.concepts().map(|n| (n.path.clone(), index.prereqs(n).0)).collect();
     // Iterative DFS with colours; report each cycle once, from its member with the
     // smallest slug.
-    let mut state: BTreeMap<&str, u8> = BTreeMap::new();
-    let mut reported: BTreeSet<Vec<String>> = BTreeSet::new();
+    let mut state: BTreeMap<&VaultPath, u8> = BTreeMap::new();
+    let mut reported: BTreeSet<Vec<VaultPath>> = BTreeSet::new();
     for start in graph.keys() {
-        if state.get(start.as_str()).copied().unwrap_or(0) != 0 {
+        if state.get(start).copied().unwrap_or(0) != 0 {
             continue;
         }
-        let mut stack: Vec<(&str, usize)> = vec![(start.as_str(), 0)];
-        let mut path: Vec<&str> = vec![start.as_str()];
-        state.insert(start.as_str(), 1);
+        let mut stack: Vec<(&VaultPath, usize)> = vec![(start, 0)];
+        let mut path: Vec<&VaultPath> = vec![start];
+        state.insert(start, 1);
         while let Some((node, i)) = stack.last_mut() {
             let edges = &graph[*node];
             if *i < edges.len() {
-                let next = edges[*i].as_str();
+                let next = &edges[*i];
                 *i += 1;
                 match state.get(next).copied().unwrap_or(0) {
                     0 if graph.contains_key(next) => {
@@ -327,17 +329,17 @@ fn prereq_cycles(index: &Index, out: &mut Vec<Diagnostic>) {
                     }
                     1 => {
                         let pos = path.iter().position(|p| *p == next).expect("a grey node is on the path");
-                        let mut cycle: Vec<String> = path[pos..].iter().map(|s| s.to_string()).collect();
+                        let mut cycle: Vec<VaultPath> = path[pos..].iter().map(|p| (*p).clone()).collect();
                         let min = cycle
                             .iter()
                             .enumerate()
-                            .min_by_key(|(_, p)| (vault::stem(p).to_lowercase(), p.as_str()))
+                            .min_by_key(|(_, p)| (p.stem().to_lowercase(), p.as_str()))
                             .map(|(i, _)| i)
                             .expect("a cycle has members");
                         cycle.rotate_left(min);
                         if reported.insert(cycle.clone()) {
-                            let mut shown: Vec<&str> = cycle.iter().map(|p| vault::stem(p)).collect();
-                            shown.push(vault::stem(&cycle[0]));
+                            let mut shown: Vec<&str> = cycle.iter().map(VaultPath::stem).collect();
+                            shown.push(cycle[0].stem());
                             out.push(
                                 Diagnostic::error("prereqs.cycle", format!("prereq cycle: {}", shown.join(" → ")))
                                     .at_path(cycle[0].as_str()),
@@ -379,7 +381,7 @@ pub fn disk_rules(index: &Index, root: &Path) -> Vec<Diagnostic> {
 
 /// `sources.changed` (§6.4): a source's content differs from HEAD at the same path.
 fn sources_changed(changes: &git::Changes, out: &mut Vec<Diagnostic>) {
-    for p in changes.modified.iter().filter(|p| vault::is_source_file(p)) {
+    for p in changes.modified.iter().filter(|p| p.is_source_file()) {
         out.push(
             Diagnostic::error("sources.changed", format!("source `{p}` differs from its committed version"))
                 .at_path(p.as_str())
@@ -395,9 +397,9 @@ fn check_material(index: &Index, root: &Path, changes: &git::Changes, out: &mut 
     const CATEGORIES: [&str; 3] = ["math spans", "images", "fenced code blocks"];
     let of = |c: &crate::parse::Counts| [c.math, c.images, c.code];
     // A `HEAD` blob that is not UTF-8 holds no parsed material.
-    let head = |p: &str| {
+    let head = |p: &VaultPath| {
         git::show(root, "HEAD", p).map(|b| match String::from_utf8(b) {
-            Ok(text) => of(&crate::parse::parse(p, vault::kind_of(p).expect("a vault path"), text).counts),
+            Ok(text) => of(&crate::parse::parse(p, p.kind().expect("a vault path"), text).counts),
             Err(_) => [0; 3],
         })
     };
@@ -406,21 +408,21 @@ fn check_material(index: &Index, root: &Path, changes: &git::Changes, out: &mut 
     // Per category, the first deleted path that held any (§7.1: vault-level rules
     // report on the first involved path).
     let mut first: [Option<&str>; 3] = [None; 3];
-    let mut deleted_paths: Vec<&String> =
-        changes.deleted.iter().filter(|p| p.ends_with(".md") && vault::is_core_path(p)).collect();
+    let mut deleted_paths: Vec<&VaultPath> =
+        changes.deleted.iter().filter(|p| p.as_str().ends_with(".md") && p.is_core()).collect();
     deleted_paths.sort();
     for p in deleted_paths {
         for (i, n) in head(p)?.into_iter().enumerate() {
             deleted[i] += n;
             if n > 0 && first[i].is_none() {
-                first[i] = Some(p);
+                first[i] = Some(p.as_str());
             }
         }
     }
     let new_files = changes.added.iter().chain(&changes.untracked).map(|p| (p, false));
     let changed = changes.modified.iter().map(|p| (p, true)).chain(new_files);
-    let listed = |p: &str| index.files.binary_search_by(|f| f.as_str().cmp(p)).is_ok();
-    for (p, in_head) in changed.filter(|(p, _)| p.ends_with(".md") && listed(p)) {
+    let listed = |p: &VaultPath| index.files.binary_search(p).is_ok();
+    for (p, in_head) in changed.filter(|(p, _)| p.as_str().ends_with(".md") && listed(p)) {
         let now = of(&index.parsed(p).expect("a listed `.md` file is parsed").counts);
         let before = if in_head { head(p)? } else { [0; 3] };
         for i in 0..3 {
@@ -489,16 +491,6 @@ mod tests {
             ("journal/r/2025/03/25-03-14.md", "# J\n\n[[a]]\n"),
         ]);
         assert_eq!(r, vec![]);
-    }
-
-    #[test]
-    fn journal_paths() {
-        assert!(vault::journal_path_ok("journal/research/2025/03/25-03-14.md"));
-        assert!(vault::journal_path_ok("journal/life/2025-03-14 rent.md"), "names below the stream are free");
-        assert!(vault::journal_path_ok("journal/life/a/b/notes.md"));
-        assert!(!vault::journal_path_ok("journal/x.md"), "outside a stream");
-        assert!(!vault::journal_path_ok("journal/My Stuff/2025/03/25-03-14.md"), "the stream is a slug");
-        assert!(!vault::journal_path_ok("journal/Research/2025/03/25-03-14.md"), "the stream is a slug");
     }
 
     #[test]

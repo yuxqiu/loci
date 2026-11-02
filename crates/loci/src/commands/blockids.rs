@@ -3,14 +3,15 @@
 use loci_core::blockids;
 use loci_core::envelope::{Refusal, Report};
 use loci_core::index::Index;
-use loci_core::vault::{self, write_atomic};
+use loci_core::path::VaultPath;
+use loci_core::vault::write_atomic;
 use serde_json::json;
 
 use super::Ctx;
 
 pub fn run(ctx: &Ctx, note: &str, section: &str) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
-    let arg = vault::path_arg(note)?;
+    let arg = VaultPath::from_arg(note)?;
     // Like every note argument: a path (`.md` optional) or a concept slug (m0 §9.9).
     let index = Index::open(&vault);
     let parsed = index.note(&arg).map_err(|e| e.refusal("block-ids.kind", &arg))?;

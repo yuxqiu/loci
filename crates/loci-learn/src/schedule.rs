@@ -140,7 +140,7 @@ pub fn select<'a>(
         }
     }
     due.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.id.cmp(&b.1.id)));
-    fresh.sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()).then(a.position.cmp(&b.position)));
+    fresh.sort_by(|a, b| a.path.cmp(&b.path).then(a.position.cmp(&b.position)));
     let today = now.to_zoned(TimeZone::UTC).date();
     let introduced_today =
         by_card.values().filter(|ls| ls.first().is_some_and(|l| l.t.to_zoned(TimeZone::UTC).date() == today)).count();
@@ -191,7 +191,7 @@ mod tests {
 
     fn card(path: &str, pos: usize, id: &str) -> Card {
         Card {
-            path: path.into(),
+            path: path.to_string().try_into().unwrap(),
             range: 0..0,
             position: pos,
             id: Some(id.into()),

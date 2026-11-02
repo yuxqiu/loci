@@ -8,6 +8,7 @@ use regex::Regex;
 use saphyr::{LoadableYamlNode, MarkedYaml, Scalar, YamlData};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::path::VaultPath;
 use crate::vault::Kind;
 
 pub const BOM: &str = "\u{feff}";
@@ -143,7 +144,7 @@ pub enum TopBlock {
 
 #[derive(Debug, Clone)]
 pub struct Note {
-    pub path: String,
+    pub path: VaultPath,
     pub kind: Kind,
     pub text: String,
     pub bom: bool,
@@ -181,7 +182,7 @@ impl Note {
 
     /// The note's title (§9.3): the first H1's raw text, else the file stem.
     pub fn title(&self) -> &str {
-        self.h1().unwrap_or_else(|| crate::vault::stem(&self.path))
+        self.h1().unwrap_or_else(|| self.path.stem())
     }
 
     /// The section under `self.headings[i]`: the heading through the next heading of the
@@ -277,7 +278,7 @@ pub fn normalize_target(raw: &str) -> Option<(String, Option<String>)> {
 }
 
 /// Parses `text` (the whole file) as a note at `path`.
-pub fn parse(path: &str, kind: Kind, text: String) -> Note {
+pub fn parse(path: &VaultPath, kind: Kind, text: String) -> Note {
     let bom = text.starts_with(BOM);
     let base = if bom { BOM.len() } else { 0 };
     let body = walk_body(&text, base);
@@ -289,7 +290,7 @@ pub fn parse(path: &str, kind: Kind, text: String) -> Note {
     }
     links.sort_by_key(|l| l.range.start);
     Note {
-        path: path.to_string(),
+        path: path.clone(),
         kind,
         text,
         bom,
@@ -635,7 +636,7 @@ mod tests {
     use super::*;
 
     fn p(text: &str) -> Note {
-        parse("concepts/a/x.md", Kind::Concept, text.to_string())
+        parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, text.to_string())
     }
 
     #[test]
@@ -740,7 +741,7 @@ mod tests {
     #[test]
     fn bom_offsets() {
         let t = format!("{BOM}# T\n\n[[a]]\n");
-        let n = parse("views/v.md", Kind::View, t.clone());
+        let n = parse(&VaultPath::new("views/v.md".into()).unwrap(), Kind::View, t.clone());
         assert!(n.bom);
         assert_eq!(&t[n.links[0].target_range.clone()], "a");
     }

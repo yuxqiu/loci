@@ -47,6 +47,14 @@ them under its version.
   with the procedure an agent follows to offer them and apply the accepted ones;
   `loci updates --handled <id>` records them in `loci.toml` (`updates`). `loci status`
   says when updates are waiting, and `loci init` starts a vault current.
+- Every file name git lists in a vault must be UTF-8: a name that is not, anywhere
+  (`plugins/` included) and even when the file was deleted but is still tracked,
+  refuses the vault with `file.unreadable` until it is renamed or the deletion
+  committed.
+- A path argument such as `a//b`, `concepts/./a/x.md` or `concepts/b/../a/x.md`
+  is read as `a/b` and `concepts/a/x.md`; only an absolute path or one that climbs
+  above the vault root is refused (`path.outside`), and the root itself is
+  `path.root`.
 - `loci export --to html` no longer needs pandoc: loci renders the page itself,
   with math as MathML and nothing loaded from the network. `--to pdf` is removed
   (print the HTML from a browser), and anchors follow GitHub's rule, so links in a

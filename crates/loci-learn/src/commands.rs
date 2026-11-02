@@ -27,7 +27,8 @@ pub fn skills() -> Result<Report, Refusal> {
 pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
     let index = Index::open(vault);
     let (all, issues) = cards::all(&index);
-    let text_of = |path: &str| index.parsed(path).map(|n| n.text.as_str()).expect("cards come from notes");
+    let text_of =
+        |path: &loci_core::path::VaultPath| index.parsed(path).map(|n| n.text.as_str()).expect("cards come from notes");
     let mut diags = vec![];
     for i in &issues {
         diags.push(
@@ -102,7 +103,7 @@ pub fn log(vault: &Vault, mut stdin: impl Read) -> Result<Report, Refusal> {
 
 pub fn state(vault: &Vault, slug: &str) -> Result<Report, Refusal> {
     let index = Index::open(vault);
-    let slug = loci_core::vault::path_arg(slug)?;
+    let slug = loci_core::path::VaultPath::from_arg(slug)?;
     let note = index.concept(&slug).map_err(|e| e.refusal("learn.unknown-concept", &slug))?;
     let Some(concept) = note.fm_str("id").map(str::to_string) else {
         return Err(Refusal::refused("learn.unknown-concept", format!("`{slug}` has no valid id")));

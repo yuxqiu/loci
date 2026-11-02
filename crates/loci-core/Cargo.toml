@@ -18,6 +18,7 @@ ulid = "3.0.0"
 unicode-normalization = "0.1.26"
 toml_edit = "0.25.17"
 tempfile = "3.27.0"
+relative-path = "2.0.3"
 
 [dev-dependencies]
 insta = "1.49.0"

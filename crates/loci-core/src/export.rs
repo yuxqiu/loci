@@ -6,6 +6,7 @@ use std::ops::Range;
 
 use crate::index::{Index, Resolved, heading_key};
 use crate::parse::{Heading, Link, LinkForm, Note};
+use crate::path::VaultPath;
 use crate::splice::{self, Edit};
 
 /// The part of a note a link includes (m1-m4 §4 step 1).
@@ -145,9 +146,9 @@ pub struct Export {
     /// `#anchor` links point at, for a renderer to give the headings.
     pub heading_ids: Vec<String>,
     /// Included note paths, in order.
-    pub notes: Vec<String>,
+    pub notes: Vec<VaultPath>,
     /// Images to copy: (vault path, file name under `assets/`).
-    pub assets: Vec<(String, String)>,
+    pub assets: Vec<(VaultPath, String)>,
 }
 
 /// The identifier of a heading text, by GitHub's rule, so that the links of a markdown
@@ -165,8 +166,8 @@ fn anchor_id(text: &str) -> String {
     if s.is_empty() { "section".to_string() } else { s }
 }
 
-fn is_image(path: &str) -> bool {
-    let lower = path.to_lowercase();
+fn is_image(path: &VaultPath) -> bool {
+    let lower = path.as_str().to_lowercase();
     [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"].iter().any(|e| lower.ends_with(e))
 }
 
@@ -187,10 +188,10 @@ fn note_links<'a>(index: &Index, note: &'a Note, range: &Range<usize>) -> Vec<(&
         .collect()
 }
 
-pub fn export(index: &Index, root: &str, depth: usize) -> Export {
+pub fn export(index: &Index, root: &VaultPath, depth: usize) -> Export {
     // 1. Collect: each note once, at its first appearance, breadth-first up to `depth`.
     let mut units = vec![Unit::root(index.parsed(root).expect("the command resolved `root` to a readable note"))];
-    let mut unit_of: BTreeMap<&str, usize> = BTreeMap::from([(root, 0)]);
+    let mut unit_of: BTreeMap<&VaultPath, usize> = BTreeMap::from([(root, 0)]);
     let mut queue = VecDeque::from([(0usize, 0usize)]);
     while let Some((i, d)) = queue.pop_front() {
         if d >= depth {
@@ -201,8 +202,8 @@ pub fn export(index: &Index, root: &str, depth: usize) -> Export {
         for (link, resolved) in note_links(index, parent.note, &parent.range) {
             let Resolved::Note(p) = resolved else { continue };
             let note = index.parsed(&p).expect("a resolved note");
-            let path = note.path.as_str();
-            if unit_of.contains_key(path) || children.iter().any(|(q, _): &(&str, Unit)| *q == path) {
+            let path = &note.path;
+            if unit_of.contains_key(path) || children.iter().any(|(q, _): &(&VaultPath, Unit)| *q == path) {
                 continue;
             }
             let level = (parent.level_at(link.range.start) + 1).min(6);
@@ -218,7 +219,7 @@ pub fn export(index: &Index, root: &str, depth: usize) -> Export {
 
     // 2–4. Assemble, rewriting headings, links, images and block ids.
     let mut out = Export { heading_ids, ..Export::default() };
-    let mut asset_names: BTreeMap<String, String> = BTreeMap::new();
+    let mut asset_names: BTreeMap<VaultPath, String> = BTreeMap::new();
     let mut taken: BTreeSet<String> = BTreeSet::new();
     let mut doc = String::new();
     for u in &units {
@@ -245,7 +246,7 @@ pub fn export(index: &Index, root: &str, depth: usize) -> Export {
                     let target = index.parsed(&p).expect("a resolved note");
                     let heading = link.fragment.as_deref().filter(|f| !f.starts_with('^'));
                     let text = label.unwrap_or_else(|| heading.unwrap_or(target.title()).to_string());
-                    match unit_of.get(p.as_str()) {
+                    match unit_of.get(&p) {
                         Some(&j) => {
                             let a = &anchors[j];
                             match heading.and_then(|f| a.headings.get(&heading_key(f))).or(a.top.as_ref()) {
@@ -318,8 +319,8 @@ fn embed_alt(note: &Note, link: &Link) -> Option<String> {
     (!is_size).then_some(l)
 }
 
-fn unique_name(path: &str, taken: &mut BTreeSet<String>) -> String {
-    let name = path.rsplit('/').next().unwrap_or(path).to_string();
+fn unique_name(path: &VaultPath, taken: &mut BTreeSet<String>) -> String {
+    let name = path.file_name().to_string();
     let (stem, ext) = match name.rfind('.') {
         Some(i) => (name[..i].to_string(), name[i..].to_string()),
         None => (name.clone(), String::new()),
@@ -365,9 +366,12 @@ mod tests {
             ("concepts/a/queue.md", &concept("Queue", "FIFO.\n")),
             ("concepts/a/attachments/g.png", ""),
         ]);
-        let e = export(&i, "views/algo.md", 1);
+        let e = export(&i, &VaultPath::new("views/algo.md".into()).unwrap(), 1);
         assert_eq!(e.notes, vec!["views/algo.md", "concepts/a/bfs.md", "concepts/a/dfs.md"]);
-        assert_eq!(e.assets, vec![("concepts/a/attachments/g.png".to_string(), "g.png".to_string())]);
+        assert_eq!(
+            e.assets,
+            vec![(VaultPath::new("concepts/a/attachments/g.png".into()).unwrap(), "g.png".to_string())]
+        );
         let md = &e.markdown;
         assert!(md.contains("[BFS](#bfs) and [depth-first](#dfs)."), "{md}");
         assert!(md.contains("### BFS\n"), "{md}");
@@ -384,12 +388,12 @@ mod tests {
             ("views/v.md", "# V\n\n[[bfs#Proof]]\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Intro.\n\n## Proof\n\nBy induction.\n\n## Other\n\nX.\n")),
         ]);
-        let e = export(&i, "views/v.md", 1);
+        let e = export(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
         assert!(e.markdown.contains("[Proof](#proof)"), "{}", e.markdown);
         assert!(e.markdown.contains("By induction."));
         assert!(!e.markdown.contains("Intro."));
         assert!(!e.markdown.contains("X."));
-        let none = export(&i, "views/v.md", 0);
+        let none = export(&i, &VaultPath::new("views/v.md".into()).unwrap(), 0);
         assert_eq!(none.notes, vec!["views/v.md"]);
     }
 
@@ -399,7 +403,7 @@ mod tests {
             ("views/v.md", "# V\n\n[[bfs]], then [[bfs#Proof]].\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Intro.\n\n## Proof\n\nBy induction.\n")),
         ]);
-        let e = export(&i, "views/v.md", 1);
+        let e = export(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
         assert_eq!(e.notes, vec!["views/v.md", "concepts/a/bfs.md"]);
         assert_eq!(e.markdown.matches("By induction.").count(), 1, "{}", e.markdown);
         assert!(e.markdown.contains("[BFS](#bfs), then [Proof](#proof)."), "{}", e.markdown);
@@ -412,7 +416,7 @@ mod tests {
             ("views/v.md", &format!("# V\n\nSee [[bfs#^{id}]].\n")),
             ("concepts/a/bfs.md", &concept("BFS", &format!("Intro.\n\nThe key step. ^{id}\n\nOther.\n"))),
         ]);
-        let e = export(&i, "views/v.md", 1);
+        let e = export(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
         let md = &e.markdown;
         assert!(md.contains("The key step.\n") && !md.contains("Intro.") && !md.contains("Other."), "{md}");
         assert!(!md.contains('^'), "block ids are removed: {md}");
@@ -425,7 +429,7 @@ mod tests {
             ("views/v.md", "# V\n\n## Read [[bfs]] first ##\n\nSetext [[bfs]]\ntwo lines\n---\n\nText.\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Body.\n")),
         ]);
-        let md = export(&i, "views/v.md", 0).markdown;
+        let md = export(&i, &VaultPath::new("views/v.md".into()).unwrap(), 0).markdown;
         assert!(md.contains("## Read BFS first ##\n"), "{md}");
         assert!(md.contains("## Setext BFS two lines\n\nText."), "{md}");
     }
@@ -437,13 +441,13 @@ mod tests {
             ("concepts/a/bfs.md", &concept("BFS", "Body.\n")),
             ("concepts/a/untitled.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\n---\nNo heading.\n"),
         ]);
-        let e = export(&i, "views/v.md", 1);
+        let e = export(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
         assert!(e.markdown.contains("[BFS](#bfs-1)"), "{}", e.markdown);
         let i = from_texts(&[
             ("views/v.md", "# V\n\n[[untitled]]\n"),
             ("concepts/a/untitled.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\n---\nNo heading.\n"),
         ]);
-        let e = export(&i, "views/v.md", 1);
+        let e = export(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
         assert!(
             e.markdown.contains("[untitled](#untitled)") && e.markdown.contains("## untitled\n\nNo heading."),
             "{}",

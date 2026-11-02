@@ -76,7 +76,7 @@ fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::R
 
 pub fn run(ctx: &Ctx, agent: &str, cases_file: Option<&Path>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
-    let path = cases_file.map_or_else(|| vault.abs(FILE), Path::to_path_buf);
+    let path = cases_file.map_or_else(|| vault.root.join(FILE), Path::to_path_buf);
     let shown = path.display();
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,

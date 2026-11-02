@@ -127,7 +127,7 @@ pub fn run(ctx: &Ctx, every: bool, handled: Option<&str>) -> Result<Report, Refu
                     format!("`{id}` is already handled (this vault is through {})", mark.unwrap_or("none")),
                 ));
             }
-            let path = vault.abs(config::FILE);
+            let path = vault.root.join(config::FILE);
             let text = std::fs::read_to_string(&path).map_err(Refusal::io)?;
             let updated = Config::set_updates(&text, id).map_err(|e| Refusal::refused("config.invalid", e))?;
             Config::parse(&updated).map_err(|e| Refusal::internal("updates.write", e))?;

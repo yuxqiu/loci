@@ -9,11 +9,16 @@ use loci_core::config::Budgets;
 use loci_core::index::{self, Index};
 use loci_core::lint::Lint;
 use loci_core::mv;
+use loci_core::path::VaultPath;
 use loci_core::splice::{self, Edit};
 use proptest::prelude::*;
 use proptest::sample::subsequence;
 
 type Files = BTreeMap<String, String>;
+
+fn vp(s: &str) -> VaultPath {
+    VaultPath::new(s.to_string()).unwrap()
+}
 
 fn build(files: &Files) -> Index {
     let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
@@ -28,7 +33,7 @@ const AREAS: &[&str] = &["a", "b", "算法"];
 /// A link to `target` (a vault path) in one of the generated forms.
 fn link_text(target: &str, slug_form: bool, style: u8) -> String {
     let t = if slug_form {
-        loci_core::vault::stem(target).to_string()
+        vp(target).stem().to_string()
     } else {
         target.strip_suffix(".md").unwrap_or(target).to_string()
     };
@@ -85,7 +90,7 @@ fn vault() -> impl Strategy<Value = GenVault> {
                 let text = if *is_concept {
                     let pre = if prereqs && concept_paths.len() > 1 {
                         let other = concept_paths.iter().find(|p| *p != path).unwrap();
-                        format!("prereqs: [\"[[{}]]\"]\n", loci_core::vault::stem(other))
+                        format!("prereqs: [\"[[{}]]\"]\n", vp(other).stem())
                     } else {
                         String::new()
                     };
@@ -117,7 +122,7 @@ fn destination(from: &str, rename: bool) -> String {
         let dir = from.rsplit_once('/').map_or("", |(d, _)| d);
         if from.starts_with("concepts/") {
             let new_dir = if rename { dir.to_string() } else { "concepts/moved-area/deeper".to_string() };
-            let name = if rename { "renamed-新" } else { loci_core::vault::stem(from) };
+            let name = if rename { "renamed-新".to_string() } else { vp(from).stem().to_string() };
             format!("{new_dir}/{name}.md")
         } else {
             format!("{dir}/moved/renamed-新.md")
@@ -138,7 +143,7 @@ fn apply_plan(files: &Files, plan: &loci_core::relink::Change) -> Files {
     let mut out = Files::new();
     for (p, t) in files {
         let new = map.get(p.as_str()).map_or(p.clone(), |n| n.to_string());
-        let text = plan.writes.get(&new).cloned().unwrap_or_else(|| t.clone());
+        let text = plan.writes.get(new.as_str()).cloned().unwrap_or_else(|| t.clone());
         out.insert(new, text);
     }
     out
@@ -152,7 +157,7 @@ proptest! {
         let from = g.movable[pick.index(g.movable.len())].clone();
         let to = destination(&from, rename);
         let before = build(&g.files);
-        let plan = match mv::plan(&before, &from, &to, |_| Ok(false), |_| false) {
+        let plan = match mv::plan(&before, &vp(&from), &vp(&to), |_| Ok(false), |_| false) {
             Ok(p) => p,
             Err(e) => {
                 // A rename onto a slug in use is a legitimate refusal; anything else is not
@@ -166,14 +171,14 @@ proptest! {
         let map: BTreeMap<&str, &str> = plan.moves.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
         let mapped = |p: &str| map.get(p).map_or(p.to_string(), |n| n.to_string());
         for note in before.notes() {
-            let new_note = after.parsed(&mapped(&note.path)).expect("every note survives a move");
+            let new_note = after.parsed(mapped(note.path.as_str()).as_str()).expect("every note survives a move");
             prop_assert_eq!(note.links.len(), new_note.links.len(), "{}", note.path);
             for (old, new) in note.links.iter().zip(&new_note.links) {
                 let Ok(r) = before.resolve(note, old) else { continue };
                 let r2 = after.resolve(new_note, new);
                 prop_assert_eq!(
                     r2.as_ref().map(|x| x.path().to_string()),
-                    Ok(mapped(r.path())),
+                    Ok(mapped(r.path().as_str())),
                     "mv {} {}: `{}` in {} -> `{}`\n{}", from, to, old.raw, note.path, new.raw, new_note.text
                 );
             }
