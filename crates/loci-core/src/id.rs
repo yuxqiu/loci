@@ -14,8 +14,30 @@ static SLUG: LazyLock<Regex> = LazyLock::new(|| Regex::new(&format!("^{SLUG_PATT
 
 /// A concept slug (m0 §6.2): lowercase letters, other letters and digits, in `-`-joined
 /// words. A concept's slug is its file stem; it names the concept vault-wide.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct Slug(String);
+
+impl TryFrom<String> for Slug {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, String> {
+        s.parse()
+    }
+}
+
+impl From<Slug> for String {
+    fn from(s: Slug) -> String {
+        s.0
+    }
+}
+
+/// Looked up by name in maps keyed by slug; a name that is no slug finds nothing.
+impl std::borrow::Borrow<str> for Slug {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
 
 impl Slug {
     pub fn as_str(&self) -> &str {

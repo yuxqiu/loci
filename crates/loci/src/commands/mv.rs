@@ -4,9 +4,9 @@ use loci_core::envelope::{Refusal, Report};
 use loci_core::index::Index;
 use loci_core::path::VaultPath;
 
+use loci_core::mv;
 use loci_core::relink::Change;
 use loci_core::vault::Vault;
-use loci_core::{git, mv, relink};
 use serde_json::json;
 
 use super::Ctx;
@@ -18,14 +18,14 @@ pub fn run(ctx: &Ctx, from: &str, to: &str, dry_run: bool) -> Result<Report, Ref
     let index = Index::open(&vault);
     let from = mv::stored_name(&index, &from)?;
     let exists = |p: &VaultPath| vault.abs(p).symlink_metadata().is_ok();
-    let ignored = |p: &VaultPath| git::is_ignored(&vault.root, p).map_err(Refusal::git);
+    let ignored = |p: &VaultPath| vault.repo().is_ignored(p).map_err(Refusal::git);
     let plan = mv::plan(&index, &from, &to, ignored, exists)?;
 
     refuse_partial_folder(&vault, &from, &plan)?;
     refuse_changed_source(&vault, &plan)?;
 
     if !dry_run {
-        relink::apply(&vault, &plan).map_err(Refusal::io)?;
+        plan.apply(&vault).map_err(Refusal::io)?;
     }
 
     let data = json!({
@@ -51,7 +51,7 @@ fn refuse_partial_folder(vault: &Vault, from: &VaultPath, plan: &Change) -> Resu
     if plan.moves.contains_key(from) {
         return Ok(()); // A file.
     }
-    let listing = git::ls_files(&vault.root, Some(from)).map_err(Refusal::git)?;
+    let listing = vault.repo().ls_files(Some(from)).map_err(Refusal::git)?;
     let on_disk = |name: &String| vault.root.join(name).symlink_metadata().is_ok();
     let mut left: Vec<String> =
         listing.names.into_iter().filter(|n| on_disk(n) && !plan.moves.contains_key(n.as_str())).collect();
@@ -68,7 +68,7 @@ fn refuse_partial_folder(vault: &Vault, from: &VaultPath, plan: &Change) -> Resu
 /// uncommitted edits (in HEAD and on disk, but different) is not moved: the move would
 /// carry the edit past lint as a plain rename.
 fn refuse_changed_source(vault: &Vault, plan: &Change) -> Result<(), Refusal> {
-    let changed = git::status(&vault.root).map_err(Refusal::git)?.modified;
+    let changed = vault.repo().status().map_err(Refusal::git)?.modified;
     match plan.moves.keys().find(|p| p.is_source_file() && changed.contains(p)) {
         None => Ok(()),
         Some(p) => Err(Refusal::refused(

@@ -13,14 +13,14 @@ use serde_json::json;
 
 use crate::cards::{self, Card, CardId};
 use crate::config::Config;
-use crate::reviewlog::{self, Grade, Input, Line, Subject};
-use crate::schedule::{self, Estimate, Scheduler};
+use crate::reviewlog::{Grade, Input, Line, ReviewLog, Subject};
+use crate::schedule::{Estimate, Scheduler};
 
 const SKILL_FILES: &[(&str, &str)] = &[("learn-session", include_str!("../skills/learn-session/SKILL.md"))];
 
 pub fn skills() -> Result<Report, Refusal> {
-    let skills: Vec<Skill> = SKILL_FILES.iter().map(|(n, b)| Skill::from_markdown(n, b)).collect();
-    let human: String = skills.iter().map(|s| format!("{}: {}\n", s.name, s.description)).collect();
+    let skills = Skill::compiled(SKILL_FILES);
+    let human: String = skills.iter().map(|s| format!("{s}\n")).collect();
     Ok(Report::ok(json!({ "skills": skills }), human))
 }
 
@@ -36,16 +36,13 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
                 "learn.card-format",
                 "card is not `- question :: answer`, optionally followed by a block id",
             )
-            .at_path(i.path.as_str())
-            .at(text_of(&i.path), i.span.clone()),
+            .at(&i.path, text_of(&i.path), i.span.clone()),
         );
     }
 
     let mut by_id: BTreeMap<loci_core::id::Ulid, Vec<&Spanned<Card>>> = BTreeMap::new();
     for c in &all {
-        let at = |code: &str, msg: String| {
-            Diagnostic::error(code, msg).at_path(c.path.as_str()).at(text_of(&c.path), c.span.clone())
-        };
+        let at = |code: &str, msg: String| Diagnostic::error(code, msg).at(&c.path, text_of(&c.path), c.span.clone());
         match &c.id {
             CardId::Missing => diags.push(
                 at("learn.no-id", "card has no block id".into())
@@ -62,9 +59,11 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
     for (id, cs) in by_id.iter().filter(|(_, cs)| cs.len() > 1) {
         let others: Vec<&str> = cs[1..].iter().map(|c| c.path.as_str()).collect();
         diags.push(
-            Diagnostic::error("learn.id-duplicate", format!("card id `^{id}` is used by {}", others.join(", ")))
-                .at_path(cs[0].path.as_str())
-                .at(text_of(&cs[0].path), cs[0].span.clone()),
+            Diagnostic::error("learn.id-duplicate", format!("card id `^{id}` is used by {}", others.join(", "))).at(
+                &cs[0].path,
+                text_of(&cs[0].path),
+                cs[0].span.clone(),
+            ),
         );
     }
 
@@ -94,10 +93,10 @@ pub fn log(vault: &Vault, mut stdin: impl Read) -> Result<Report, Refusal> {
     let index = Index::open(vault);
     let (all, _) = cards::all(&index);
     check_exists(&line, &all, &index)?;
-    let before = reviewlog::append(&vault.root, &line).map_err(Refusal::io)?;
-    match reviewlog::commit(&vault.root, "log") {
+    let before = ReviewLog(&vault.root).append(&line).map_err(Refusal::io)?;
+    match ReviewLog(&vault.root).commit("log") {
         Ok(sha) => Ok(Report::ok(json!({"line": line, "commit": sha}), format!("logged {sha}\n"))),
-        Err(e) => Err(match reviewlog::truncate(&vault.root, before) {
+        Err(e) => Err(match ReviewLog(&vault.root).truncate(before) {
             Ok(()) => Refusal::git(e),
             Err(t) => Refusal::git(format!("{e}; removing the uncommitted line also failed: {t}")),
         }),
@@ -112,10 +111,10 @@ pub fn state(vault: &Vault, slug: &str) -> Result<Report, Refusal> {
         return Err(Refusal::refused("learn.unknown-concept", format!("`{slug}` has no valid id")));
     };
     let config = Config::load(&vault.root)?;
-    let lines = reviewlog::read(&vault.root)?;
+    let lines = ReviewLog(&vault.root).read()?;
     let (note_cards, _) = cards::of_note(note);
     let (estimate, used) =
-        schedule::estimate(&note_cards, concept, &lines, &Scheduler::new(config.desired_retention), Timestamp::now());
+        Scheduler::new(config.desired_retention).estimate(&note_cards, concept, &lines, Timestamp::now());
     let human = match &estimate {
         Estimate::Cards { r } => format!("{slug}: recall {:.0}% (from {} line(s))\n", r * 100.0, used.len()),
         Estimate::Item { grade, age_days } => format!("{slug}: last quiz {} {age_days:.1} days ago\n", grade.outcome()),
@@ -126,19 +125,17 @@ pub fn state(vault: &Vault, slug: &str) -> Result<Report, Refusal> {
 
 pub fn review(vault: &Vault) -> Result<Report, Refusal> {
     let config = Config::load(&vault.root)?;
-    let lines = reviewlog::read(&vault.root)?;
+    let lines = ReviewLog(&vault.root).read()?;
     let index = Index::open(vault);
     let (all, _) = cards::all(&index);
     let scheduler = Scheduler::new(config.desired_retention);
-    let (session, new_count) = schedule::select(&all, &lines, &scheduler, config.new_per_day, Timestamp::now());
+    let (session, new_count) = scheduler.select(&all, &lines, config.new_per_day, Timestamp::now());
 
     // Each grade is appended at once; the lines are committed at the end (§2.6 step 6).
-    let mut reviewed = 0;
-    let stopped = grade_cards(&session, &vault.root, &mut reviewed);
+    let (reviewed, stopped) = grade_cards(&session, ReviewLog(&vault.root));
 
     // Lines already appended are committed even when the session stopped on an error.
-    let commit =
-        if reviewed > 0 { Some(reviewlog::commit(&vault.root, "review").map_err(Refusal::git)?) } else { None };
+    let commit = if reviewed > 0 { Some(ReviewLog(&vault.root).commit("review").map_err(Refusal::git)?) } else { None };
     if let Err(e) = stopped {
         let committed = commit.map_or(String::new(), |sha| format!(" ({reviewed} grades committed in {sha})"));
         return Err(Refusal::io(format!("the session stopped: {e}{committed}")));
@@ -149,19 +146,27 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
     Ok(Report::ok(data, format!("reviewed {reviewed}, {due_left} left\n")))
 }
 
-/// Asks for a grade on each card of `session` and appends it to the log, counting in
-/// `appended`. Stops at the end, on `q` or end of input (`Ok`), or on an I/O error.
-fn grade_cards(session: &[&Spanned<Card>], root: &std::path::Path, appended: &mut usize) -> std::io::Result<()> {
+/// Asks for a grade on each card of `session` and appends it to the log. Returns how
+/// many it appended, and how it stopped: at the end, on `q` or end of input (`Ok`), or
+/// on an I/O error.
+fn grade_cards(session: &[&Spanned<Card>], log: ReviewLog) -> (usize, std::io::Result<()>) {
     let (mut input, mut err) = (std::io::stdin().lock(), std::io::stderr());
+    let mut appended = 0;
     for (i, card) in session.iter().enumerate() {
         let progress = format!("{}/{}", i + 1, session.len());
-        let Some(grade) = ask(card, &progress, &mut input, &mut err)? else { return Ok(()) };
+        let grade = match ask(card, &progress, &mut input, &mut err) {
+            Ok(Some(grade)) => grade,
+            Ok(None) => break,
+            Err(e) => return (appended, Err(e)),
+        };
         let id = card.id.valid().expect("only cards with valid ids are scheduled");
         let line = Line { t: Timestamp::now(), subject: Subject::Card(id), grade };
-        reviewlog::append(root, &line)?;
-        *appended += 1;
+        if let Err(e) = log.append(&line) {
+            return (appended, Err(e));
+        }
+        appended += 1;
     }
-    Ok(())
+    (appended, Ok(()))
 }
 
 /// Shows one card and reads the user's grade. `None` when the user stops (`q` or end
@@ -183,9 +188,9 @@ fn ask(
         if input.read_line(&mut buf)? == 0 || buf.trim() == "q" {
             return Ok(None);
         }
-        match Grade::parse(&buf) {
-            Some(g) => return Ok(Some(g)),
-            None => writeln!(err, "type again, hard, good, easy, 1-4 or q")?,
+        match buf.parse::<Grade>() {
+            Ok(g) => return Ok(Some(g)),
+            Err(_) => writeln!(err, "type again, hard, good, easy, 1-4 or q")?,
         }
     }
 }

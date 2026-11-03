@@ -4,71 +4,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use relative_path::RelativePath;
-use unicode_normalization::UnicodeNormalization;
 
 use crate::config::{self, Config};
 use crate::envelope::Refusal;
 use crate::path::VaultPath;
-
-/// Serialized as its [`Kind::name`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Kind {
-    Concept,
-    Area,
-    View,
-    Journal,
-    Rules,
-    Source,
-    Inbox,
-    /// A non-markdown file outside `sources/` and `inbox/` (images, attachments).
-    Asset,
-    /// A `.md` file outside every known folder.
-    Unknown,
-}
-
-impl Kind {
-    pub fn name(self) -> &'static str {
-        match self {
-            Kind::Concept => "concept",
-            Kind::Area => "area",
-            Kind::View => "view",
-            Kind::Journal => "journal",
-            Kind::Rules => "rules",
-            Kind::Source => "source",
-            Kind::Inbox => "inbox",
-            Kind::Asset => "asset",
-            Kind::Unknown => "unknown",
-        }
-    }
-
-    /// The formed notes, written to be read (concepts, area files, views, journal
-    /// entries), as opposed to sources, inbox drafts and rule files.
-    pub fn is_formed(self) -> bool {
-        matches!(self, Kind::Concept | Kind::Area | Kind::View | Kind::Journal)
-    }
-
-    /// The managed kinds (m0 §3): C, A, V, J, R.
-    pub fn is_managed(self) -> bool {
-        matches!(self, Kind::Concept | Kind::Area | Kind::View | Kind::Journal | Kind::Rules)
-    }
-}
-
-impl serde::Serialize for Kind {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.name())
-    }
-}
-
-/// The rule files at the vault root (m0 §3): the agent entry point, the user's rules
-/// and the user's style.
-pub const AGENTS: &str = "AGENTS.md";
-pub const RULES: &str = "RULES.md";
-pub const STYLE: &str = "STYLE.md";
-
-/// NFC form of a string.
-pub fn nfc(s: &str) -> String {
-    s.nfc().collect()
-}
 
 /// Where the vault is (m0 §8, global options): the folder `--vault` gives, or the
 /// nearest folder holding `loci.toml` from a folder up. Both absolute.
@@ -143,6 +82,11 @@ impl Vault {
         Ok(Self { root, config, listing })
     }
 
+    /// The vault's git work tree.
+    pub fn repo(&self) -> crate::git::Repo<'_> {
+        crate::git::Repo::new(&self.root)
+    }
+
     /// Where vault path `rel` is on disk.
     pub fn abs(&self, rel: &VaultPath) -> PathBuf {
         abs(&self.root, rel)
@@ -155,7 +99,7 @@ impl Vault {
     }
 }
 
-/// The result of [`walk`].
+/// The result of `walk`.
 #[derive(Debug, Clone, Default)]
 pub struct Walk {
     /// Vault-relative `/` paths, sorted by bytes.
@@ -197,7 +141,7 @@ pub fn is_regular_file(root: &Path, rel: &VaultPath) -> bool {
 /// core reads cannot be listed, read, or decoded as UTF-8, or in which any name git
 /// lists, anywhere, is not UTF-8 (`file.unreadable`): loci never runs on a guess.
 fn walk(root: &Path) -> Result<Walk, Refusal> {
-    let listing = crate::git::ls_files(root, None).map_err(Refusal::git)?;
+    let listing = crate::git::Repo::new(root).ls_files(None).map_err(Refusal::git)?;
 
     // Git skips what it cannot read (a directory without permission) with a warning.
     // Wherever the folder is, `plugins/` included, loci cannot tell what it missed.

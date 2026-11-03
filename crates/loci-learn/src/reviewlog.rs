@@ -34,22 +34,27 @@ impl Grade {
         }
     }
 
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.trim() {
-            "again" | "1" => Some(Grade::Again),
-            "hard" | "2" => Some(Grade::Hard),
-            "good" | "3" => Some(Grade::Good),
-            "easy" | "4" => Some(Grade::Easy),
-            _ => None,
-        }
-    }
-
     /// Reads a grade as fail / partial / pass (§4.2).
     pub fn outcome(self) -> &'static str {
         match self {
             Grade::Again => "fail",
             Grade::Hard => "partial",
             Grade::Good | Grade::Easy => "pass",
+        }
+    }
+}
+
+/// A grade as typed in a review: its name or its rating.
+impl std::str::FromStr for Grade {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s.trim() {
+            "again" | "1" => Ok(Grade::Again),
+            "hard" | "2" => Ok(Grade::Hard),
+            "good" | "3" => Ok(Grade::Good),
+            "easy" | "4" => Ok(Grade::Easy),
+            other => Err(format!("`{other}` is no grade")),
         }
     }
 }
@@ -123,59 +128,62 @@ impl Input {
     }
 }
 
-/// Reads every line of the log, sorted by timestamp (stable for equal times). A line
-/// that does not parse is `learn.log`.
-pub fn read(vault: &Path) -> Result<Vec<Line>, Refusal> {
-    let text = match std::fs::read_to_string(vault.join(LOG)) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(e) => return Err(Refusal::io(e)),
-    };
-    let mut lines = vec![];
-    for (n, l) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
-        let line: Line =
-            serde_json::from_str(l).map_err(|e| Refusal::refused("learn.log", format!("{LOG} line {}: {e}", n + 1)))?;
-        lines.push(line);
-    }
-    lines.sort_by_key(|l| l.t);
-    Ok(lines)
-}
+/// The review log of the vault at a root.
+#[derive(Debug, Clone, Copy)]
+pub struct ReviewLog<'a>(pub &'a Path);
 
-/// Appends one line, creating `plugins/learn/` and its `.gitattributes` first if needed.
-/// Returns the file length before the append, for rollback.
-pub fn append(vault: &Path, line: &Line) -> std::io::Result<u64> {
-    std::fs::create_dir_all(vault.join(DIR))?;
-    let attrs = vault.join(ATTRS);
-    if !attrs.exists() {
-        std::fs::write(&attrs, ATTRS_LINE)?;
+impl ReviewLog<'_> {
+    /// Reads every line of the log, sorted by timestamp (stable for equal times). A line
+    /// that does not parse is `learn.log`.
+    pub fn read(&self) -> Result<Vec<Line>, Refusal> {
+        let text = match std::fs::read_to_string(self.0.join(LOG)) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+            Err(e) => return Err(Refusal::io(e)),
+        };
+        let mut lines = vec![];
+        for (n, l) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
+            let line: Line = serde_json::from_str(l)
+                .map_err(|e| Refusal::refused("learn.log", format!("{LOG} line {}: {e}", n + 1)))?;
+            lines.push(line);
+        }
+        lines.sort_by_key(|l| l.t);
+        Ok(lines)
     }
-    let path = vault.join(LOG);
-    let before = match std::fs::metadata(&path) {
-        Ok(m) => m.len(),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
-        Err(e) => return Err(e),
-    };
-    let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
-    let json = serde_json::to_string(line).expect("a line always serialises");
-    // One write, undone on failure, so a partial line never stays in the log.
-    if let Err(e) = f.write_all(format!("{json}\n").as_bytes()) {
-        f.set_len(before)?;
-        return Err(e);
+
+    /// Appends one line, creating `plugins/learn/` and its `.gitattributes` first if needed.
+    /// Returns the file length before the append, for rollback.
+    pub fn append(&self, line: &Line) -> std::io::Result<u64> {
+        std::fs::create_dir_all(self.0.join(DIR))?;
+        let attrs = self.0.join(ATTRS);
+        if !attrs.exists() {
+            std::fs::write(&attrs, ATTRS_LINE)?;
+        }
+        let path = self.0.join(LOG);
+        let before = match std::fs::metadata(&path) {
+            Ok(m) => m.len(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(e) => return Err(e),
+        };
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+        let json = serde_json::to_string(line).expect("a line always serialises");
+        // One write, undone on failure, so a partial line never stays in the log.
+        if let Err(e) = f.write_all(format!("{json}\n").as_bytes()) {
+            f.set_len(before)?;
+            return Err(e);
+        }
+        Ok(before)
     }
-    Ok(before)
-}
 
-/// Truncates the log back to `len` bytes (undoing an append).
-pub fn truncate(vault: &Path, len: u64) -> std::io::Result<()> {
-    std::fs::OpenOptions::new().write(true).open(vault.join(LOG))?.set_len(len)
-}
+    /// Truncates the log back to `len` bytes (undoing an append).
+    pub fn truncate(&self, len: u64) -> std::io::Result<()> {
+        std::fs::OpenOptions::new().write(true).open(self.0.join(LOG))?.set_len(len)
+    }
 
-/// Commits the log and its `.gitattributes` alone, as the user (§2.4). Returns the commit.
-pub fn commit(vault: &Path, command: &str) -> Result<String, String> {
-    git::run(vault, &["add", "--", LOG, ATTRS])?;
-    let msg = format!("loci: learn {command}");
-    git::run(vault, &["commit", "-q", "-m", &msg, "--", LOG, ATTRS])?;
-    git::head(vault)
+    /// Commits the log and its `.gitattributes` alone, as the user (§2.4). Returns the commit.
+    pub fn commit(&self, command: &str) -> Result<String, String> {
+        git::Repo::new(self.0).commit_paths(&format!("loci: learn {command}"), &[LOG, ATTRS])
+    }
 }
 
 #[cfg(test)]

@@ -23,7 +23,7 @@ fn vp(s: &str) -> VaultPath {
 
 fn build(files: &Files) -> Index {
     let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
-    index::from_texts(&files)
+    index::Index::from_texts(&files)
 }
 
 const SLUGS: &[&str] = &["alpha", "beta", "gamma-ray", "delta", "二分查找", "排序", "검색", "かな"];
@@ -202,7 +202,7 @@ proptest! {
         let from = concepts[a.index(concepts.len())].clone();
         let into = concepts[b.index(concepts.len())].clone();
         prop_assume!(from != into);
-        let plan = match merge::plan(&before, &from, &into) {
+        let plan = match merge::Merge::plan(&before, &from, &into) {
             Ok(p) => p,
             // Two concepts that share a slug cannot be named by it; any other refusal is not
             // legitimate on these vaults.
@@ -213,7 +213,7 @@ proptest! {
         };
         let after = build(&apply_plan(&g.files, &plan.change));
         prop_assert!(after.parsed(&from).is_none(), "the absorbed note is gone");
-        for note in before.notes().filter(|n| n.path != from && n.path != into && n.kind != loci_core::vault::Kind::Source) {
+        for note in before.notes().filter(|n| n.path != from && n.path != into && n.kind != loci_core::path::Kind::Source) {
             let new_note = after.parsed(&note.path).expect("other notes stay");
             prop_assert_eq!(note.links.len(), new_note.links.len(), "{}", note.path);
             for (old, new) in note.links.iter().zip(&new_note.links) {
@@ -225,7 +225,7 @@ proptest! {
         // The concept kept names no absorbed note, and no prerequisite of itself.
         let kept = after.parsed(&into).expect("the concept kept stays");
         prop_assert!(kept.links.iter().filter_map(|l| after.link_target(kept, l)).all(|t| t != from));
-        prop_assert!(after.prereqs(kept).0.iter().all(|p| *p != into));
+        prop_assert!(after.prereqs(kept).resolved.iter().all(|p| *p != into));
     }
 
     #[test]

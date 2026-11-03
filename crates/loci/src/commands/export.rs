@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use loci_core::envelope::{Refusal, Report};
 use loci_core::export;
 use loci_core::index::Index;
+use loci_core::path::Kind;
 use loci_core::path::VaultPath;
-use loci_core::vault::Kind;
 use serde_json::json;
 
 use super::Ctx;
@@ -36,7 +36,7 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
         return Err(Refusal::refused("export.kind", format!("`{path}` is not a view or a concept")));
     }
 
-    let e = export::export(&index, &path, depth);
+    let e = export::Export::of(&index, &path, depth);
     let out_path = match output {
         Some(o) => ctx.cwd.join(o),
         None => vault.root.join(format!(".loci/export/{}.{}", path.stem(), format.ext())),
@@ -70,11 +70,10 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
 /// browsers display natively (TeX it cannot render is shown, in red, not dropped).
 fn html(e: &export::Export, title: &str) -> Result<String, String> {
     use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, html::push_html};
-    let options = Options::ENABLE_TABLES
-        | Options::ENABLE_FOOTNOTES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_MATH;
+    // Notes are read with loci's options; the export has no wikilinks (they are
+    // rewritten) and no frontmatter, so the same headings are read in the same order as
+    // the identifiers were made.
+    let options = loci_core::parse::options() - Options::ENABLE_WIKILINKS - Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
     let mut ids = e.heading_ids.iter();
     let mut events = vec![];
     for event in Parser::new_ext(&e.markdown, options) {

@@ -1,7 +1,7 @@
 //! `loci skill show` (m0 §9.8).
 
 use loci_core::envelope::{Diagnostic, Refusal, Report};
-use loci_core::plugin::{self, Skill};
+use loci_core::plugin::Skill;
 use serde_json::json;
 
 use super::{Ctx, plugins};
@@ -13,9 +13,9 @@ fn all_skills(vault_root: &std::path::Path) -> (Vec<(Skill, Option<String>)>, Ve
     let mut out: Vec<(Skill, Option<String>)> = assets::skills().into_iter().map(|s| (s, None)).collect();
     let mut diags = vec![];
     for p in plugins() {
-        match plugin::skills(&p, vault_root, VERSION) {
+        match p.skills(vault_root, VERSION) {
             Ok(skills) => out.extend(skills.into_iter().map(|s| (s, Some(p.name.clone())))),
-            Err(reason) => diags.push(plugin::failed(&p, "skills", &reason)),
+            Err(failed) => diags.push(*failed),
         }
     }
     (out, diags)
@@ -26,7 +26,7 @@ pub fn run(ctx: &Ctx, name: Option<&str>) -> Result<Report, Refusal> {
     let (skills, diags) = all_skills(&vault.root);
     match name {
         None => {
-            let human: String = skills.iter().map(|(s, _)| format!("{}: {}\n", s.name, s.description)).collect();
+            let human: String = skills.iter().map(|(s, _)| format!("{s}\n")).collect();
             let data = json!({"skills": skills.iter().map(|(s, p)| json!({
                 "name": s.name, "description": s.description, "plugin": p,
             })).collect::<Vec<_>>()});

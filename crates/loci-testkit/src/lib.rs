@@ -122,7 +122,7 @@ impl TestVault {
 
     /// Runs `loci --json <args>` in the vault root. Returns (exit code, envelope).
     pub fn run(&self, args: &[&str]) -> (i32, Value) {
-        self.run_in(&self.root.clone(), args)
+        self.run_in(&self.root, args)
     }
 
     pub fn run_in(&self, cwd: &Path, args: &[&str]) -> (i32, Value) {
@@ -133,7 +133,7 @@ impl TestVault {
 
     /// Runs `loci <args>` (no implicit `--json`). Returns (exit code, stdout, stderr).
     pub fn run_raw(&self, args: &[&str]) -> (i32, String, String) {
-        self.run_raw_in(&self.root.clone(), args)
+        self.run_raw_in(&self.root, args)
     }
 
     pub fn run_raw_in(&self, cwd: &Path, args: &[&str]) -> (i32, String, String) {

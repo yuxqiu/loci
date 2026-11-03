@@ -4,8 +4,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ops::Range;
 
-use crate::index::{Index, Resolved, heading_key};
-use crate::parse::{Fragment, Heading, Link, LinkForm, Note, Spanned};
+use crate::index::{Index, Resolved};
+use crate::parse::{Fragment, Heading, Link, LinkForm, Note, Spanned, heading_key};
 use crate::path::VaultPath;
 use crate::splice::{self, Edit};
 
@@ -32,22 +32,43 @@ impl<'a> Unit<'a> {
     fn child(note: &'a Note, part: Option<&Fragment>, level: u8) -> Self {
         let range = match part {
             None => note.body_start()..note.text.len(),
-            Some(Fragment::Heading(f)) => section_range(note, f).expect("resolve checked the heading"),
-            Some(Fragment::Block(id)) => {
-                note.blocks.iter().find(|b| *b.id == *id).expect("resolve checked the block id").span.clone()
-            }
+            Some(fragment) => note.fragment_range(fragment).expect("resolve checked the fragment"),
         };
-        let headings: Vec<&Spanned<Heading>> = headings_in(note, &range).collect();
+        // Its top heading takes `level`; without one, a title does, above its headings.
+        let mut unit = Unit { note, range, shift: 0, title: None };
+        let headings: Vec<&Spanned<Heading>> = unit.headings().collect();
         match headings.first() {
-            Some(h) if h.span.start == content_start(note, &range) => {
-                Unit { note, range, shift: level as i32 - h.level as i32, title: None }
-            }
+            Some(h) if h.span.start == unit.content_start() => unit.shift = level as i32 - h.level as i32,
             _ => {
                 let min = headings.iter().map(|h| h.level).min();
-                let shift = min.map_or(0, |m| level as i32 + 1 - m as i32);
-                Unit { note, range, shift, title: Some((level, note.title().to_string())) }
+                unit.shift = min.map_or(0, |m| level as i32 + 1 - m as i32);
+                unit.title = Some((level, note.title().to_string()));
             }
         }
+        unit
+    }
+
+    /// The headings of the unit's bytes; they borrow the note, not the unit.
+    fn headings(&self) -> impl DoubleEndedIterator<Item = &'a Spanned<Heading>> + use<'a> {
+        let range = self.range.clone();
+        self.note.headings.iter().filter(move |h| range.start <= h.span.start && h.span.end <= range.end)
+    }
+
+    /// The first non-whitespace byte of the unit.
+    fn content_start(&self) -> usize {
+        let text = &self.note.text[self.range.clone()];
+        self.range.start + (text.len() - text.trim_start().len())
+    }
+
+    /// The unit's links to notes and files, resolved, in order.
+    fn links(&self, index: &Index) -> Vec<(&'a Spanned<Link>, Resolved)> {
+        let note = self.note;
+        note.links
+            .iter()
+            .filter(|l| matches!(l.form, LinkForm::Wiki | LinkForm::Embed))
+            .filter(|l| self.range.start <= l.span.start && l.span.end <= self.range.end)
+            .filter_map(|l| index.resolve(note, l).ok().map(|r| (l, r)))
+            .collect()
     }
 
     fn level(&self, h: &Spanned<Heading>) -> u8 {
@@ -56,23 +77,11 @@ impl<'a> Unit<'a> {
 
     /// The output level of the nearest heading before byte `at` (0 if none).
     fn level_at(&self, at: usize) -> u8 {
-        match headings_in(self.note, &self.range).rfind(|h| h.span.start < at) {
+        match self.headings().rfind(|h| h.span.start < at) {
             Some(h) => self.level(h),
             None => self.title.as_ref().map_or(0, |(l, _)| *l),
         }
     }
-}
-
-/// The headings of `note` inside `range`.
-fn headings_in<'n>(note: &'n Note, range: &Range<usize>) -> impl DoubleEndedIterator<Item = &'n Spanned<Heading>> {
-    let range = range.clone();
-    note.headings.iter().filter(move |h| range.start <= h.span.start && h.span.end <= range.end)
-}
-
-/// The first non-whitespace byte of `range` in `note`.
-fn content_start(note: &Note, range: &Range<usize>) -> usize {
-    let text = &note.text[range.clone()];
-    range.start + (text.len() - text.trim_start().len())
 }
 
 /// Anchors of one unit in the assembled document.
@@ -84,30 +93,41 @@ struct Anchors {
     headings: BTreeMap<String, String>,
 }
 
-/// The identifiers of the headings of the units: per unit, its anchors; and every
-/// identifier in document order. Each is [`anchor_id`] of the heading text, with `-1`,
-/// `-2`, … appended when it is already taken, as GitHub does.
-fn anchors(units: &[Unit]) -> (Vec<Anchors>, Vec<String>) {
-    let mut used: BTreeSet<String> = BTreeSet::new();
-    let mut order: Vec<String> = vec![];
-    let mut unique = |text: &str| {
-        let base = anchor_id(text);
-        let id = (0..).map(|n| if n == 0 { base.clone() } else { format!("{base}-{n}") }).find(|c| !used.contains(c));
-        let id = id.expect("an unused identifier exists");
-        used.insert(id.clone());
-        order.push(id.clone());
-        id
-    };
+/// The heading identifiers of a document, each [`anchor_id`] of the heading text with
+/// `-1`, `-2`, … appended when it is already taken, as GitHub does.
+#[derive(Default)]
+struct AnchorIds {
+    used: BTreeSet<String>,
+    /// Every identifier, in document order.
+    order: Vec<String>,
+}
 
+impl AnchorIds {
+    /// The identifier of the next heading, whose text is `text`.
+    fn take(&mut self, text: &str) -> String {
+        let base = anchor_id(text);
+        let id =
+            (0..).map(|n| if n == 0 { base.clone() } else { format!("{base}-{n}") }).find(|c| !self.used.contains(c));
+        let id = id.expect("an unused identifier exists");
+        self.used.insert(id.clone());
+        self.order.push(id.clone());
+        id
+    }
+}
+
+/// The identifiers of the headings of the units: per unit, its anchors; and every
+/// identifier in document order.
+fn anchors(units: &[Unit]) -> (Vec<Anchors>, Vec<String>) {
+    let mut ids = AnchorIds::default();
     let mut out = vec![];
     for u in units {
         let mut a = Anchors::default();
         if let Some((_, title)) = &u.title {
-            a.top = Some(unique(title));
+            a.top = Some(ids.take(title));
         }
-        let start = content_start(u.note, &u.range);
-        for h in headings_in(u.note, &u.range) {
-            let id = unique(&h.content);
+        let start = u.content_start();
+        for h in u.headings() {
+            let id = ids.take(&h.content);
             if a.top.is_none() && h.span.start == start {
                 a.top = Some(id.clone());
             }
@@ -115,9 +135,7 @@ fn anchors(units: &[Unit]) -> (Vec<Anchors>, Vec<String>) {
         }
         out.push(a);
     }
-
-    drop(unique);
-    (out, order)
+    (out, ids.order)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -152,64 +170,103 @@ fn is_image(path: &VaultPath) -> bool {
     [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp"].iter().any(|e| lower.ends_with(e))
 }
 
-/// The section under the heading `frag` names in `note` ([`Note::section`]).
-fn section_range(note: &Note, frag: &str) -> Option<Range<usize>> {
-    let key = heading_key(frag);
-    let i = note.headings.iter().position(|h| heading_key(&h.content) == key)?;
-    Some(note.section(i))
-}
+impl Export {
+    pub fn of(index: &Index, root: &VaultPath, depth: usize) -> Export {
+        // 1. Collect, then name every heading once.
+        let (units, unit_of) = collect(index, root, depth);
+        let (anchors, heading_ids) = anchors(&units);
 
-/// The note links of `note` within `range`, resolved, in order.
-fn note_links<'a>(index: &Index, note: &'a Note, range: &Range<usize>) -> Vec<(&'a Spanned<Link>, Resolved)> {
-    note.links
-        .iter()
-        .filter(|l| matches!(l.form, LinkForm::Wiki | LinkForm::Embed))
-        .filter(|l| range.start <= l.span.start && l.span.end <= range.end)
-        .filter_map(|l| index.resolve(note, l).ok().map(|r| (l, r)))
-        .collect()
-}
-
-pub fn export(index: &Index, root: &VaultPath, depth: usize) -> Export {
-    // 1. Collect, then name every heading once.
-    let (units, unit_of) = collect(index, root, depth);
-    let (anchors, heading_ids) = anchors(&units);
-
-    // 2–4. Assemble, rewriting headings, links, images and block ids.
-    let mut assets = Assets::default();
-    let mut doc = String::new();
-    let mut notes = vec![];
-    for u in &units {
-        let note = u.note;
-        let mut edits: Vec<Edit> = vec![];
-        for h in headings_in(note, &u.range) {
-            edits.extend(heading_edits(&note.text, h, u.level(h)));
+        // 2–4. Assemble, rewriting headings, links, images and block ids.
+        let mut assembly = Assembly { index, unit_of, anchors, assets: Assets::default() };
+        let mut doc = String::new();
+        for u in &units {
+            let edited = assembly.unit_text(u);
+            append(&mut doc, u.title.as_ref(), &edited);
         }
+
+        let notes = units.iter().map(|u| u.note.path.clone()).collect();
+        let assets = assembly.assets.names.into_iter().collect();
+        Export { markdown: format!("{}\n", doc.trim_end()), notes, assets, heading_ids }
+    }
+}
+
+/// Appends a unit's `edited` text to `doc`, a blank line apart, under its inserted
+/// `title` (level, text) if it has one.
+fn append(doc: &mut String, title: Option<&(u8, String)>, edited: &str) {
+    if !doc.is_empty() && !doc.ends_with("\n\n") {
+        doc.push_str(if doc.ends_with('\n') { "\n" } else { "\n\n" });
+    }
+    if let Some((level, title)) = title {
+        doc.push_str(&format!("{} {title}\n\n", "#".repeat(*level as usize)));
+    }
+    doc.push_str(edited.trim_start_matches('\n'));
+}
+
+/// What rewriting a unit needs: the index, where each included note is, the units'
+/// anchors, and the images collected so far.
+struct Assembly<'a> {
+    index: &'a Index,
+    unit_of: BTreeMap<&'a VaultPath, usize>,
+    anchors: Vec<Anchors>,
+    assets: Assets,
+}
+
+impl Assembly<'_> {
+    /// The text of unit `u` with its headings set to their levels, its block ids dropped
+    /// and its links rewritten.
+    fn unit_text(&mut self, u: &Unit) -> String {
+        let note = u.note;
+        let inside = |span: &Range<usize>| u.range.start <= span.start && span.end <= u.range.end;
+        let mut edits: Vec<Edit> = u.headings().flat_map(|h| heading_edits(&note.text, h, u.level(h))).collect();
+
         // Block ids are vault plumbing: dropped, with the spaces before them.
-        for id in
-            note.blocks.iter().map(|b| &b.id).filter(|id| u.range.start <= id.span.start && id.span.end <= u.range.end)
-        {
+        for id in note.blocks.iter().map(|b| &b.id).filter(|id| inside(&id.span)) {
             let start = note.text[..id.span.start].trim_end_matches([' ', '\t']).len();
             edits.push(Edit::replace(start..id.span.end, ""));
         }
-        for (link, resolved) in note_links(index, note, &u.range) {
-            let new = link_replacement(index, note, link, resolved, &unit_of, &anchors, &mut assets);
+
+        for (link, resolved) in u.links(self.index) {
+            let new = self.link_replacement(note, link, resolved);
             edits.push(Edit::replace(link.span.clone(), new));
         }
 
         // Edits are relative to the whole note; cut the unit's range afterwards.
-        let edited = splice::apply(&note.text[u.range.clone()], shift_edits(edits, u.range.start))
-            .expect("heading, block id and link edits never overlap");
-        if !doc.is_empty() && !doc.ends_with("\n\n") {
-            doc.push_str(if doc.ends_with('\n') { "\n" } else { "\n\n" });
-        }
-        if let Some((level, title)) = &u.title {
-            doc.push_str(&format!("{} {title}\n\n", "#".repeat(*level as usize)));
-        }
-        doc.push_str(edited.trim_start_matches('\n'));
-        notes.push(note.path.clone());
+        splice::apply(&note.text[u.range.clone()], shift_edits(edits, u.range.start))
+            .expect("heading, block id and link edits never overlap")
     }
 
-    Export { markdown: format!("{}\n", doc.trim_end()), notes, assets: assets.names.into_iter().collect(), heading_ids }
+    /// What `link` in `note` becomes in the document: an image under `assets/`, a link
+    /// to an included note's anchor, or plain text (its label, heading or title) for
+    /// anything left out.
+    fn link_replacement(&mut self, note: &Note, link: &Spanned<Link>, resolved: Resolved) -> String {
+        let label = link.label.as_ref().map(|l| l.text(&note.text).to_string());
+        let p = match resolved {
+            Resolved::File(p) if link.form == LinkForm::Embed && is_image(&p) => {
+                let name = self.assets.name(&p);
+                let alt = label.filter(|l| !is_size(l)).unwrap_or_else(|| name.clone());
+                return format!("![{alt}]({ASSETS}/{name})");
+            }
+            Resolved::File(p) => return label.unwrap_or_else(|| p.to_string()),
+            Resolved::Note(p) => p,
+        };
+
+        let heading = match &link.target.fragment {
+            Some(Fragment::Heading(h)) => Some(h.as_str()),
+            Some(Fragment::Block(_)) | None => None,
+        };
+
+        let title = || self.index.parsed(&p).expect("a resolved note").title();
+        let text = label.unwrap_or_else(|| heading.unwrap_or_else(title).to_string());
+        let anchor = self.unit_of.get(&p).and_then(|&j| {
+            let a = &self.anchors[j];
+            heading.and_then(|h| a.headings.get(&heading_key(h))).or(a.top.as_ref())
+        });
+
+        match anchor {
+            Some(id) => format!("[{text}](#{id})"),
+            None => text,
+        }
+    }
 }
 
 /// Step 1 (m1-m4 §4): each note once, at its first appearance, breadth-first from
@@ -222,67 +279,31 @@ fn collect<'a>(index: &'a Index, root: &'a VaultPath, depth: usize) -> (Vec<Unit
         if d >= depth {
             continue;
         }
+
+        // The notes the unit links to, each placed one level below the heading before
+        // its link; read before any is added, since adding moves `units`.
         let parent = &units[i];
-        let mut children = vec![];
-        for (link, resolved) in note_links(index, parent.note, &parent.range) {
-            let Resolved::Note(p) = resolved else { continue };
-            let note = index.parsed(&p).expect("a resolved note");
-            let path = &note.path;
-            if unit_of.contains_key(path) || children.iter().any(|(q, _): &(&VaultPath, Unit)| *q == path) {
+        let children: Vec<(&Note, Option<&Fragment>, u8)> = parent
+            .links(index)
+            .into_iter()
+            .filter_map(|(link, resolved)| match resolved {
+                Resolved::Note(p) => Some((link, index.parsed(&p).expect("a resolved note"))),
+                Resolved::File(_) => None,
+            })
+            .map(|(link, note)| (note, link.target.fragment.as_ref(), (parent.level_at(link.span.start) + 1).min(6)))
+            .collect();
+
+        for (note, fragment, level) in children {
+            if unit_of.contains_key(&note.path) {
                 continue;
             }
-            let level = (parent.level_at(link.span.start) + 1).min(6);
-            children.push((path, Unit::child(note, link.target.fragment.as_ref(), level)));
-        }
-        for (path, unit) in children {
-            unit_of.insert(path, units.len());
+            unit_of.insert(&note.path, units.len());
             queue.push_back((units.len(), d + 1));
-            units.push(unit);
+            units.push(Unit::child(note, fragment, level));
         }
     }
 
     (units, unit_of)
-}
-
-/// What `link` in `note` becomes in the document: an image under `assets/`, a link to
-/// an included note's anchor, or plain text (its label, heading or title) for anything
-/// left out.
-fn link_replacement(
-    index: &Index,
-    note: &Note,
-    link: &Spanned<Link>,
-    resolved: Resolved,
-    unit_of: &BTreeMap<&VaultPath, usize>,
-    anchors: &[Anchors],
-    assets: &mut Assets,
-) -> String {
-    let label = link.label.as_ref().map(|l| l.text(&note.text).to_string());
-    let p = match resolved {
-        Resolved::File(p) if link.form == LinkForm::Embed && is_image(&p) => {
-            let name = assets.name(&p);
-            let alt = label.filter(|l| !is_size(l)).unwrap_or_else(|| name.clone());
-            return format!("![{alt}]({ASSETS}/{name})");
-        }
-        Resolved::File(p) => return label.unwrap_or_else(|| p.to_string()),
-        Resolved::Note(p) => p,
-    };
-
-    let heading = match &link.target.fragment {
-        Some(Fragment::Heading(h)) => Some(h.as_str()),
-        Some(Fragment::Block(_)) | None => None,
-    };
-
-    let text =
-        label.unwrap_or_else(|| heading.unwrap_or(index.parsed(&p).expect("a resolved note").title()).to_string());
-    let anchor = unit_of.get(&p).and_then(|&j| {
-        let a = &anchors[j];
-        heading.and_then(|h| a.headings.get(&heading_key(h))).or(a.top.as_ref())
-    });
-
-    match anchor {
-        Some(id) => format!("[{text}](#{id})"),
-        None => text,
-    }
 }
 
 /// The images an export copies, each under a file name unique in its `assets/` folder.
@@ -348,7 +369,7 @@ fn is_size(label: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::from_texts;
+    use crate::index::Index;
 
     fn concept(title: &str, body: &str) -> String {
         format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# {title}\n\n{body}")
@@ -364,7 +385,7 @@ mod tests {
 
     #[test]
     fn reading_path_export() {
-        let i = from_texts(&[
+        let i = Index::from_texts(&[
             ("views/algo.md", "# Algorithms\n\n## Part 1\n\n[[bfs]] and [[dfs|depth-first]].\n"),
             (
                 "concepts/a/bfs.md",
@@ -378,7 +399,7 @@ mod tests {
             ("concepts/a/attachments/g.png", ""),
         ]);
 
-        let e = export(&i, &VaultPath::new("views/algo.md".into()).unwrap(), 1);
+        let e = Export::of(&i, &VaultPath::new("views/algo.md".into()).unwrap(), 1);
         assert_eq!(e.notes, vec!["views/algo.md", "concepts/a/bfs.md", "concepts/a/dfs.md"]);
         assert_eq!(
             e.assets,
@@ -397,26 +418,26 @@ mod tests {
 
     #[test]
     fn section_links_and_depth() {
-        let i = from_texts(&[
+        let i = Index::from_texts(&[
             ("views/v.md", "# V\n\n[[bfs#Proof]]\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Intro.\n\n## Proof\n\nBy induction.\n\n## Other\n\nX.\n")),
         ]);
-        let e = export(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
+        let e = Export::of(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
         assert!(e.markdown.contains("[Proof](#proof)"), "{}", e.markdown);
         assert!(e.markdown.contains("By induction."));
         assert!(!e.markdown.contains("Intro."));
         assert!(!e.markdown.contains("X."));
-        let none = export(&i, &VaultPath::new("views/v.md".into()).unwrap(), 0);
+        let none = Export::of(&i, &VaultPath::new("views/v.md".into()).unwrap(), 0);
         assert_eq!(none.notes, vec!["views/v.md"]);
     }
 
     #[test]
     fn each_note_once_at_first_appearance() {
-        let i = from_texts(&[
+        let i = Index::from_texts(&[
             ("views/v.md", "# V\n\n[[bfs]], then [[bfs#Proof]].\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Intro.\n\n## Proof\n\nBy induction.\n")),
         ]);
-        let e = export(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
+        let e = Export::of(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
         assert_eq!(e.notes, vec!["views/v.md", "concepts/a/bfs.md"]);
         assert_eq!(e.markdown.matches("By induction.").count(), 1, "{}", e.markdown);
         assert!(e.markdown.contains("[BFS](#bfs), then [Proof](#proof)."), "{}", e.markdown);
@@ -425,11 +446,11 @@ mod tests {
     #[test]
     fn block_links_include_only_the_block() {
         let id = "01JB9XQ7Z3K4M5N6P7Q8R9S0B1";
-        let i = from_texts(&[
+        let i = Index::from_texts(&[
             ("views/v.md", &format!("# V\n\nSee [[bfs#^{id}]].\n")),
             ("concepts/a/bfs.md", &concept("BFS", &format!("Intro.\n\nThe key step. ^{id}\n\nOther.\n"))),
         ]);
-        let e = export(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
+        let e = Export::of(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
         let md = &e.markdown;
         assert!(md.contains("The key step.\n") && !md.contains("Intro.") && !md.contains("Other."), "{md}");
         assert!(!md.contains('^'), "block ids are removed: {md}");
@@ -438,29 +459,29 @@ mod tests {
 
     #[test]
     fn headings_with_links_and_setext_headings() {
-        let i = from_texts(&[
+        let i = Index::from_texts(&[
             ("views/v.md", "# V\n\n## Read [[bfs]] first ##\n\nSetext [[bfs]]\ntwo lines\n---\n\nText.\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Body.\n")),
         ]);
-        let md = export(&i, &VaultPath::new("views/v.md".into()).unwrap(), 0).markdown;
+        let md = Export::of(&i, &VaultPath::new("views/v.md".into()).unwrap(), 0).markdown;
         assert!(md.contains("## Read BFS first ##\n"), "{md}");
         assert!(md.contains("## Setext BFS two lines\n\nText."), "{md}");
     }
 
     #[test]
     fn anchors_are_unique_in_document_order() {
-        let i = from_texts(&[
+        let i = Index::from_texts(&[
             ("views/v.md", "# BFS notes\n\n## BFS\n\n[[bfs]]\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Body.\n")),
             ("concepts/a/untitled.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\n---\nNo heading.\n"),
         ]);
-        let e = export(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
+        let e = Export::of(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
         assert!(e.markdown.contains("[BFS](#bfs-1)"), "{}", e.markdown);
-        let i = from_texts(&[
+        let i = Index::from_texts(&[
             ("views/v.md", "# V\n\n[[untitled]]\n"),
             ("concepts/a/untitled.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\n---\nNo heading.\n"),
         ]);
-        let e = export(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
+        let e = Export::of(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
         assert!(
             e.markdown.contains("[untitled](#untitled)") && e.markdown.contains("## untitled\n\nNo heading."),
             "{}",

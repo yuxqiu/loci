@@ -2,7 +2,7 @@
 
 use loci_core::config::{self, Config};
 use loci_core::envelope::{Refusal, Report};
-use loci_core::{git, vault};
+use loci_core::{git, path};
 use serde_json::json;
 
 use super::Ctx;
@@ -22,7 +22,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
 
     // There is no vault to check yet (`Vault::open` refuses symlinks): before anything
     // is written, the files `init` manages must not be links (m0 §3).
-    let managed = [vault::RULES, vault::STYLE, vault::AGENTS, ".gitignore"];
+    let managed = [path::RULES, path::STYLE, path::AGENTS, ".gitignore"];
     if let Some(name) = managed.into_iter().find(|n| dir.join(n).symlink_metadata().is_ok_and(|m| m.is_symlink())) {
         let message = format!("`{name}` is a symlink; loci does not follow symlinks");
         return Err(Refusal::refused("file.symlink", message));
@@ -31,7 +31,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     match git::toplevel(&dir) {
         // Not in a work tree (or git cannot tell): `git init` creates one or fails loudly.
         Err(_) => {
-            git::run(&dir, &["init", "-q"]).map_err(Refusal::git)?;
+            git::Repo::new(&dir).init().map_err(Refusal::git)?;
         }
         Ok(top) if dir.canonicalize().is_ok_and(|d| d == top) => {}
         Ok(_) => return Err(Refusal::refused("vault.not-git", "run `loci init` at the root of the git work tree")),
@@ -39,9 +39,9 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
 
     let files: [(&str, String); 4] = [
         (config::FILE, Config::default_file(super::updates::all().last().expect("updates ship").id)),
-        (vault::RULES, "# Rules\n\n## Lessons\n".to_string()),
-        (vault::STYLE, "# Style\n".to_string()),
-        (vault::AGENTS, assets::AGENTS_STUB.to_string()),
+        (path::RULES, "# Rules\n\n## Lessons\n".to_string()),
+        (path::STYLE, "# Style\n".to_string()),
+        (path::AGENTS, assets::AGENTS_STUB.to_string()),
     ];
 
     let (mut created, mut skipped) = (vec![], vec![]);

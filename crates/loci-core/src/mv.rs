@@ -4,14 +4,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::envelope::Refusal;
 use crate::index::Index;
-use crate::path::VaultPath;
-use crate::relink::{self, Change};
-use crate::vault::{self, Kind};
+use crate::path::{Kind, VaultPath};
+use crate::relink::Change;
 
 /// Computes the move of `from` to `to` without writing: `from` as stored
 /// ([`stored_name`]). `ignored` tells whether a vault path is gitignored, and `exists`
 /// whether it exists on disk (including files the index does not hold). The checks run
-/// in this order, so the first refusal is the most telling one.
+/// in this order, so the first refusal is the most telling one; the command then adds
+/// the two that read git listings (a folder moved in part, a changed source).
 pub fn plan(
     index: &Index,
     from: &VaultPath,
@@ -26,9 +26,7 @@ pub fn plan(
     refuse_lost_files(&moves, &ignored, &exists)?;
     refuse_slug_collisions(index, &moves)?;
 
-    let mut change = Change { moves: moves.clone(), ..Change::default() };
-    let edits = relink::link_edits(index, &moves, &mut change);
-    relink::finish(index, change, &moves, edits, "mv.verify")
+    Change::relink(index, moves, BTreeMap::new(), "mv.verify")
 }
 
 /// `from` and `to` are paths core moves, and `to` is not ignored (checked before the
@@ -57,7 +55,7 @@ fn moves(index: &Index, from: &VaultPath, to: &VaultPath) -> Result<BTreeMap<Vau
         return Ok(BTreeMap::from([(from.clone(), to.clone())]));
     }
     let moves: BTreeMap<VaultPath, VaultPath> = index
-        .files
+        .files()
         .iter()
         .filter(|f| f.starts_with_folder(from))
         .map(|f| (f.clone(), f.with_prefix_replaced(from, to).expect("`f` is inside `from`")))
@@ -97,8 +95,8 @@ fn refuse_changed_kinds(moves: &BTreeMap<VaultPath, VaultPath>) -> Result<(), Re
 
     // The path rules come before the case advice below, so it never leads to a name
     // lint rejects.
-    if let Some((new, (code, message))) = moves.values().find_map(|n| n.problem().map(|p| (n, p))) {
-        return Err(Refusal::refused(code, format!("`{new}`: {message}")));
+    if let Some((new, problem)) = moves.values().find_map(|n| n.problem().map(|p| (n, p))) {
+        return Err(Refusal::refused(problem.code(), format!("`{new}`: {problem}")));
     }
 
     Ok(())
@@ -111,32 +109,34 @@ fn refuse_unsafe_destination(
     to: &VaultPath,
     exists: &impl Fn(&VaultPath) -> bool,
 ) -> Result<(), Refusal> {
-    // A case twin (the source itself, or a folder on its path) cannot be used safely: on
-    // a case-insensitive file system (macOS) it is the existing file or folder, and git
-    // with `core.ignorecase` keeps the existing spelling, so rewritten links would
-    // dangle; on other systems it makes twin folders.
-    if let Some((existing, asked)) = index.case_twin(to) {
-        // `git mv -f` fits only a case-only rename of the source itself; for anyone
-        // else's name it would make the twin, or on macOS overwrite the other file.
-        let what_to_do = if existing == *from {
-            "rename it with `git mv -f`".to_string()
-        } else if from.starts_with_folder(&existing) {
-            // The source's own folder: renaming one file would leave the rest behind.
-            format!("move the whole folder `{existing}` instead")
-        } else {
-            format!("use the existing spelling `{existing}` or another name")
-        };
-        return Err(Refusal::refused(
-            "path.case-twin",
-            format!("`{asked}` differs only in letter case from the existing `{existing}`; {what_to_do}"),
-        ));
-    }
-
+    refuse_case_twin(index, to, Some(from))?;
     if exists(to) || index.has_entry(to) {
         return Err(Refusal::refused("mv.exists", format!("`{to}` already exists")));
     }
 
     Ok(())
+}
+
+/// Refuses destination `to` when it differs only in letter case from an existing file or
+/// folder on its path (`path.case-twin`), for `mv` (moving `source`) and `new` (no
+/// source). Such a twin cannot be used safely: on a case-insensitive file system
+/// (macOS) it is the existing file or folder, and git with `core.ignorecase` keeps the
+/// existing spelling, so rewritten links would dangle; on other systems it makes twin
+/// folders.
+pub fn refuse_case_twin(index: &Index, to: &VaultPath, source: Option<&VaultPath>) -> Result<(), Refusal> {
+    let Some((existing, asked)) = index.case_twin(to) else { return Ok(()) };
+    // `git mv -f` fits only a case-only rename of the source itself; for anyone else's
+    // name it would make the twin, or on macOS overwrite the other file.
+    let what_to_do = match source {
+        Some(from) if existing == *from => "rename it with `git mv -f`".to_string(),
+        // The source's own folder: renaming one file would leave the rest behind.
+        Some(from) if from.starts_with_folder(&existing) => format!("move the whole folder `{existing}` instead"),
+        _ => format!("use the existing spelling `{existing}` or another name"),
+    };
+    Err(Refusal::refused(
+        "path.case-twin",
+        format!("`{asked}` differs only in letter case from the existing `{existing}`; {what_to_do}"),
+    ))
 }
 
 /// No moved file is lost: none becomes ignored (a tracked file matched by an ignore rule
@@ -181,10 +181,10 @@ pub fn stored_name(index: &Index, from: &VaultPath) -> Result<VaultPath, Refusal
     }
     let depth = from.components().count();
     let spellings: BTreeSet<VaultPath> = index
-        .files
+        .files()
         .iter()
         .filter(|f| {
-            let n = VaultPath::new(vault::nfc(f.as_str())).expect("NFC keeps a vault path one");
+            let n = VaultPath::new(crate::path::nfc(f.as_str())).expect("NFC keeps a vault path one");
             n == *from || n.starts_with_folder(from)
         })
         .map(|f| f.head(depth).expect("a file at or under `from` has as many segments"))
@@ -199,7 +199,7 @@ pub fn stored_name(index: &Index, from: &VaultPath) -> Result<VaultPath, Refusal
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::from_texts;
+    use crate::index::Index;
 
     fn vp(s: &str) -> VaultPath {
         VaultPath::new(s.to_string()).unwrap()
@@ -209,8 +209,10 @@ mod tests {
 
     #[test]
     fn rename_rewrites_links_and_leaves_the_note() {
-        let i =
-            from_texts(&[("concepts/a/old.md", C), ("views/v.md", "# V\n\n[[old]] [[old#T|x]] [[concepts/a/old]]\n")]);
+        let i = Index::from_texts(&[
+            ("concepts/a/old.md", C),
+            ("views/v.md", "# V\n\n[[old]] [[old#T|x]] [[concepts/a/old]]\n"),
+        ]);
         let p = plan(&i, &vp("concepts/a/old.md"), &vp("concepts/a/new.md"), |_| Ok(false), |_| false).unwrap();
         assert_eq!(p.writes["views/v.md"].text, "# V\n\n[[new]] [[new#T|x]] [[concepts/a/new]]\n");
         assert!(!p.writes.contains_key("concepts/a/new.md"), "a rename does not edit the note");
@@ -218,8 +220,10 @@ mod tests {
 
     #[test]
     fn a_link_with_a_dangling_fragment_still_follows_its_note() {
-        let i =
-            from_texts(&[("concepts/a/dfs.md", C), ("views/w.md", "[[dfs#Typo]] [[concepts/a/dfs#^nope]] [[dfs]]\n")]);
+        let i = Index::from_texts(&[
+            ("concepts/a/dfs.md", C),
+            ("views/w.md", "[[dfs#Typo]] [[concepts/a/dfs#^nope]] [[dfs]]\n"),
+        ]);
         let p = plan(&i, &vp("concepts/a/dfs.md"), &vp("concepts/a/depth-first.md"), |_| Ok(false), |_| false).unwrap();
         assert_eq!(
             p.writes["views/w.md"].text,
@@ -229,15 +233,18 @@ mod tests {
 
     #[test]
     fn rename_back_is_allowed() {
-        let i = from_texts(&[("concepts/a/new.md", C), ("views/v.md", "[[new]]\n")]);
+        let i = Index::from_texts(&[("concepts/a/new.md", C), ("views/v.md", "[[new]]\n")]);
         let p = plan(&i, &vp("concepts/a/new.md"), &vp("concepts/a/old.md"), |_| Ok(false), |_| false).unwrap();
         assert_eq!(p.writes["views/v.md"].text, "[[old]]\n");
     }
 
     #[test]
     fn every_moved_file_must_stay_in_the_vault() {
-        let i =
-            from_texts(&[("views/d/fig.png", ""), ("views/d/x.md", "# X\n"), ("views/p.md", "[[views/d/fig.png]]\n")]);
+        let i = Index::from_texts(&[
+            ("views/d/fig.png", ""),
+            ("views/d/x.md", "# X\n"),
+            ("views/p.md", "[[views/d/fig.png]]\n"),
+        ]);
         let png_ignored = |p: &VaultPath| Ok(p.as_str().ends_with(".png"));
         let e = plan(&i, &vp("views/d"), &vp("views/e"), png_ignored, |_| false).unwrap_err();
         assert_eq!(e.code(), "path.ignored");
@@ -246,21 +253,21 @@ mod tests {
     #[test]
     fn from_is_found_by_its_nfc_form() {
         let nfd = "views/cafe\u{301}.md";
-        let i = from_texts(&[(nfd, "# NFD\n"), ("views/de\u{301}/x.md", "# X\n")]);
+        let i = Index::from_texts(&[(nfd, "# NFD\n"), ("views/de\u{301}/x.md", "# X\n")]);
         assert_eq!(stored_name(&i, &vp("views/caf\u{e9}.md")).unwrap(), nfd);
         // A folder too.
         assert_eq!(stored_name(&i, &vp("views/d\u{e9}")).unwrap(), "views/de\u{301}");
         // An exact name wins over another spelling.
-        let both = from_texts(&[(nfd, "# NFD\n"), ("views/caf\u{e9}.md", "# NFC\n")]);
+        let both = Index::from_texts(&[(nfd, "# NFD\n"), ("views/caf\u{e9}.md", "# NFC\n")]);
         assert_eq!(stored_name(&both, &vp("views/caf\u{e9}.md")).unwrap(), "views/caf\u{e9}.md");
         // Two stored spellings of one NFC name are ambiguous.
-        let two = from_texts(&[("views/a\u{323}\u{302}.md", ""), ("views/a\u{302}\u{323}.md", "")]);
+        let two = Index::from_texts(&[("views/a\u{323}\u{302}.md", ""), ("views/a\u{302}\u{323}.md", "")]);
         assert_eq!(stored_name(&two, &vp("views/\u{1ead}.md")).unwrap_err().code(), "mv.from");
     }
 
     #[test]
     fn collisions_and_refusals() {
-        let i = from_texts(&[
+        let i = Index::from_texts(&[
             ("concepts/a/x.md", C),
             ("concepts/a/y.md", C),
             ("concepts/b/AREA.md", "# B\n"),
@@ -277,14 +284,14 @@ mod tests {
         assert_eq!(e("concepts/a/x.md", "concepts/a/X.md"), "slug.format");
 
         // Every path rule lint checks applies to a destination, the journal one included.
-        let j = from_texts(&[("journal/research/e.md", "# E\n")]);
+        let j = Index::from_texts(&[("journal/research/e.md", "# E\n")]);
         let je = |f: &str, t: &str| plan(&j, &vp(f), &vp(t), |_| Ok(false), |_| false).unwrap_err().code().to_string();
         assert_eq!(je("journal/research", "journal/Research"), "journal.path");
         assert_eq!(je("journal/research/e.md", "notes.md"), "kind.unknown");
         assert_eq!(je("journal/research/e.md", "journal/My Stuff/e.md"), "journal.path");
 
         // A name that exists exactly is `mv.exists`, never twin advice.
-        let twins = from_texts(&[("views/a.md", "# a\n"), ("views/A.md", "# A\n")]);
+        let twins = Index::from_texts(&[("views/a.md", "# a\n"), ("views/A.md", "# A\n")]);
         let e2 = plan(&twins, &vp("views/a.md"), &vp("views/A.md"), |_| Ok(false), |_| false).unwrap_err();
         assert_eq!(e2.code(), "mv.exists");
         let message = |f: &str, t: &str| plan(&i, &vp(f), &vp(t), |_| Ok(false), |_| false).unwrap_err().error.message;
@@ -308,7 +315,7 @@ mod tests {
         let message = |f: &str, t: &str| plan(&i, &vp(f), &vp(t), |_| Ok(false), |_| false).unwrap_err().error.message;
         assert!(message("concepts/a/x.md", "concepts/a/AREA.md").ends_with("would be the area file, not a concept"));
         assert_eq!(e("views/v.md", "views/w"), "mv.to");
-        let pic = from_texts(&[("views/fig.png", ""), ("views/v.md", "[[views/fig.png]]\n")]);
+        let pic = Index::from_texts(&[("views/fig.png", ""), ("views/v.md", "[[views/fig.png]]\n")]);
         let pe = plan(&pic, &vp("views/fig.png"), &vp("views/fig.md"), |_| Ok(false), |_| false).unwrap_err();
         assert_eq!(
             (pe.code(), pe.error.message.as_str()),
@@ -316,7 +323,7 @@ mod tests {
         );
 
         assert!(message("views/v.md", "views/w").ends_with("a note keeps the `.md` extension"));
-        let folder = from_texts(&[("views/D/x.md", "# X\n"), ("views/D/y.md", "# Y\n")]);
+        let folder = Index::from_texts(&[("views/D/x.md", "# X\n"), ("views/D/y.md", "# Y\n")]);
         let m = plan(&folder, &vp("views/D/x.md"), &vp("views/d/x.md"), |_| Ok(false), |_| false)
             .unwrap_err()
             .error
@@ -338,7 +345,7 @@ mod tests {
         assert_eq!(e("views/v.md", "concepts/b/Bad.md"), "slug.format");
 
         // Two moved files may not end with the same concept slug.
-        let drafts = from_texts(&[
+        let drafts = Index::from_texts(&[
             ("concepts/a/AREA.md", "# A\n"),
             ("inbox/drafts/x.md", "# X\n"),
             ("inbox/drafts/sub/x.md", "# X2\n"),
@@ -353,21 +360,22 @@ mod tests {
     #[test]
     fn source_citations_follow() {
         let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# T\n\nSee [[sources/papers/p.pdf#p3]].\n";
-        let i = from_texts(&[("concepts/a/x.md", c), ("sources/papers/p.pdf", "")]);
+        let i = Index::from_texts(&[("concepts/a/x.md", c), ("sources/papers/p.pdf", "")]);
         let p = plan(&i, &vp("sources/papers/p.pdf"), &vp("sources/papers/q.pdf"), |_| Ok(false), |_| false).unwrap();
         assert!(p.writes["concepts/a/x.md"].text.contains("[[sources/papers/q.pdf#p3]]"));
     }
 
     #[test]
     fn table_pipe_kept() {
-        let i = from_texts(&[("concepts/a/old.md", C), ("views/v.md", "# V\n\n| a |\n|---|\n| [[old\\|x]] |\n")]);
+        let i =
+            Index::from_texts(&[("concepts/a/old.md", C), ("views/v.md", "# V\n\n| a |\n|---|\n| [[old\\|x]] |\n")]);
         let p = plan(&i, &vp("concepts/a/old.md"), &vp("concepts/a/new.md"), |_| Ok(false), |_| false).unwrap();
         assert!(p.writes["views/v.md"].text.contains("[[new\\|x]]"));
     }
 
     #[test]
     fn directory_move() {
-        let i = from_texts(&[
+        let i = Index::from_texts(&[
             ("concepts/a/AREA.md", "# A\n\nP.\n"),
             ("concepts/a/g/x.md", C),
             ("views/v.md", "# V\n\n[[x]] ![[concepts/a/g/p.png]]\n"),

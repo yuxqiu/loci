@@ -31,16 +31,26 @@ pub struct Skill {
 }
 
 impl Skill {
+    /// The skills compiled into a binary, from (name, `SKILL.md`) pairs.
+    pub fn compiled(files: &[(&str, &str)]) -> Vec<Skill> {
+        files.iter().map(|(name, body)| Skill::from_markdown(name, body)).collect()
+    }
+
     /// A skill compiled into a binary, from its `SKILL.md`: the description is the
     /// `description:` field of the frontmatter. Panics when the frontmatter is broken
     /// or has no description: the binary was built with a bad skill.
     pub fn from_markdown(name: &str, body: &str) -> Self {
-        // Parsed for its frontmatter only; the file is a plugin's, not the vault's.
-        let path = crate::path::VaultPath::new("SKILL.md".to_string()).expect("one segment is a vault path");
-        let note = crate::parse::parse(&path, crate::vault::Kind::Unknown, body.to_string());
-        assert!(!note.frontmatter_broken(), "skill `{name}` has broken frontmatter: {:?}", note.frontmatter);
-        let description = note.fm_str("description").unwrap_or_else(|| panic!("skill `{name}` has no description"));
+        let skill = crate::parse::markdown(body.to_string());
+        assert!(!skill.frontmatter_broken(), "skill `{name}` has broken frontmatter: {:?}", skill.frontmatter);
+        let description = skill.fm_str("description").unwrap_or_else(|| panic!("skill `{name}` has no description"));
         Self { name: name.to_string(), description: description.to_string(), body: body.to_string() }
+    }
+}
+
+/// The line that lists a skill: `name: description`.
+impl std::fmt::Display for Skill {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.name, self.description)
     }
 }
 
@@ -72,75 +82,102 @@ fn is_executable(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
-/// Builds the command that runs a plugin with the dispatch environment.
-pub fn command(plugin: &Plugin, vault_root: &Path, version: &str) -> Command {
-    let mut c = Command::new(&plugin.path);
-    c.env(ENV_VAULT, vault_root).env(ENV_VERSION, version).current_dir(vault_root);
-    c
+/// A hook core calls on a plugin (§2.3).
+#[derive(Debug, Clone, Copy)]
+enum Hook {
+    Lint,
+    Skills,
 }
 
-/// Runs a hook (`lint` or `skills`) with `--json` and validates the reply (§2.3 item 5).
-/// On failure returns the reason for `plugin.failed`.
-fn run_hook(plugin: &Plugin, hook: &str, vault_root: &Path, version: &str) -> Result<Envelope, String> {
-    let out = command(plugin, vault_root, version)
-        .args([hook, "--json"])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("cannot run {}: {e}", plugin.path.display()))?;
-
-    // The plugin's own explanation, if it printed one, shortened.
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let stderr = stderr.trim();
-    let why = if stderr.is_empty() {
-        String::new()
-    } else {
-        let cut = stderr.char_indices().nth(400).map_or(stderr.len(), |(i, _)| i);
-        format!(": {}", &stderr[..cut])
-    };
-
-    match out.status.code() {
-        Some(0 | 1) => {}
-        Some(code) => return Err(format!("exited with code {code}{why}")),
-        None => return Err(format!("was killed by a signal{why}")),
+impl Hook {
+    fn name(self) -> &'static str {
+        match self {
+            Hook::Lint => "lint",
+            Hook::Skills => "skills",
+        }
     }
-
-    let env: Envelope =
-        serde_json::from_slice(&out.stdout).map_err(|e| format!("printed an invalid envelope: {e}{why}"))?;
-    if let Some(e) = &env.error {
-        return Err(format!("returned error {}: {}", e.code, e.message));
-    }
-
-    let prefix = format!("{}.", plugin.name);
-    if let Some(d) = env.diagnostics.iter().find(|d| !d.code.starts_with(&prefix)) {
-        return Err(format!("reported code `{}` without the `{prefix}` prefix", d.code));
-    }
-
-    Ok(env)
 }
 
-/// The plugin's lint diagnostics, or the reason the hook failed (for [`failed`]).
-pub fn lint(plugin: &Plugin, vault_root: &Path, version: &str) -> Result<Vec<Diagnostic>, String> {
-    run_hook(plugin, "lint", vault_root, version).map(|env| env.diagnostics)
-}
-
-/// The plugin's skills, or the reason the hook failed (for [`failed`]).
-pub fn skills(plugin: &Plugin, vault_root: &Path, version: &str) -> Result<Vec<Skill>, String> {
-    let env = run_hook(plugin, "skills", vault_root, version)?;
-    #[derive(Deserialize)]
-    struct Data {
-        skills: Vec<Skill>,
+impl Plugin {
+    /// Builds the command that runs the plugin with the dispatch environment.
+    pub fn command(&self, vault_root: &Path, version: &str) -> Command {
+        let mut c = Command::new(&self.path);
+        c.env(ENV_VAULT, vault_root).env(ENV_VERSION, version).current_dir(vault_root);
+        c
     }
-    let data: Data = serde_json::from_value(env.data).map_err(|e| format!("invalid data: {e}"))?;
-    let prefix = format!("{}-", plugin.name);
-    if let Some(s) = data.skills.iter().find(|s| !s.name.starts_with(&prefix)) {
-        return Err(format!("skill `{}` lacks the `{prefix}` prefix", s.name));
-    }
-    Ok(data.skills)
-}
 
-/// The `plugin.failed` diagnostic for a hook failure.
-pub fn failed(plugin: &Plugin, command: &str, reason: &str) -> Diagnostic {
-    Diagnostic::error("plugin.failed", format!("plugin `{}` `{command}` failed: {reason}", plugin.name))
+    /// The plugin's lint diagnostics; when the hook fails, its `plugin.failed`.
+    pub fn lint(&self, vault_root: &Path, version: &str) -> Result<Vec<Diagnostic>, Box<Diagnostic>> {
+        let reply = self.reply(Hook::Lint, vault_root, version);
+        reply.map(|env| env.diagnostics).map_err(|reason| self.failed(Hook::Lint, &reason))
+    }
+
+    /// The plugin's skills; when the hook fails, its `plugin.failed`.
+    pub fn skills(&self, vault_root: &Path, version: &str) -> Result<Vec<Skill>, Box<Diagnostic>> {
+        #[derive(Deserialize)]
+        struct Data {
+            skills: Vec<Skill>,
+        }
+
+        let skills = || {
+            let env = self.reply(Hook::Skills, vault_root, version)?;
+            let data: Data = serde_json::from_value(env.data).map_err(|e| format!("invalid data: {e}"))?;
+            let prefix = format!("{}-", self.name);
+            if let Some(s) = data.skills.iter().find(|s| !s.name.starts_with(&prefix)) {
+                return Err(format!("skill `{}` lacks the `{prefix}` prefix", s.name));
+            }
+            Ok(data.skills)
+        };
+        skills().map_err(|reason| self.failed(Hook::Skills, &reason))
+    }
+
+    /// Runs `hook` with `--json` and validates the reply (§2.3 item 5); on failure,
+    /// the reason.
+    fn reply(&self, hook: Hook, vault_root: &Path, version: &str) -> Result<Envelope, String> {
+        let out = self
+            .command(vault_root, version)
+            .args([hook.name(), "--json"])
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|e| format!("cannot run {}: {e}", self.path.display()))?;
+
+        // The plugin's own explanation, if it printed one, shortened.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stderr = stderr.trim();
+        let why = if stderr.is_empty() {
+            String::new()
+        } else {
+            let cut = stderr.char_indices().nth(400).map_or(stderr.len(), |(i, _)| i);
+            format!(": {}", &stderr[..cut])
+        };
+
+        match out.status.code() {
+            Some(0 | 1) => {}
+            Some(code) => return Err(format!("exited with code {code}{why}")),
+            None => return Err(format!("was killed by a signal{why}")),
+        }
+
+        let env: Envelope =
+            serde_json::from_slice(&out.stdout).map_err(|e| format!("printed an invalid envelope: {e}{why}"))?;
+        if let Some(e) = &env.error {
+            return Err(format!("returned error {}: {}", e.code, e.message));
+        }
+
+        let prefix = format!("{}.", self.name);
+        if let Some(d) = env.diagnostics.iter().find(|d| !d.code.starts_with(&prefix)) {
+            return Err(format!("reported code `{}` without the `{prefix}` prefix", d.code));
+        }
+
+        Ok(env)
+    }
+
+    /// The `plugin.failed` diagnostic for `hook` failing with `reason`.
+    fn failed(&self, hook: Hook, reason: &str) -> Box<Diagnostic> {
+        Box::new(Diagnostic::error(
+            "plugin.failed",
+            format!("plugin `{}` `{}` failed: {reason}", self.name, hook.name()),
+        ))
+    }
 }
 
 /// Checks the environment a plugin runs in, `LOCI_VERSION` and `LOCI_VAULT`, on the

@@ -4,16 +4,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
-use super::{Ctx, update_code};
+use super::{Code, Ctx};
 use crate::config::{Editions, UpdateId};
 use crate::envelope::{Applicability, Diagnostic, Fix};
 use crate::id::Ulid;
-use crate::parse::{FmChange, FmValue, LinkForm, Note, Spanned};
+use crate::parse::{ConceptField, FmChange, FmValue, Note, prereq_slug};
 use crate::path::VaultPath;
 
 /// A concept frontmatter field (m0 §6.1) and the editions it belongs to.
 pub(super) struct Field {
-    name: &'static str,
+    field: ConceptField,
     pub(super) editions: Editions,
 }
 
@@ -21,10 +21,15 @@ pub(super) struct Field {
 /// row with `Editions::until` that update: before it, the field is valid and reported
 /// as outdated (`update.<id>`, with a fix); after it, it is an unknown field.
 pub(super) const CONCEPT_FIELDS: &[Field] = &[
-    Field { name: "id", editions: Editions::ALWAYS },
-    Field { name: "prereqs", editions: Editions::ALWAYS },
-    Field { name: "digest", editions: Editions::until(UpdateId::new(1)) },
+    Field { field: ConceptField::Id, editions: Editions::ALWAYS },
+    Field { field: ConceptField::Prereqs, editions: Editions::ALWAYS },
+    Field { field: ConceptField::Digest, editions: Editions::until(UpdateId::new(1)) },
 ];
+
+/// The row of the concept field with key `key` in edition `mark`, if it is one.
+fn field(key: &str, mark: Option<UpdateId>) -> Option<&'static Field> {
+    CONCEPT_FIELDS.iter().find(|f| f.field.key() == key && f.editions.contains(mark))
+}
 
 /// The concepts whose frontmatter parsed (malformed frontmatter is reported as
 /// `fm.*`; its fields cannot be checked). No frontmatter counts as an empty mapping.
@@ -36,9 +41,9 @@ fn concepts_with_fields<'a>(ctx: &'a Ctx) -> impl Iterator<Item = &'a Note> {
 pub(super) fn concept_fields(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     for note in concepts_with_fields(ctx) {
         for e in note.frontmatter.iter().flat_map(|f| f.entries()) {
-            if !CONCEPT_FIELDS.iter().any(|f| f.name == *e.key && f.editions.contains(ctx.mark)) {
+            if field(&e.key, ctx.mark).is_none() {
                 let msg = format!("field `{}` is not allowed in a concept", *e.key);
-                out.push(error(note, "fm.unknown-field", msg).at(&note.text, e.key.span.clone()));
+                out.push(Diagnostic::error(Code::FmUnknownField, msg).in_note(note, e.key.span.clone()));
             }
         }
         out.extend(id_field(note));
@@ -46,33 +51,24 @@ pub(super) fn concept_fields(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     }
 }
 
-fn error(note: &Note, code: &str, msg: String) -> Diagnostic {
-    Diagnostic::error(code, msg).at_path(note.path.as_str())
-}
-
-/// `fm.field-type` for field `key` of `note`, at `span`.
-fn wrong_type(note: &Note, key: &str, want: &str, span: Range<usize>) -> Diagnostic {
-    error(note, "fm.field-type", format!("`{key}` must be {want}")).at(&note.text, span)
-}
-
-/// A fix making `change` to `note`'s frontmatter (m0 §6.1).
-fn frontmatter_fix(note: &Note, applicability: Applicability, message: &str, change: FmChange) -> Fix {
-    Fix::new(applicability, message).frontmatter(note.path.as_str(), change)
+/// `fm.field-type` for `field` of `note`, at `span`.
+fn wrong_type(note: &Note, field: ConceptField, want: &str, span: Range<usize>) -> Diagnostic {
+    Diagnostic::error(Code::FmFieldType, format!("`{}` must be {want}", field.key())).in_note(note, span)
 }
 
 /// `id`: present, a string, a ULID. A missing one gets a fix adding a new id, first.
 fn id_field(note: &Note) -> Option<Diagnostic> {
-    match note.fm("id").map(|v| (&v.node, &v.span)) {
+    match note.fm(ConceptField::Id.key()).map(|v| (&v.node, &v.span)) {
         Some((FmValue::Str(value), span)) => {
             let e = value.parse::<Ulid>().err()?;
-            Some(error(note, "fm.id-format", format!("`id` {e}")).at(&note.text, span.clone()))
+            Some(Diagnostic::error(Code::FmIdFormat, format!("`id` {e}")).in_note(note, span.clone()))
         }
-        Some((_, span)) => Some(wrong_type(note, "id", "a string", span.clone())),
+        Some((_, span)) => Some(wrong_type(note, ConceptField::Id, "a string", span.clone())),
         None => {
             // Only concepts whose frontmatter is a mapping, or absent, get here.
             let message = if note.frontmatter.is_some() { "add a new id" } else { "add frontmatter with a new id" };
-            let fix = frontmatter_fix(note, Applicability::Safe, message, FmChange::SetId(Ulid::generate()));
-            Some(error(note, "fm.missing-field", "concept has no `id`".into()).with_fix(fix))
+            let fix = Fix::new(Applicability::Safe, message).frontmatter(&note.path, FmChange::SetId(Ulid::generate()));
+            Some(Diagnostic::error(Code::FmMissingField, "concept has no `id`").at_path(&note.path).with_fix(fix))
         }
     }
 }
@@ -80,14 +76,17 @@ fn id_field(note: &Note) -> Option<Diagnostic> {
 /// `prereqs`: a list of strings `[[slug]]`. An unquoted `[[slug]]` gets a fix quoting
 /// every such item of the note.
 fn prereqs_field(note: &Note) -> Vec<Diagnostic> {
-    let wrong = |span| wrong_type(note, "prereqs", "a list of `\"[[slug]]\"`", span).with_hint("write \"[[slug]]\"");
-    let quote = || frontmatter_fix(note, Applicability::Safe, "quote it", FmChange::QuotePrereqs);
-    match note.fm("prereqs").map(|v| (&v.node, &v.span)) {
+    let wrong = |span| {
+        wrong_type(note, ConceptField::Prereqs, "a list of `\"[[slug]]\"`", span).with_hint("write \"[[slug]]\"")
+    };
+    let quote = || Fix::new(Applicability::Safe, "quote it").frontmatter(&note.path, FmChange::QuotePrereqs);
+    match note.fm(ConceptField::Prereqs.key()).map(|v| (&v.node, &v.span)) {
         None => vec![],
         Some((FmValue::List(items), _)) => items
             .iter()
-            .filter(|i| !note.links.iter().any(|l| l.form == LinkForm::Prereq && l.span == i.span))
-            .map(|i| match unquoted_prereq(i) {
+            // An item is a prereq link exactly when the parser read one from it.
+            .filter(|i| !matches!(&i.node, FmValue::Str(item) if prereq_slug(item).is_some()))
+            .map(|i| match i.is_unquoted_prereq() {
                 true => wrong(i.span.clone()).with_fix(quote()),
                 false => wrong(i.span.clone()),
             })
@@ -96,32 +95,20 @@ fn prereqs_field(note: &Note) -> Vec<Diagnostic> {
     }
 }
 
-/// Whether a `prereqs` item is an unquoted `[[slug]]`, which YAML reads as a list
-/// holding a list holding the slug.
-fn unquoted_prereq(item: &FmValue) -> bool {
-    let FmValue::List(items) = item else { return false };
-    let [Spanned { node: FmValue::List(items), .. }] = items.as_slice() else { return false };
-    matches!(items.as_slice(), [Spanned { node: FmValue::Str(value), .. }] if value.parse::<crate::id::Slug>().is_ok())
-}
-
 /// Concept fields a pending vault update removes (a row with `Editions::until` an
 /// update the vault has not handled): valid in its edition, reported as outdated, with
 /// the unsafe fix that deletes them (a field may hold text worth keeping).
 pub(super) fn outdated_fields(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     for note in concepts_with_fields(ctx) {
         for e in note.frontmatter.iter().flat_map(|f| f.entries()) {
-            let Some(field) = CONCEPT_FIELDS.iter().find(|f| f.name == *e.key && f.editions.contains(ctx.mark)) else {
-                continue;
-            };
-            let Some(update) = field.editions.until else { continue };
-            let path = note.path.as_str();
-            let change = FmChange::RemoveField(e.key.node.clone());
-            let fix = frontmatter_fix(note, Applicability::Unsafe, &format!("delete `{}`", *e.key), change);
-            let code = update_code(update);
+            let Some(Field { field, editions }) = field(&e.key, ctx.mark) else { continue };
+            let Some(update) = editions.until else { continue };
+            let change = FmChange::RemoveField(*field);
+            let fix = Fix::new(Applicability::Unsafe, format!("delete `{}`", *e.key)).frontmatter(&note.path, change);
+            let code = Code::Update(update);
             out.push(
-                Diagnostic::warning(&code, format!("vault update {update} removes the concept field `{}`", *e.key))
-                    .at_path(path)
-                    .at(&note.text, e.key.span.clone())
+                Diagnostic::warning(code, format!("vault update {update} removes the concept field `{}`", *e.key))
+                    .in_note(note, e.key.span.clone())
                     .with_hint(format!(
                         "offer {update} with `loci updates` if it is waiting; it applies with `loci lint --fix --only {code}`"
                     ))
@@ -145,89 +132,94 @@ pub(super) fn duplicates(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
         // Unsafe: plugin data (a review log) may refer to the id of either note.
         let mut fix = Fix::new(Applicability::Unsafe, "give the other notes new ids");
         for n in &notes[1..] {
-            fix = fix.frontmatter(n.path.as_str(), FmChange::SetId(Ulid::generate()));
+            fix = fix.frontmatter(&n.path, FmChange::SetId(Ulid::generate()));
         }
         let others: Vec<&str> = notes[1..].iter().map(|n| n.path.as_str()).collect();
         out.push(
-            Diagnostic::error("fm.id-duplicate", format!("id `{id}` is used by {}", others.join(", ")))
-                .at_path(notes[0].path.as_str())
+            Diagnostic::error(Code::FmIdDuplicate, format!("id `{id}` is used by {}", others.join(", ")))
+                .at_path(&notes[0].path)
                 .with_fix(fix),
         );
     }
 
-    for (slug, paths) in &index.slugs {
+    for (slug, paths) in index.slugs() {
         if paths.len() > 1 {
             out.push(
-                Diagnostic::error("slug.duplicate", format!("slug `{slug}` is used by {}", paths[1..].join(", ")))
-                    .at_path(paths[0].as_str()),
+                Diagnostic::error(Code::SlugDuplicate, format!("slug `{slug}` is used by {}", paths[1..].join(", ")))
+                    .at_path(&paths[0]),
             );
         }
     }
 }
 
+/// `prereqs.cycle`: each cycle of the prerequisite graph once.
 pub(super) fn prereq_cycles(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     let index = ctx.index;
-
-    // Concept path -> prerequisite paths.
     let graph: BTreeMap<VaultPath, Vec<VaultPath>> =
-        index.concepts().map(|n| (n.path.clone(), index.prereqs(n).0)).collect();
+        index.concepts().map(|n| (n.path.clone(), index.prereqs(n).resolved)).collect();
 
-    // Iterative DFS; report each cycle once, from its member with the smallest slug.
+    for cycle in cycles(&graph) {
+        let shown: Vec<&str> = cycle.iter().chain(&cycle[..1]).map(VaultPath::stem).collect();
+        let msg = format!("prereq cycle: {}", shown.join(" → "));
+        out.push(Diagnostic::error(Code::PrereqsCycle, msg).at_path(&cycle[0]));
+    }
+}
+
+/// Every cycle of `graph` (concept path -> prerequisite paths), found by an iterative
+/// depth-first walk, each once in [`canonical`] form.
+fn cycles(graph: &BTreeMap<VaultPath, Vec<VaultPath>>) -> BTreeSet<Vec<VaultPath>> {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Visit {
         Unseen,
-        /// On the current DFS path: an edge back to it closes a cycle.
+        /// On the current walk's path: an edge back to it closes a cycle.
         OnPath,
         Done,
     }
 
     let mut state: BTreeMap<&VaultPath, Visit> = BTreeMap::new();
     let visit = |state: &BTreeMap<&VaultPath, Visit>, p: &VaultPath| state.get(p).copied().unwrap_or(Visit::Unseen);
-    let mut reported: BTreeSet<Vec<VaultPath>> = BTreeSet::new();
+    let mut found = BTreeSet::new();
     for start in graph.keys() {
         if visit(&state, start) != Visit::Unseen {
             continue;
         }
+
+        // The walk: each node on the path with the index of its next edge.
         let mut stack: Vec<(&VaultPath, usize)> = vec![(start, 0)];
         let mut path: Vec<&VaultPath> = vec![start];
         state.insert(start, Visit::OnPath);
         while let Some((node, i)) = stack.last_mut() {
-            let edges = &graph[*node];
-            if *i < edges.len() {
-                let next = &edges[*i];
-                *i += 1;
-                match visit(&state, next) {
-                    Visit::Unseen if graph.contains_key(next) => {
-                        state.insert(next, Visit::OnPath);
-                        stack.push((next, 0));
-                        path.push(next);
-                    }
-                    Visit::OnPath => {
-                        let pos = path.iter().position(|p| *p == next).expect("an `OnPath` node is on the path");
-                        let mut cycle: Vec<VaultPath> = path[pos..].iter().map(|p| (*p).clone()).collect();
-                        let min = cycle
-                            .iter()
-                            .enumerate()
-                            .min_by_key(|(_, p)| (p.stem().to_lowercase(), p.as_str()))
-                            .map(|(i, _)| i)
-                            .expect("a cycle has members");
-                        cycle.rotate_left(min);
-                        if reported.insert(cycle.clone()) {
-                            let mut shown: Vec<&str> = cycle.iter().map(VaultPath::stem).collect();
-                            shown.push(cycle[0].stem());
-                            out.push(
-                                Diagnostic::error("prereqs.cycle", format!("prereq cycle: {}", shown.join(" → ")))
-                                    .at_path(cycle[0].as_str()),
-                            );
-                        }
-                    }
-                    Visit::Unseen | Visit::Done => {}
-                }
-            } else {
+            let Some(next) = graph[*node].get(*i) else {
                 state.insert(node, Visit::Done);
                 stack.pop();
                 path.pop();
+                continue;
+            };
+            *i += 1;
+            match visit(&state, next) {
+                Visit::Unseen if graph.contains_key(next) => {
+                    state.insert(next, Visit::OnPath);
+                    stack.push((next, 0));
+                    path.push(next);
+                }
+                Visit::OnPath => {
+                    let pos = path.iter().position(|p| *p == next).expect("an `OnPath` node is on the path");
+                    found.insert(canonical(&path[pos..]));
+                }
+                Visit::Unseen | Visit::Done => {}
             }
         }
     }
+    found
+}
+
+/// `cycle` rotated to start at its member with the smallest slug, so each cycle has one
+/// form however the walk entered it.
+fn canonical(cycle: &[&VaultPath]) -> Vec<VaultPath> {
+    let mut cycle: Vec<VaultPath> = cycle.iter().map(|p| (*p).clone()).collect();
+    let first = (0..cycle.len())
+        .min_by_key(|&i| (cycle[i].stem().to_lowercase(), cycle[i].as_str()))
+        .expect("a cycle has members");
+    cycle.rotate_left(first);
+    cycle
 }

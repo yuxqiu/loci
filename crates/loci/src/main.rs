@@ -6,7 +6,7 @@ mod commands;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use loci_core::envelope::Report;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -14,7 +14,6 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Core command names, from the CLI definition, and `help`; any other first argument
 /// is dispatched to `loci-<name>`.
 pub fn core_commands() -> Vec<String> {
-    use clap::CommandFactory;
     let cli = Cli::command();
     cli.get_subcommands().map(|c| c.get_name().to_string()).chain(["help".to_string()]).collect()
 }
@@ -71,7 +70,7 @@ enum Cmd {
         #[arg(long)]
         all: bool,
         /// Record that every update through this id is handled, applied or declined.
-        #[arg(long, value_name = "ID")]
+        #[arg(long, value_name = "ID", conflicts_with = "all")]
         handled: Option<String>,
     },
     /// Move or rename a file or directory, rewriting links.
@@ -167,33 +166,44 @@ enum SkillCmd {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+    let name = command_name(&matches);
     let cwd = std::env::current_dir().expect("the working directory is readable");
     let vault = loci_core::vault::VaultDir::new(cli.vault.as_deref(), &cwd);
     let ctx = commands::Ctx { vault, cwd, json: cli.json };
-    let (name, report) = match cli.command {
-        Cmd::Init => ("init", commands::init::run(&ctx)),
+    let report = match cli.command {
+        Cmd::Init => commands::init::run(&ctx),
         Cmd::Lint { fix, unsafe_fixes, only, allow_dirty, dry_run } => {
             let fix = fix.then_some(commands::lint::FixArgs { unsafe_fixes, only, allow_dirty, dry_run });
-            ("lint", commands::lint::run(&ctx, fix))
+            commands::lint::run(&ctx, fix)
         }
-        Cmd::Done { note } => ("done", commands::done::run(&ctx, &note)),
-        Cmd::Rules => ("rules", commands::rules::run()),
-        Cmd::Updates { all, handled } => ("updates", commands::updates::run(&ctx, all, handled.as_deref())),
-        Cmd::Mv { from, to, dry_run } => ("mv", commands::mv::run(&ctx, &from, &to, dry_run)),
-        Cmd::Status => ("status", commands::status::run(&ctx)),
-        Cmd::New { path, title } => ("new", commands::new::run(&ctx, &path, title.as_deref())),
-        Cmd::Skill { action: SkillCmd::Show { name } } => ("skill show", commands::skill::run(&ctx, name.as_deref())),
-        Cmd::BlockIds { note, section } => ("block-ids", commands::blockids::run(&ctx, &note, &section)),
-        Cmd::Merge { from, into, dry_run } => ("merge", commands::merge::run(&ctx, &from, &into, dry_run)),
-        Cmd::Links { note } => ("links", commands::links::run(&ctx, &note)),
-        Cmd::Closure { concept, depth } => ("closure", commands::closure::run(&ctx, &concept, depth)),
-        Cmd::Bench { agent, cases } => ("bench", commands::bench::run(&ctx, &agent, cases.as_deref())),
-        Cmd::Export { target, depth, format, output } => {
-            ("export", commands::export::run(&ctx, &target, depth, format, output))
-        }
+        Cmd::Done { note } => commands::done::run(&ctx, &note),
+        Cmd::Rules => commands::rules::run(),
+        Cmd::Updates { all, handled } => commands::updates::run(&ctx, all, handled.as_deref()),
+        Cmd::Mv { from, to, dry_run } => commands::mv::run(&ctx, &from, &to, dry_run),
+        Cmd::Status => commands::status::run(&ctx),
+        Cmd::New { path, title } => commands::new::run(&ctx, &path, title.as_deref()),
+        Cmd::Skill { action: SkillCmd::Show { name } } => commands::skill::run(&ctx, name.as_deref()),
+        Cmd::BlockIds { note, section } => commands::blockids::run(&ctx, &note, &section),
+        Cmd::Merge { from, into, dry_run } => commands::merge::run(&ctx, &from, &into, dry_run),
+        Cmd::Links { note } => commands::links::run(&ctx, &note),
+        Cmd::Closure { concept, depth } => commands::closure::run(&ctx, &concept, depth),
+        Cmd::Bench { agent, cases } => commands::bench::run(&ctx, &agent, cases.as_deref()),
+        Cmd::Export { target, depth, format, output } => commands::export::run(&ctx, &target, depth, format, output),
         Cmd::External(args) => return commands::dispatch::run(&ctx, args),
     };
 
-    report.unwrap_or_else(Report::from).print(ctx.json, VERSION, name).into()
+    report.unwrap_or_else(Report::from).print(ctx.json, VERSION, &name).into()
+}
+
+/// The command's name as typed, for the envelope: its subcommands joined (`skill show`).
+fn command_name(matches: &clap::ArgMatches) -> String {
+    let mut names = vec![];
+    let mut m = matches;
+    while let Some((name, sub)) = m.subcommand() {
+        names.push(name);
+        m = sub;
+    }
+    names.join(" ")
 }

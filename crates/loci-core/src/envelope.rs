@@ -2,11 +2,13 @@
 //! the exit code.
 
 use std::fmt;
+use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::parse::FmChange;
+use crate::parse::{FmChange, Note};
+use crate::path::VaultPath;
 
 pub const SCHEMA: u32 = 1;
 
@@ -46,7 +48,7 @@ pub struct Fix {
 #[serde(untagged)]
 pub enum FixEdit {
     Text(TextEdit),
-    Frontmatter { path: String, frontmatter: FmChange },
+    Frontmatter { path: VaultPath, frontmatter: FmChange },
 }
 
 /// How a fix may be applied (after Ruff's safe and unsafe fixes, and rustc's
@@ -65,7 +67,7 @@ pub enum Applicability {
 /// Bytes `byte_start..byte_end` of file `path` replaced by `new`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextEdit {
-    pub path: String,
+    pub path: VaultPath,
     pub byte_start: usize,
     pub byte_end: usize,
     pub new: String,
@@ -77,15 +79,15 @@ impl Fix {
     }
 
     /// Adds an edit replacing bytes `range` of file `path` with `new`.
-    pub fn edit(mut self, path: impl Into<String>, range: std::ops::Range<usize>, new: impl Into<String>) -> Self {
-        let edit = TextEdit { path: path.into(), byte_start: range.start, byte_end: range.end, new: new.into() };
+    pub fn edit(mut self, path: &VaultPath, range: Range<usize>, new: impl Into<String>) -> Self {
+        let edit = TextEdit { path: path.clone(), byte_start: range.start, byte_end: range.end, new: new.into() };
         self.edits.push(FixEdit::Text(edit));
         self
     }
 
     /// Adds `change` to the frontmatter of concept `path`.
-    pub fn frontmatter(mut self, path: impl Into<String>, change: FmChange) -> Self {
-        self.edits.push(FixEdit::Frontmatter { path: path.into(), frontmatter: change });
+    pub fn frontmatter(mut self, path: &VaultPath, change: FmChange) -> Self {
+        self.edits.push(FixEdit::Frontmatter { path: path.clone(), frontmatter: change });
         self
     }
 }
@@ -93,7 +95,7 @@ impl Fix {
 /// A file, and optionally a position in it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Location {
-    pub path: String,
+    pub path: VaultPath,
     pub span: Option<Span>,
 }
 
@@ -109,15 +111,16 @@ pub struct Span {
 
 impl Span {
     /// The span of byte range `range` of `text`.
-    pub fn new(text: &str, range: std::ops::Range<usize>) -> Self {
+    pub fn new(text: &str, range: Range<usize>) -> Self {
         let (line, col) = line_col(text, range.start);
         Span { line, col, byte_start: range.start, byte_end: range.end }
     }
 }
 
-/// 1-based line and column (column in Unicode scalar values) of a byte offset.
+/// 1-based line and column (column in Unicode scalar values) of byte offset `offset`
+/// of `text`, which must be a character boundary.
 pub fn line_col(text: &str, offset: usize) -> (usize, usize) {
-    let offset = offset.min(text.len());
+    assert!(text.is_char_boundary(offset), "offset {offset} is not a character boundary of the text");
     let before = &text[..offset];
     let line = before.matches('\n').count() + 1;
     let line_start = before.rfind('\n').map_or(0, |i| i + 1);
@@ -126,29 +129,34 @@ pub fn line_col(text: &str, offset: usize) -> (usize, usize) {
 }
 
 impl Diagnostic {
-    pub fn error(code: &str, message: impl Into<String>) -> Self {
+    /// An error with `code`: core's [`crate::lint::Code`], or a plugin's own.
+    pub fn error(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self::new(code, Severity::Error, message)
     }
 
-    pub fn warning(code: &str, message: impl Into<String>) -> Self {
+    pub fn warning(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self::new(code, Severity::Warning, message)
     }
 
-    fn new(code: &str, severity: Severity, message: impl Into<String>) -> Self {
-        Self { code: code.to_string(), severity, location: None, message: message.into(), hint: None, fixes: vec![] }
+    fn new(code: impl Into<String>, severity: Severity, message: impl Into<String>) -> Self {
+        Self { code: code.into(), severity, location: None, message: message.into(), hint: None, fixes: vec![] }
     }
 
-    pub fn at_path(mut self, path: impl Into<String>) -> Self {
-        self.location = Some(Location { path: path.into(), span: None });
+    /// About file `path` as a whole.
+    pub fn at_path(mut self, path: &VaultPath) -> Self {
+        self.location = Some(Location { path: path.clone(), span: None });
         self
     }
 
-    /// Positions the diagnostic at a byte range of `text`, the content of the file
-    /// [`Diagnostic::at_path`] named.
-    pub fn at(mut self, text: &str, range: std::ops::Range<usize>) -> Self {
-        let location = self.location.as_mut().expect("a position is in a file: `at_path` comes first");
-        location.span = Some(Span::new(text, range));
+    /// At bytes `range` of file `path`, whose content is `text`.
+    pub fn at(mut self, path: &VaultPath, text: &str, range: Range<usize>) -> Self {
+        self.location = Some(Location { path: path.clone(), span: Some(Span::new(text, range)) });
         self
+    }
+
+    /// At bytes `range` of `note`.
+    pub fn in_note(self, note: &Note, range: Range<usize>) -> Self {
+        self.at(&note.path, &note.text, range)
     }
 
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
@@ -162,8 +170,8 @@ impl Diagnostic {
     }
 
     /// The path of the file it is about, if any.
-    pub fn path(&self) -> Option<&str> {
-        self.location.as_ref().map(|l| l.path.as_str())
+    pub fn path(&self) -> Option<&VaultPath> {
+        self.location.as_ref().map(|l| &l.path)
     }
 
     pub fn is_error(&self) -> bool {
@@ -176,7 +184,7 @@ impl Diagnostic {
 pub fn sort_diagnostics(diags: &mut [Diagnostic]) {
     diags.sort_by_cached_key(|d| {
         let start = d.location.as_ref().and_then(|l| l.span).map(|s| s.byte_start);
-        (d.path().map(|p| p.as_bytes().to_vec()), start, d.code.clone(), d.message.clone())
+        (d.path().cloned(), start, d.code.clone(), d.message.clone())
     });
 }
 
@@ -236,13 +244,13 @@ pub struct Refusal {
 
 impl Refusal {
     /// A refused precondition (exit 1).
-    pub fn refused(code: &str, message: impl Into<String>) -> Self {
+    pub fn refused(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self::new(Exit::Refused, code, message)
     }
 
     /// A failure of the environment rather than a refused request (exit 3), with its own
     /// code. [`Refusal::io`] and [`Refusal::git`] are the two common cases.
-    pub fn internal(code: &str, message: impl Into<String>) -> Self {
+    pub fn internal(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self::new(Exit::Internal, code, message)
     }
 
@@ -256,8 +264,8 @@ impl Refusal {
         Self::internal("git", e.to_string())
     }
 
-    fn new(exit: Exit, code: &str, message: impl Into<String>) -> Self {
-        Self { exit, error: CmdError { code: code.to_string(), message: message.into() } }
+    fn new(exit: Exit, code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self { exit, error: CmdError { code: code.into(), message: message.into() } }
     }
 
     pub fn code(&self) -> &str {
@@ -363,10 +371,15 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn vp(s: &str) -> VaultPath {
+        VaultPath::new(s.into()).unwrap()
+    }
+
     #[test]
     fn fix_edits_round_trip() {
-        let fix =
-            Fix::new(Applicability::Safe, "m").edit("a.md", 1..2, "x").frontmatter("b.md", FmChange::QuotePrereqs);
+        let fix = Fix::new(Applicability::Safe, "m")
+            .edit(&vp("a.md"), 1..2, "x")
+            .frontmatter(&vp("b.md"), FmChange::QuotePrereqs);
         let j = serde_json::to_value(&fix).unwrap();
         assert_eq!(
             j["edits"],
@@ -385,7 +398,7 @@ mod tests {
 
     #[test]
     fn a_diagnostic_location_is_nested() {
-        let d = Diagnostic::error("x.y", "m").at_path("views/v.md").at("ab\ncd", 3..5);
+        let d = Diagnostic::error("x.y", "m").at(&vp("views/v.md"), "ab\ncd", 3..5);
         let json = serde_json::to_value(&d).unwrap();
         assert_eq!(
             json,
@@ -413,7 +426,7 @@ mod tests {
 
     #[test]
     fn human_forms() {
-        let d = Diagnostic::warning("x.y", "m").at_path("v.md").at("ab\ncd", 4..5).with_hint("h");
+        let d = Diagnostic::warning("x.y", "m").at(&vp("v.md"), "ab\ncd", 4..5).with_hint("h");
         assert_eq!(d.to_string(), "v.md:2:2: warning[x.y]: m\n  hint: h");
         assert_eq!(Refusal::refused("a.b", "no").to_string(), "error[a.b]: no");
     }

@@ -5,8 +5,8 @@ use std::ops::Range;
 use pulldown_cmark::Options;
 
 use crate::id::Ulid;
+use crate::path::Kind;
 use crate::path::VaultPath;
-use crate::vault::Kind;
 
 mod blocks;
 mod body;
@@ -18,8 +18,8 @@ use body::{Walker, walk_body};
 use frontmatter::{frontmatter, frontmatter_links};
 
 pub use blocks::{Block, BlockKind};
-pub use frontmatter::{FmChange, FmEntry, FmValue, Frontmatter, prereq_slug, rewrite_frontmatter};
-pub use links::{Fragment, Label, Link, LinkForm, MarkdownLink, Names, Target};
+pub use frontmatter::{ConceptField, FmChange, FmEntry, FmValue, Frontmatter, new_concept_frontmatter, prereq_slug};
+pub use links::{Fragment, Label, Link, LinkForm, MarkdownLink, Names, Target, heading_key};
 
 pub const BOM: &str = "\u{feff}";
 
@@ -70,8 +70,10 @@ pub struct ListItem {
     /// The list marker; the item's content starts after it.
     pub marker: Spanned<Marker>,
     /// The item's leading text (§4.6): after the marker, up to its first nested block,
-    /// without trailing whitespace. Its block id ends it.
+    /// without trailing whitespace.
     pub lead: Spanned<Lead>,
+    /// The item's block id, ending its lead, without its `^`; spanning `^id`.
+    pub id: Option<Spanned<String>>,
 }
 
 /// A list item's marker (`-`, `1.`, with a task box `[ ]`) and the spaces after it: its
@@ -83,6 +85,7 @@ pub struct Marker;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Lead;
 
+/// How much of each [`Material`] a note holds.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Counts {
     pub math: usize,
@@ -91,11 +94,33 @@ pub struct Counts {
 }
 
 impl Counts {
-    /// The kinds of material counted, named for reports, in the order of [`Counts::values`].
-    pub const NAMES: [&'static str; 3] = ["math spans", "images", "fenced code blocks"];
+    pub fn of(&self, material: Material) -> usize {
+        match material {
+            Material::Math => self.math,
+            Material::Images => self.images,
+            Material::FencedCode => self.code,
+        }
+    }
+}
 
-    pub fn values(&self) -> [usize; 3] {
-        [self.math, self.images, self.code]
+/// Material whose loss lint reports when notes are deleted (`material-dropped`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Material {
+    Math,
+    Images,
+    FencedCode,
+}
+
+impl Material {
+    pub const ALL: [Material; 3] = [Material::Math, Material::Images, Material::FencedCode];
+
+    /// Named for reports.
+    pub fn name(self) -> &'static str {
+        match self {
+            Material::Math => "math spans",
+            Material::Images => "images",
+            Material::FencedCode => "fenced code blocks",
+        }
     }
 }
 
@@ -109,10 +134,32 @@ pub enum BlockType {
     Other,
 }
 
+/// A vault note: its place in the vault, and what its text holds.
 #[derive(Debug, Clone)]
 pub struct Note {
     pub path: VaultPath,
     pub kind: Kind,
+    pub markdown: Markdown,
+}
+
+impl std::ops::Deref for Note {
+    type Target = Markdown;
+
+    fn deref(&self) -> &Markdown {
+        &self.markdown
+    }
+}
+
+impl Note {
+    /// The note's title (§9.3): the first H1's raw text, else the file stem.
+    pub fn title(&self) -> &str {
+        self.headings.iter().find(|h| h.level == 1).map_or_else(|| self.path.stem(), |h| h.content.as_str())
+    }
+}
+
+/// What a markdown text holds (§4): the parse of a file, wherever it is.
+#[derive(Debug, Clone)]
+pub struct Markdown {
     pub text: String,
     pub frontmatter: Option<Spanned<Frontmatter>>,
     pub headings: Vec<Spanned<Heading>>,
@@ -128,7 +175,7 @@ pub struct Note {
     pub counts: Counts,
 }
 
-impl Note {
+impl Markdown {
     /// The value of frontmatter field `key`.
     pub fn fm(&self, key: &str) -> Option<&Spanned<FmValue>> {
         Some(&self.frontmatter.as_ref()?.get(key)?.value)
@@ -144,12 +191,7 @@ impl Note {
 
     /// The concept id: frontmatter `id`, if it is a ULID (lint reports one that is not).
     pub fn id(&self) -> Option<Ulid> {
-        self.fm_str("id")?.parse().ok()
-    }
-
-    /// The note's title (§9.3): the first H1's raw text, else the file stem.
-    pub fn title(&self) -> &str {
-        self.headings.iter().find(|h| h.level == 1).map_or_else(|| self.path.stem(), |h| h.content.as_str())
+        self.fm_str(ConceptField::Id.key())?.parse().ok()
     }
 
     /// The section under `self.headings[i]`: the heading through the next heading of the
@@ -158,6 +200,19 @@ impl Note {
         let h = &self.headings[i];
         let end = self.headings[i + 1..].iter().find(|n| n.level <= h.level).map_or(self.text.len(), |n| n.span.start);
         h.span.start..end
+    }
+
+    /// The bytes `fragment` names (§5.4): the section under the first heading it
+    /// matches, or the block with its id.
+    pub fn fragment_range(&self, fragment: &Fragment) -> Option<Range<usize>> {
+        match fragment {
+            Fragment::Heading(h) => {
+                let key = heading_key(h);
+                let i = self.headings.iter().position(|n| heading_key(&n.content) == key)?;
+                Some(self.section(i))
+            }
+            Fragment::Block(id) => self.blocks.iter().find(|b| *b.id == *id).map(|b| b.span.clone()),
+        }
     }
 
     /// Every H2 whose text is `text`, with the content of its section (after the
@@ -196,7 +251,7 @@ impl Note {
     /// Whether the frontmatter is broken (unterminated or not a mapping), so its fields
     /// cannot be read; lint reports it (`fm.unterminated`, `fm.yaml`).
     pub fn frontmatter_broken(&self) -> bool {
-        self.frontmatter.as_ref().is_some_and(|f| !matches!(f.node, Frontmatter::Fields(_)))
+        self.frontmatter.as_ref().is_some_and(|f| !matches!(f.node, Frontmatter::Fields { .. }))
     }
 }
 
@@ -213,6 +268,11 @@ pub fn options() -> Options {
 
 /// Parses `text` (the whole file) as a note at `path`.
 pub fn parse(path: &VaultPath, kind: Kind, text: String) -> Note {
+    Note { path: path.clone(), kind, markdown: markdown(text) }
+}
+
+/// Parses `text`, a whole markdown file in the vault or not.
+pub fn markdown(text: String) -> Markdown {
     // Frontmatter starts at byte 0, after a BOM (§4.3), which pulldown-cmark would read
     // as text: the walk starts past it.
     let base = if text.starts_with(BOM) { BOM.len() } else { 0 };
@@ -223,19 +283,7 @@ pub fn parse(path: &VaultPath, kind: Kind, text: String) -> Note {
     let Walker { headings, top_blocks, items, links: body_links, markdown_links, counts, .. } = walk;
     links.extend(body_links);
     links.sort_by_key(|l| l.span.start);
-    Note {
-        path: path.clone(),
-        kind,
-        text,
-        frontmatter,
-        headings,
-        top_blocks,
-        items,
-        blocks,
-        links,
-        markdown_links,
-        counts,
-    }
+    Markdown { text, frontmatter, headings, top_blocks, items, blocks, links, markdown_links, counts }
 }
 
 #[cfg(test)]

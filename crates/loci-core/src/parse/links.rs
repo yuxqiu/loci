@@ -3,6 +3,7 @@
 use std::ops::Range;
 
 use super::Spanned;
+use crate::id::Slug;
 
 /// Serialized in lowercase (`wiki`, `embed`, `prereq`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -16,7 +17,7 @@ pub enum LinkForm {
 /// A link in the vault's sense (§5.1): a wikilink, an embed or a `prereqs` item, written
 /// `[[target#fragment|label]]` (`![[…]]` for an embed; a prereq is a YAML string
 /// `[[slug]]`). The index resolves it (§5.3), `mv` and `merge` rewrite its target,
-/// export follows it. Made by [`wikilink`] or [`prereq`], spanning the whole `[[…]]`;
+/// export follows it. Made by `wikilink` or `prereq`, spanning the whole `[[…]]`;
 /// a prereq spans its YAML string, quotes included.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Link {
@@ -44,17 +45,33 @@ pub enum Names {
     /// `[[#heading]]`: the linking note itself.
     ThisNote,
     /// `[[bfs]]`: a concept, by slug.
-    Slug(String),
+    Slug(Slug),
+    /// `[[two words]]`: a bare name that is no slug, so it names no concept.
+    Bare(String),
     /// `[[concepts/a/bfs]]`: any vault file, by path.
     Path(String),
+    /// `[[../x]]`, `[[/x]]`: a path that climbs out or starts at the root, so it names
+    /// nothing (`link.path-form`, §5.2).
+    Escaping(String),
 }
 
 impl Names {
-    /// The slug or path; `None` for the linking note itself.
+    /// The name as normalised; `None` for the linking note itself.
     pub fn name(&self) -> Option<&str> {
         match self {
             Names::ThisNote => None,
-            Names::Slug(name) | Names::Path(name) => Some(name),
+            Names::Slug(slug) => Some(slug.as_str()),
+            Names::Bare(name) | Names::Path(name) | Names::Escaping(name) => Some(name),
+        }
+    }
+}
+
+impl Link {
+    /// The concept a `prereqs` item names; `None` for any other link.
+    pub fn prereq_slug(&self) -> Option<&Slug> {
+        match (self.form, &self.target.names) {
+            (LinkForm::Prereq, Names::Slug(slug)) => Some(slug),
+            _ => None,
         }
     }
 }
@@ -74,6 +91,11 @@ impl Fragment {
             None => Self::Heading(s.to_string()),
         }
     }
+}
+
+/// The comparison key for heading fragments (§5.4).
+pub fn heading_key(s: &str) -> String {
+    s.to_lowercase().replace(' ', "-")
 }
 
 /// As written after the `#`.
@@ -118,7 +140,7 @@ pub(super) fn wikilink(text: &str, range: Range<usize>, form: LinkForm) -> Optio
 /// The prereq naming `slug`, the YAML string at `span` (§6.1). Its bytes need not spell
 /// the slug (YAML has escapes), so the whole string is the link and its target; loci
 /// rewrites it with the frontmatter, never in place.
-pub(super) fn prereq(span: Range<usize>, slug: String) -> Spanned<Link> {
+pub(super) fn prereq(span: Range<usize>, slug: Slug) -> Spanned<Link> {
     let target = Spanned::new(Target { names: Names::Slug(slug), fragment: None }, span.clone());
     Spanned::new(Link { form: LinkForm::Prereq, target, label: None }, span)
 }
@@ -131,12 +153,13 @@ fn read_target(written: &str, start: usize) -> Option<Spanned<Target>> {
         Some((name, frag)) => (name, Some(Fragment::parse(frag))),
         None => (s, None),
     };
-    let name = crate::vault::nfc(name.strip_suffix(".md").unwrap_or(name));
+    let name = crate::path::nfc(name.strip_suffix(".md").unwrap_or(name));
     let names = match name {
         _ if name.is_empty() && fragment.is_none() => return None,
         _ if name.is_empty() => Names::ThisNote,
+        _ if name.starts_with('/') || name.split('/').any(|s| s == "..") => Names::Escaping(name),
         _ if name.contains('/') => Names::Path(name),
-        _ => Names::Slug(name),
+        _ => name.parse().map_or(Names::Bare(name), Names::Slug),
     };
     Some(Spanned::new(Target { names, fragment }, start..start + written.len()))
 }
@@ -145,8 +168,8 @@ fn read_target(written: &str, start: usize) -> Option<Spanned<Target>> {
 mod tests {
     use super::*;
     use crate::parse::{Note, parse};
+    use crate::path::Kind;
     use crate::path::VaultPath;
-    use crate::vault::Kind;
 
     fn p(text: &str) -> Note {
         parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, text.to_string())
@@ -154,7 +177,7 @@ mod tests {
 
     #[test]
     fn targets() {
-        let slug = |n: &str| Names::Slug(n.into());
+        let slug = |n: &str| Names::Slug(n.parse().unwrap());
         let t = read_target(" a.md#H ", 0).unwrap();
         assert_eq!((t.node.names, t.node.fragment), (slug("a"), Some(Fragment::Heading("H".into()))));
         assert_eq!(read_target("a#^b1", 0).unwrap().fragment, Some(Fragment::Block("b1".into())));
@@ -169,7 +192,7 @@ mod tests {
         let n = p(t);
         assert_eq!(n.links.len(), 2);
         assert_eq!(n.links[0].target.text(t), "b#H");
-        assert_eq!(n.links[0].target.names, Names::Slug("b".into()));
+        assert_eq!(n.links[0].target.names, Names::Slug("b".parse().unwrap()));
         assert_eq!(n.links[0].target.fragment, Some(Fragment::Heading("H".into())));
         assert_eq!(n.links[1].form, LinkForm::Embed);
         assert_eq!(n.links[1].target.names, Names::Path("x/y.png".into()));
@@ -183,7 +206,7 @@ mod tests {
         let t = "# T\n\n| a | [[b\\|label]] |\n|---|---|\n";
         let n = p(t);
         let l = &n.links[0];
-        assert_eq!((l.target.text(t), &l.target.names), ("b", &Names::Slug("b".into())));
+        assert_eq!((l.target.text(t), &l.target.names), ("b", &Names::Slug("b".parse().unwrap())));
         assert_eq!(l.label.as_ref().map(|l| l.text(t)), Some("label"));
     }
 
@@ -199,6 +222,6 @@ mod tests {
         let t = "# T\n\n| a | b |\n|---|---|\n| [[x\\|y]] | z |\n";
         let n = p(t);
         assert_eq!(n.links.len(), 1);
-        assert_eq!(n.links[0].target.names, Names::Slug("x".into()));
+        assert_eq!(n.links[0].target.names, Names::Slug("x".parse().unwrap()));
     }
 }

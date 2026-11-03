@@ -29,7 +29,7 @@ const SKILL_FILES: &[(&str, &str)] = &[
 
 /// The core skills.
 pub fn skills() -> Vec<Skill> {
-    SKILL_FILES.iter().map(|(name, body)| Skill::from_markdown(name, body)).collect()
+    Skill::compiled(SKILL_FILES)
 }
 
 #[cfg(test)]

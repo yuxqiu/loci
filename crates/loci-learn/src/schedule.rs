@@ -48,11 +48,79 @@ impl Scheduler {
         let due = add_days(last.t, f64::from(days));
         Some(CardState { memory, last: last.t, due })
     }
+
+    /// A concept's estimate and the lines it was computed from (§4.2).
+    pub fn estimate<'a>(
+        &self,
+        note_cards: &[Spanned<Card>],
+        concept: Ulid,
+        lines: &'a [Line],
+        now: Timestamp,
+    ) -> (Estimate, Vec<&'a Line>) {
+        let by_card = lines_by_card(lines);
+        let mut rs = vec![];
+        let mut used: Vec<&Line> = vec![];
+        for c in note_cards {
+            let Some(card_lines) = c.id.valid().and_then(|id| by_card.get(&id)) else { continue };
+            if let Some(state) = self.state(card_lines) {
+                rs.push(state.retrievability(now));
+                used.extend(card_lines.iter().copied());
+            }
+        }
+
+        if !rs.is_empty() {
+            used.sort_by_key(|l| l.t);
+            let r = rs.iter().sum::<f32>() / rs.len() as f32;
+            return (Estimate::Cards { r }, used);
+        }
+
+        let items: Vec<&Line> = lines.iter().filter(|l| l.subject == Subject::Concept(concept)).collect();
+        match items.last() {
+            Some(last) => (Estimate::Item { grade: last.grade, age_days: days_since(last.t, now) }, items),
+            None => (Estimate::Unknown, vec![]),
+        }
+    }
+
+    /// Cards for a session (§2.6 step 3): due cards by due time, then new cards in the
+    /// order of `all` ([`crate::cards::all`]'s order: by note path, then in note order).
+    pub fn select<'a>(
+        &self,
+        all: &'a [Spanned<Card>],
+        lines: &[Line],
+        new_per_day: u32,
+        now: Timestamp,
+    ) -> (Vec<&'a Spanned<Card>>, usize) {
+        let by_card = lines_by_card(lines);
+        let mut due: Vec<(Timestamp, &Spanned<Card>)> = vec![];
+        let mut fresh: Vec<&Spanned<Card>> = vec![];
+        for c in all {
+            let Some(id) = c.id.valid() else { continue };
+            match by_card.get(&id).and_then(|ls| self.state(ls)) {
+                Some(state) if state.due <= now => due.push((state.due, c)),
+                Some(_) => {}
+                None => fresh.push(c),
+            }
+        }
+
+        due.sort_by_key(|(due, c)| (*due, c.id.valid()));
+        let today = now.to_zoned(TimeZone::UTC).date();
+        let introduced_today = by_card
+            .values()
+            .filter(|ls| ls.first().is_some_and(|l| l.t.to_zoned(TimeZone::UTC).date() == today))
+            .count();
+        let allowance = (new_per_day as usize).saturating_sub(introduced_today);
+        let new_count = fresh.len().min(allowance);
+        let mut out: Vec<&Spanned<Card>> = due.into_iter().map(|(_, c)| c).collect();
+        out.extend(fresh.into_iter().take(new_count));
+        (out, new_count)
+    }
 }
 
-/// Retrievability of a card at `now` (§4.1).
-fn retrievability(state: &CardState, now: Timestamp) -> f32 {
-    current_retrievability(state.memory, days_since(state.last, now) as f32, FSRS6_DEFAULT_DECAY)
+impl CardState {
+    /// Retrievability of a card at `now` (§4.1).
+    fn retrievability(&self, now: Timestamp) -> f32 {
+        current_retrievability(self.memory, days_since(self.last, now) as f32, FSRS6_DEFAULT_DECAY)
+    }
 }
 
 /// Days (fractional, not negative) from `then` to `now`.
@@ -93,70 +161,6 @@ pub enum Estimate {
     Unknown,
 }
 
-/// A concept's estimate and the lines it was computed from (§4.2).
-pub fn estimate<'a>(
-    note_cards: &[Spanned<Card>],
-    concept: Ulid,
-    lines: &'a [Line],
-    scheduler: &Scheduler,
-    now: Timestamp,
-) -> (Estimate, Vec<&'a Line>) {
-    let by_card = lines_by_card(lines);
-    let mut rs = vec![];
-    let mut used: Vec<&Line> = vec![];
-    for c in note_cards {
-        let Some(card_lines) = c.id.valid().and_then(|id| by_card.get(&id)) else { continue };
-        if let Some(state) = scheduler.state(card_lines) {
-            rs.push(retrievability(&state, now));
-            used.extend(card_lines.iter().copied());
-        }
-    }
-
-    if !rs.is_empty() {
-        used.sort_by_key(|l| l.t);
-        let r = rs.iter().sum::<f32>() / rs.len() as f32;
-        return (Estimate::Cards { r }, used);
-    }
-
-    let items: Vec<&Line> = lines.iter().filter(|l| l.subject == Subject::Concept(concept)).collect();
-    match items.last() {
-        Some(last) => (Estimate::Item { grade: last.grade, age_days: days_since(last.t, now) }, items),
-        None => (Estimate::Unknown, vec![]),
-    }
-}
-
-/// Cards for a session (§2.6 step 3): due cards by due time, then new cards in the
-/// order of `all` ([`crate::cards::all`]'s order: by note path, then in note order).
-pub fn select<'a>(
-    all: &'a [Spanned<Card>],
-    lines: &[Line],
-    scheduler: &Scheduler,
-    new_per_day: u32,
-    now: Timestamp,
-) -> (Vec<&'a Spanned<Card>>, usize) {
-    let by_card = lines_by_card(lines);
-    let mut due: Vec<(Timestamp, &Spanned<Card>)> = vec![];
-    let mut fresh: Vec<&Spanned<Card>> = vec![];
-    for c in all {
-        let Some(id) = c.id.valid() else { continue };
-        match by_card.get(&id).and_then(|ls| scheduler.state(ls)) {
-            Some(state) if state.due <= now => due.push((state.due, c)),
-            Some(_) => {}
-            None => fresh.push(c),
-        }
-    }
-
-    due.sort_by_key(|(due, c)| (*due, c.id.valid()));
-    let today = now.to_zoned(TimeZone::UTC).date();
-    let introduced_today =
-        by_card.values().filter(|ls| ls.first().is_some_and(|l| l.t.to_zoned(TimeZone::UTC).date() == today)).count();
-    let allowance = (new_per_day as usize).saturating_sub(introduced_today);
-    let new_count = fresh.len().min(allowance);
-    let mut out: Vec<&Spanned<Card>> = due.into_iter().map(|(_, c)| c).collect();
-    out.extend(fresh.into_iter().take(new_count));
-    (out, new_count)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,7 +193,7 @@ mod tests {
         assert!(two.memory.stability > one.memory.stability);
         assert!(one.due > l1.t);
         // At the due time, retrievability is about the desired retention.
-        let r = retrievability(&one, one.due);
+        let r = one.retrievability(one.due);
         assert!((r - 0.9).abs() < 0.02, "{r}");
     }
 
@@ -223,7 +227,7 @@ mod tests {
             card_line(9, "2026-01-01T00:00:00Z", Grade::Good), // no such card
         ];
         let s = Scheduler::new(0.9);
-        let (sel, n) = select(&all, &lines, &s, 2, "2026-10-30T00:00:00Z".parse().unwrap());
+        let (sel, n) = s.select(&all, &lines, 2, "2026-10-30T00:00:00Z".parse().unwrap());
         let ids: Vec<Ulid> = sel.iter().map(|c| c.id.valid().unwrap()).collect();
         assert_eq!(ids, [id(4), id(3), id(2)], "the due card, then new ones in card order");
         assert_eq!(n, 2);
@@ -236,12 +240,12 @@ mod tests {
         let cs = vec![card("concepts/a/x.md", 1), card("concepts/a/x.md", 2)];
         let lines = vec![card_line(1, "2026-10-29T00:00:00Z", Grade::Good)];
         let k = id(7);
-        let (e, used) = estimate(&cs, k, &lines, &s, now);
+        let (e, used) = s.estimate(&cs, k, &lines, now);
         assert!(matches!(e, Estimate::Cards { r } if r > 0.5 && r <= 1.0));
         assert_eq!(used.len(), 1);
         let quiz = vec![Line { subject: Subject::Concept(k), ..card_line(8, "2026-10-28T00:00:00Z", Grade::Hard) }];
-        let (e, _) = estimate(&[], k, &quiz, &s, now);
+        let (e, _) = s.estimate(&[], k, &quiz, now);
         assert!(matches!(e, Estimate::Item { grade: Grade::Hard, age_days } if (age_days - 2.0).abs() < 1e-9));
-        assert_eq!(estimate(&[], k, &[], &s, now).0, Estimate::Unknown);
+        assert_eq!(s.estimate(&[], k, &[], now).0, Estimate::Unknown);
     }
 }

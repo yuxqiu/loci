@@ -8,7 +8,7 @@ mod schedule;
 
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use loci_core::envelope::{Refusal, Report};
 use loci_core::plugin;
 use loci_core::vault::Vault;
@@ -40,15 +40,11 @@ enum Cmd {
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    let command = match &cli.command {
-        Cmd::Lint => "learn lint",
-        Cmd::Skills => "learn skills",
-        Cmd::Log => "learn log",
-        Cmd::State { .. } => "learn state",
-        Cmd::Review => "learn review",
-    };
-    run(cli.command).unwrap_or_else(Report::from).print(cli.json, VERSION, command).into()
+    let matches = Cli::command().get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
+    // As `loci` names a plugin's command: without the `loci-` prefix.
+    let command = format!("learn {}", matches.subcommand_name().expect("clap requires a subcommand"));
+    run(cli.command).unwrap_or_else(Report::from).print(cli.json, VERSION, &command).into()
 }
 
 fn run(cmd: Cmd) -> Result<Report, Refusal> {

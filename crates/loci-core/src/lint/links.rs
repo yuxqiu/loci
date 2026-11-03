@@ -1,9 +1,11 @@
 //! Link rules (m0 §5): wikilinks only, and every link resolves.
 
-use super::{Ctx, managed};
+use super::{Code, Ctx, managed};
 use crate::envelope::{Applicability, Diagnostic, Fix};
-use crate::index::{Index, LinkError};
+use crate::id::Slug;
+use crate::index::{Dangling, Index, LinkError};
 use crate::parse::{FmChange, Link, LinkForm, MarkdownLink, Note, Spanned};
+use crate::path::VaultPath;
 
 pub(super) fn links(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     for note in managed(ctx) {
@@ -12,10 +14,24 @@ pub(super) fn links(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     }
 }
 
+/// The unsafe fix pointing `link` at concept `slug` instead: a prereq is renamed with
+/// its frontmatter (m0 §6.1), a body link in place with its fragment kept.
+fn relink_fix(note: &Note, link: &Spanned<Link>, slug: &Slug) -> Fix {
+    let fix = Fix::new(Applicability::Unsafe, format!("link [[{slug}]]"));
+    match link.prereq_slug() {
+        Some(from) => {
+            fix.frontmatter(&note.path, FmChange::RenamePrereq { from: from.clone(), to: Some(slug.clone()) })
+        }
+        None => {
+            let fragment = link.target.fragment.as_ref().map_or(String::new(), |f| format!("#{f}"));
+            fix.edit(&note.path, link.target.span.clone(), format!("{slug}{fragment}"))
+        }
+    }
+}
+
 /// `link.markdown` for a markdown link to a vault file, with the wikilink that replaces
 /// it as the fix.
 fn markdown_link(note: &Note, m: &Spanned<MarkdownLink>) -> Diagnostic {
-    let (path, text) = (note.path.as_str(), note.text.as_str());
     // Notes are linked without `.md`; other files keep their extension.
     let url = m.url.strip_prefix("./").unwrap_or(&m.url);
     let target = if m.image { url } else { url.strip_suffix(".md").unwrap_or(url) };
@@ -23,80 +39,65 @@ fn markdown_link(note: &Note, m: &Spanned<MarkdownLink>) -> Diagnostic {
     let wiki = format!("{bang}[[{target}]]");
 
     // The link text becomes the label, unless it only repeats the target.
-    let label = m.label.text(text).trim();
+    let label = m.label.text(&note.text).trim();
     let fixed = if label.is_empty() || label == target { wiki.clone() } else { format!("{bang}[[{target}|{label}]]") };
     // A percent-encoded URL (`a%20b.md`) names a file only once decoded: a guess.
     let applicability = if url.contains('%') { Applicability::Unsafe } else { Applicability::Safe };
-    let fix = Fix::new(applicability, format!("write {fixed}")).edit(path, m.span.clone(), fixed);
+    let fix = Fix::new(applicability, format!("write {fixed}")).edit(&note.path, m.span.clone(), fixed);
 
-    Diagnostic::error("link.markdown", format!("a vault target must use a wikilink: `{wiki}`"))
-        .at_path(path)
-        .at(text, m.span.clone())
+    Diagnostic::error(Code::LinkMarkdown, format!("a vault target must use a wikilink: `{wiki}`"))
+        .in_note(note, m.span.clone())
         .with_hint(format!("write {wiki}"))
         .with_fix(fix)
 }
 
 /// The diagnostic for a link that does not resolve (§5.3, §5.4), if it does not.
 fn unresolved(index: &Index, note: &Note, link: &Spanned<Link>) -> Option<Diagnostic> {
-    let at = |code: &str, msg: String| {
-        Diagnostic::error(code, msg).at_path(note.path.as_str()).at(&note.text, link.target.span.clone())
-    };
+    let at = |code: Code, msg: String| Diagnostic::error(code, msg).in_note(note, link.target.span.clone());
 
     let target = target_name(note, link);
     let diag = match index.resolve(note, link).err()? {
-        LinkError::PathForm => at("link.path-form", "`..` or a leading `/` is not allowed in a link".into()),
+        LinkError::PathForm => at(Code::LinkPathForm, "`..` or a leading `/` is not allowed in a link".into()),
 
-        LinkError::Dangling { hint, closest } => {
+        LinkError::Dangling(why) => {
             // A prereq is named by its slug, not its YAML string.
             let shown = if link.form == LinkForm::Prereq { target } else { link.target.text(&note.text) };
-            let mut diag = at("link.dangling", format!("`{shown}` does not resolve"));
-            diag.hint = hint;
-            if let Some(slug) = closest {
-                let fix = Fix::new(Applicability::Unsafe, format!("link [[{slug}]]"));
-                let path = note.path.as_str();
-                diag = diag.with_fix(match link.form {
-                    // A prereq is renamed with its frontmatter (m0 §6.1).
-                    LinkForm::Prereq => fix
-                        .frontmatter(path, FmChange::RenamePrereq { from: target.into(), to: Some(slug.to_string()) }),
-                    _ => {
-                        let fragment = link.target.fragment.as_ref().map_or(String::new(), |f| format!("#{f}"));
-                        fix.edit(path, link.target.span.clone(), format!("{slug}{fragment}"))
-                    }
-                });
+            let diag = at(Code::LinkDangling, format!("`{shown}` does not resolve"));
+            match why {
+                Dangling::Ambiguous(paths) => diag.with_hint(format!(
+                    "several concepts are named `{target}` ({}); link by path",
+                    paths.iter().map(VaultPath::as_str).collect::<Vec<_>>().join(", ")
+                )),
+                Dangling::NoConcept { closest: Some(slug) } => diag
+                    .with_hint(format!("no concept is named `{target}`; did you mean [[{slug}]]?"))
+                    .with_fix(relink_fix(note, link, &slug)),
+                Dangling::NoConcept { closest: None } => diag.with_hint(format!(
+                    "no concept is named `{target}`; create it with `loci new`, or link a non-concept by path"
+                )),
+                Dangling::NoFile => diag,
             }
-            diag
         }
 
         // The real choices, so a renamed heading can be relinked without opening the
         // note; picking one is judgement, so there is no fix.
-        LinkError::Heading => {
-            let headings: Vec<&str> = index
-                .link_target(note, link)
-                .and_then(|p| index.parsed(&p))
-                .iter()
-                .flat_map(|t| &t.headings)
-                .map(|h| h.content.as_str())
-                .collect();
+        LinkError::Heading { note: target_note, heading } => {
+            let target_note = index.parsed(&target_note).expect("a heading is checked in a parsed note");
+            let headings: Vec<&str> = target_note.headings.iter().map(|h| h.content.as_str()).collect();
             let hint = if headings.is_empty() {
                 "it has no headings".to_string()
             } else {
                 format!("its headings are: {}", headings.join(", "))
             };
-            at("link.dangling-heading", format!("`{target}` has no heading `{}`", fragment(link))).with_hint(hint)
+            at(Code::LinkDanglingHeading, format!("`{target}` has no heading `{heading}`")).with_hint(hint)
         }
 
-        LinkError::Block => at("link.dangling-block", format!("`{target}` has no block `{}`", fragment(link)))
+        LinkError::Block { id, .. } => at(Code::LinkDanglingBlock, format!("`{target}` has no block `^{id}`"))
             .with_hint(
                 "the block was removed or its id changed; link the note, or another block by the `^id` that ends it",
             ),
     };
 
     Some(diag)
-}
-
-/// A link's fragment as written after the `#`.
-fn fragment(link: &Spanned<Link>) -> String {
-    link.target.fragment.as_ref().map(ToString::to_string).unwrap_or_default()
 }
 
 /// What `link` names, for messages: its slug or path, or the linking note's own name.

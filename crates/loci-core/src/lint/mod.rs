@@ -2,12 +2,14 @@
 //! category, in the submodules.
 
 mod areas;
+mod code;
 mod concepts;
 mod disk;
 mod links;
 mod notes;
 mod paths;
 
+pub use code::Code;
 use concepts::CONCEPT_FIELDS;
 use disk::DISK_CODES;
 pub use disk::disk_rules;
@@ -21,9 +23,26 @@ use crate::parse::Note;
 /// check. Adding a rule is adding a row; a rule a vault update retires gets
 /// `Editions::until` that update.
 struct Rule {
-    codes: &'static [&'static str],
+    codes: Codes,
     editions: Editions,
     check: fn(&Ctx, &mut Vec<Diagnostic>),
+}
+
+/// The codes a rule reports.
+enum Codes {
+    These(&'static [Code]),
+    /// `update.<id>`, for the updates the tables name.
+    Updates,
+}
+
+impl Codes {
+    fn contains(&self, code: Code) -> bool {
+        match (self, code) {
+            (Codes::These(codes), code) => codes.contains(&code),
+            (Codes::Updates, Code::Update(id)) => update_ids().contains(&id),
+            (Codes::Updates, _) => false,
+        }
+    }
 }
 
 /// The index rules, by category (one submodule each); the output is sorted. The rules
@@ -31,53 +50,67 @@ struct Rule {
 const RULES: &[Rule] = &[
     // Paths.
     Rule {
-        codes: &["kind.unknown", "sources.layout", "slug.format", "journal.path", "path.not-nfc", "inbox.root-file"],
+        codes: Codes::These(&[
+            Code::KindUnknown,
+            Code::SourcesLayout,
+            Code::SlugFormat,
+            Code::JournalPath,
+            Code::PathNotNfc,
+            Code::InboxRootFile,
+        ]),
         editions: Editions::ALWAYS,
         check: paths::paths,
     },
-    // Every managed note.
+    // Notes: every managed note, but `size.note` (concepts).
     Rule {
-        codes: &["file.bom", "fm.unterminated", "fm.yaml", "fm.not-allowed"],
+        codes: Codes::These(&[Code::FileBom, Code::FmUnterminated, Code::FmYaml, Code::FmNotAllowed]),
         editions: Editions::ALWAYS,
         check: notes::note_format,
     },
-    Rule { codes: &["h1.missing", "h1.multiple", "h1.not-first"], editions: Editions::ALWAYS, check: notes::h1 },
-    Rule { codes: &["block.id-duplicate"], editions: Editions::ALWAYS, check: notes::block_ids },
-    Rule { codes: &["size.note"], editions: Editions::ALWAYS, check: notes::note_size },
+    Rule {
+        codes: Codes::These(&[Code::H1Missing, Code::H1Multiple, Code::H1NotFirst]),
+        editions: Editions::ALWAYS,
+        check: notes::h1,
+    },
+    Rule { codes: Codes::These(&[Code::BlockIdDuplicate]), editions: Editions::ALWAYS, check: notes::block_ids },
+    Rule { codes: Codes::These(&[Code::SizeNote]), editions: Editions::ALWAYS, check: notes::note_size },
     // Links.
     Rule {
-        codes: &["link.markdown", "link.dangling", "link.path-form", "link.dangling-heading", "link.dangling-block"],
+        codes: Codes::These(&[
+            Code::LinkMarkdown,
+            Code::LinkDangling,
+            Code::LinkPathForm,
+            Code::LinkDanglingHeading,
+            Code::LinkDanglingBlock,
+        ]),
         editions: Editions::ALWAYS,
         check: links::links,
     },
     // Concepts.
     Rule {
-        codes: &["fm.unknown-field", "fm.missing-field", "fm.id-format", "fm.field-type"],
+        codes: Codes::These(&[Code::FmUnknownField, Code::FmMissingField, Code::FmIdFormat, Code::FmFieldType]),
         editions: Editions::ALWAYS,
         check: concepts::concept_fields,
     },
-    Rule { codes: &[UPDATE_CODES], editions: Editions::ALWAYS, check: concepts::outdated_fields },
-    Rule { codes: &["fm.id-duplicate", "slug.duplicate"], editions: Editions::ALWAYS, check: concepts::duplicates },
-    Rule { codes: &["prereqs.cycle"], editions: Editions::ALWAYS, check: concepts::prereq_cycles },
+    Rule { codes: Codes::Updates, editions: Editions::ALWAYS, check: concepts::outdated_fields },
+    Rule {
+        codes: Codes::These(&[Code::FmIdDuplicate, Code::SlugDuplicate]),
+        editions: Editions::ALWAYS,
+        check: concepts::duplicates,
+    },
+    Rule { codes: Codes::These(&[Code::PrereqsCycle]), editions: Editions::ALWAYS, check: concepts::prereq_cycles },
     // Areas.
-    Rule { codes: &["area.missing", "area.format", "area.too-long"], editions: Editions::ALWAYS, check: areas::areas },
+    Rule {
+        codes: Codes::These(&[Code::AreaMissing, Code::AreaFormat, Code::AreaTooLong]),
+        editions: Editions::ALWAYS,
+        check: areas::areas,
+    },
 ];
 
-/// How [`RULES`] lists the `update.<id>` codes: one per vault update.
-const UPDATE_CODES: &str = "update.<id>";
-
-/// The code for the old form of vault update `id` (one a pending update changes).
-pub fn update_code(id: UpdateId) -> String {
-    format!("update.{id}")
-}
-
-/// Whether `code` is a code core lint reports: one in a rule's row, or `update.<id>`
+/// `code` as a code core lint reports, if it is one: in a rule's row, or `update.<id>`
 /// for an update the tables name.
-pub fn known_code(code: &str) -> bool {
-    match code.strip_prefix("update.").map(str::parse::<UpdateId>) {
-        Some(id) => id.is_ok_and(|id| update_ids().contains(&id)),
-        None => RULES.iter().flat_map(|r| r.codes).chain(DISK_CODES).any(|c| *c == code),
-    }
+pub fn core_code(code: &str) -> Option<Code> {
+    code.parse::<Code>().ok().filter(|c| RULES.iter().any(|r| r.codes.contains(*c)) || DISK_CODES.contains(c))
 }
 
 /// Every vault update the tables name, for the check that each has its entry.
@@ -105,10 +138,7 @@ pub fn run(index: &Index, config: &Config) -> Vec<Diagnostic> {
         let from = out.len();
         (rule.check)(&ctx, &mut out);
         debug_assert!(
-            out[from..].iter().all(|d| rule
-                .codes
-                .iter()
-                .any(|c| *c == d.code || (*c == UPDATE_CODES && d.code.starts_with("update.")))),
+            out[from..].iter().all(|d| d.code.parse().is_ok_and(|c| rule.codes.contains(c))),
             "a rule reports only the codes in its row: {:?}",
             out[from..].iter().map(|d| &d.code).collect::<Vec<_>>()
         );
@@ -128,10 +158,10 @@ mod tests {
     use crate::path::VaultPath;
 
     fn lint(files: &[(&str, &str)]) -> Vec<(String, String)> {
-        let index = crate::index::from_texts(files);
+        let index = crate::index::Index::from_texts(files);
         run(&index, &Config::parse("schema = 1\n").unwrap())
             .into_iter()
-            .map(|d| (d.path().unwrap_or_default().to_string(), d.code))
+            .map(|d| (d.path().map_or_else(String::new, ToString::to_string), d.code))
             .collect()
     }
 
@@ -142,7 +172,7 @@ mod tests {
             let files = [("concepts/a/y.md", note.as_str()), ("concepts/a/x.md", "")];
             let d = lint(&files);
             assert!(d.contains(&("concepts/a/y.md".into(), "fm.field-type".into())), "{bad}: {d:?}");
-            let index = crate::index::from_texts(&files);
+            let index = crate::index::Index::from_texts(&files);
             assert!(
                 index.parsed(&VaultPath::new("concepts/a/y.md".into()).unwrap()).unwrap().links.is_empty(),
                 "{bad} is not a link"
@@ -156,9 +186,9 @@ mod tests {
         let files = [("concepts/a/x.md", note), ("concepts/a/AREA.md", "# A\n\nArea.\n"), ("concepts/a/café.md", "")];
         let d = lint(&files);
         assert!(!d.iter().any(|(p, c)| p == "concepts/a/x.md" && c == "fm.field-type"), "{d:?}");
-        let index = crate::index::from_texts(&files);
+        let index = crate::index::Index::from_texts(&files);
         let x = index.parsed(&VaultPath::new("concepts/a/x.md".into()).unwrap()).unwrap();
-        assert_eq!(x.links[0].target.names, crate::parse::Names::Slug("café".into()));
+        assert_eq!(x.links[0].target.names, crate::parse::Names::Slug("café".parse().unwrap()));
     }
 
     const OK: &str = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# A\n\nSee [[journal/r/2025/03/25-03-14]].\n";

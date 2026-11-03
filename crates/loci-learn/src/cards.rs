@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use loci_core::id::Ulid;
 use loci_core::index::Index;
-use loci_core::parse::{BlockKind, BlockType, Note, Spanned};
+use loci_core::parse::{BlockType, Note, Spanned};
 use loci_core::path::VaultPath;
 
 pub const SECTION: &str = "Cards";
@@ -82,19 +82,18 @@ pub fn of_note(note: &Note) -> (Vec<Spanned<Card>>, Vec<Spanned<FormatIssue>>) {
 
     let mut cards = vec![];
     for item in items {
-        let id = note.blocks.iter().find(|b| b.kind == BlockKind::Item && b.span == item.span);
+        let id = item.id.as_ref();
         // The item's content, after its list marker, without its block id (cut by its
         // byte range).
         let content = item.marker.span.end..item.span.end;
         let mut raw = note.text[content.clone()].to_string();
-        if let Some(b) = id {
-            let (start, end) = (b.id.span.start - content.start, b.id.span.end - content.start);
+        if let Some(id) = id {
+            let (start, end) = (id.span.start - content.start, id.span.end - content.start);
             raw = format!("{}{}", raw[..start].trim_end(), &raw[end..]);
         }
         match split(&raw) {
             Some((question, answer)) => {
-                let card =
-                    Card { path: note.path.clone(), id: CardId::of(id.map(|b| b.id.as_str())), question, answer };
+                let card = Card { path: note.path.clone(), id: CardId::of(id.map(|id| id.as_str())), question, answer };
                 cards.push(Spanned::new(card, item.span.clone()));
             }
             None => issues.push(issue(&item.span)),
@@ -124,7 +123,7 @@ fn split(raw: &str) -> Option<(String, String)> {
 mod tests {
     use super::*;
     use loci_core::parse::parse;
-    use loci_core::vault::Kind;
+    use loci_core::path::Kind;
 
     fn cards(body: &str) -> (Vec<Spanned<Card>>, Vec<Spanned<FormatIssue>>) {
         let text = format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# T\n\n{body}");

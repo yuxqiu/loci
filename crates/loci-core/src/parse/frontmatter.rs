@@ -7,10 +7,10 @@ use std::ops::Range;
 use saphyr::{LoadableYamlNode, Mapping, MarkedYaml, Scalar, Yaml, YamlData, YamlEmitter};
 use serde::{Deserialize, Serialize};
 
-use super::body::Walker;
+use super::body::{Meta, Walker};
 use super::links::prereq;
 use super::*;
-use crate::id::Ulid;
+use crate::id::{Slug, Ulid};
 use crate::splice::Edit;
 
 /// A frontmatter value, spanned in its entry; a string's span includes its quotes.
@@ -20,6 +20,16 @@ pub enum FmValue {
     List(Vec<Spanned<FmValue>>),
     /// Any other YAML value (number, bool, null, mapping).
     Other,
+}
+
+impl FmValue {
+    /// Whether this `prereqs` item is an unquoted `[[slug]]`, which YAML reads as a list
+    /// holding a list holding the slug (the `Yaml` form is `quote_prereqs`'s).
+    pub fn is_unquoted_prereq(&self) -> bool {
+        let FmValue::List(items) = self else { return false };
+        let [Spanned { node: FmValue::List(items), .. }] = items.as_slice() else { return false };
+        matches!(items.as_slice(), [Spanned { node: FmValue::Str(value), .. }] if value.parse::<Slug>().is_ok())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,8 +46,8 @@ pub enum Frontmatter {
     Unterminated,
     /// A closed block that is not a YAML mapping, and why.
     Invalid(String),
-    /// A YAML mapping: its fields.
-    Fields(Vec<FmEntry>),
+    /// A YAML mapping: its fields, and the YAML text they were read from.
+    Fields { entries: Vec<FmEntry>, yaml: Range<usize> },
 }
 
 impl Frontmatter {
@@ -49,7 +59,7 @@ impl Frontmatter {
     /// The fields: none unless the block is a YAML mapping.
     pub fn entries(&self) -> &[FmEntry] {
         match self {
-            Frontmatter::Fields(entries) => entries,
+            Frontmatter::Fields { entries, .. } => entries,
             Frontmatter::Unterminated | Frontmatter::Invalid(_) => &[],
         }
     }
@@ -61,7 +71,7 @@ impl Frontmatter {
 
 /// The frontmatter (§4.3): a YAML metadata block at the start of the file.
 pub(super) fn frontmatter(text: &str, base: usize, body: &Walker) -> Option<Spanned<Frontmatter>> {
-    let Some(span) = body.meta_block.clone().filter(|r| r.start == base) else {
+    let Some(Meta { block: span, yaml }) = body.meta.as_ref().filter(|m| m.block.start == base) else {
         let rest = &text[base..];
         let opening =
             ["---\n", "---\r\n"].into_iter().find(|o| rest.starts_with(o)).or((rest == "---").then_some("---"));
@@ -71,9 +81,9 @@ pub(super) fn frontmatter(text: &str, base: usize, body: &Walker) -> Option<Span
     let rest = &text[span.end..];
     let line_break = ["\r\n", "\n"].into_iter().find(|b| rest.starts_with(b)).map_or(0, str::len);
     let span = span.start..span.end + line_break;
-    let yaml = body.meta_text.clone().unwrap_or(span.start..span.start);
+
     let frontmatter = match parse_yaml(&text[yaml.clone()], yaml.start) {
-        Ok(entries) => Frontmatter::Fields(entries),
+        Ok(entries) => Frontmatter::Fields { entries, yaml: yaml.clone() },
         Err(reason) => Frontmatter::Invalid(reason),
     };
     Some(Spanned::new(frontmatter, span))
@@ -82,7 +92,7 @@ pub(super) fn frontmatter(text: &str, base: usize, body: &Walker) -> Option<Span
 /// The `prereqs` links (§6.1): each string item `[[<slug>]]`. Any other item is no link,
 /// and lint reports it (`fm.field-type`).
 pub(super) fn frontmatter_links(fm: &Frontmatter) -> Vec<Spanned<Link>> {
-    let items = match fm.get("prereqs").map(|e| &e.value.node) {
+    let items = match fm.get(ConceptField::Prereqs.key()).map(|e| &e.value.node) {
         Some(FmValue::List(items)) => items.as_slice(),
         _ => &[],
     };
@@ -94,76 +104,117 @@ pub(super) fn frontmatter_links(fm: &Frontmatter) -> Vec<Spanned<Link>> {
 }
 
 /// The slug a `prereqs` item `[[<slug>]]` names, normalised as a link's (§5.2).
-pub fn prereq_slug(item: &str) -> Option<String> {
-    let slug = item.strip_prefix("[[")?.strip_suffix("]]")?.parse::<crate::id::Slug>().ok()?;
-    Some(crate::vault::nfc(&slug.to_string()))
+pub fn prereq_slug(item: &str) -> Option<Slug> {
+    crate::path::nfc(item.strip_prefix("[[")?.strip_suffix("]]")?).parse().ok()
+}
+
+/// A concept frontmatter field (§6.1): the current ones, and those a vault update
+/// removes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConceptField {
+    Id,
+    Prereqs,
+    Digest,
+}
+
+impl ConceptField {
+    /// The field's key.
+    pub const fn key(self) -> &'static str {
+        match self {
+            ConceptField::Id => "id",
+            ConceptField::Prereqs => "prereqs",
+            ConceptField::Digest => "digest",
+        }
+    }
 }
 
 /// A change to a concept's frontmatter (§6.1), by key or slug rather than by bytes, so
-/// changes to one block compose: [`rewrite_frontmatter`] applies a note's changes in
+/// changes to one block compose: [`Note::rewrite_frontmatter`] applies a note's changes in
 /// one rewrite.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FmChange {
     /// Sets `id`, as the first key when there is none.
     SetId(Ulid),
-    RemoveField(String),
+    RemoveField(ConceptField),
     /// Quotes every unquoted `[[slug]]` in `prereqs` (YAML reads one as a list holding
     /// a list holding the slug).
     QuotePrereqs,
     /// Renames prereq `from` to `to`, or removes it; a `prereqs` list left empty loses
     /// its key.
     RenamePrereq {
-        from: String,
-        to: Option<String>,
+        from: Slug,
+        to: Option<Slug>,
     },
 }
 
-/// The edit that rewrites `note`'s frontmatter (§6.1) with `changes`: the whole block
-/// in saphyr's canonical form, comments not kept. A note without frontmatter gets a
-/// block at the start of its body; a mapping left empty loses its block.
-///
-/// # Panics
-/// When the frontmatter is broken (unterminated or not a mapping): it is not edited.
-pub fn rewrite_frontmatter(note: &Note, changes: &[FmChange]) -> Edit {
-    let (span, block) = match &note.frontmatter {
-        None => (note.body_start()..note.body_start(), ""),
-        Some(f) if matches!(f.node, Frontmatter::Fields(_)) => (f.span.clone(), f.text(&note.text)),
-        Some(_) => panic!("{}: broken frontmatter is not rewritten", note.path),
-    };
+impl Note {
+    /// The edit that rewrites the note's frontmatter (§6.1) with `changes`: the whole block
+    /// in saphyr's canonical form, comments not kept. A note without frontmatter gets a
+    /// block at the start of its body; a mapping left empty loses its block.
+    ///
+    /// # Panics
+    /// When the frontmatter is broken (unterminated or not a mapping): it is not edited.
+    pub fn rewrite_frontmatter(&self, changes: &[FmChange]) -> Edit {
+        let (span, yaml) = match &self.frontmatter {
+            None => (self.body_start()..self.body_start(), ""),
+            Some(Spanned { node: Frontmatter::Fields { yaml, .. }, span }) => (span.clone(), &self.text[yaml.clone()]),
+            Some(_) => panic!("{}: broken frontmatter is not rewritten", self.path),
+        };
 
-    // The block is a YAML document between `---` lines; the closing line opens an
-    // empty second one.
-    let docs = Yaml::load_from_str(block).expect("a parsed frontmatter loads");
-    let mut map = match docs.into_iter().next() {
-        Some(Yaml::Mapping(map)) => map,
-        None | Some(Yaml::Value(Scalar::Null)) => Mapping::new(),
-        Some(other) => panic!("{}: frontmatter is not a mapping: {other:?}", note.path),
-    };
+        let docs = Yaml::load_from_str(yaml).expect("a parsed frontmatter loads");
+        let mut map = match docs.into_iter().next() {
+            Some(Yaml::Mapping(map)) => map,
+            None | Some(Yaml::Value(Scalar::Null)) => Mapping::new(),
+            Some(other) => panic!("{}: frontmatter is not a mapping: {other:?}", self.path),
+        };
 
-    // Renames go in one sweep, so `a -> b` beside `b -> c` renames each item once.
-    let mut renames: BTreeMap<&str, Option<&str>> = BTreeMap::new();
-    for change in changes {
-        match change {
-            FmChange::SetId(id) => set_id(&mut map, *id),
-            FmChange::RemoveField(key) => _ = map.remove(&string_node(key.clone())),
-            FmChange::QuotePrereqs => quote_prereqs(&mut map),
-            FmChange::RenamePrereq { from, to } => _ = renames.insert(from, to.as_deref()),
+        // Renames go in one sweep, so `a -> b` beside `b -> c` renames each item once.
+        let mut renames: BTreeMap<&Slug, Option<&Slug>> = BTreeMap::new();
+        for change in changes {
+            match change {
+                FmChange::SetId(id) => set_id(&mut map, *id),
+                FmChange::RemoveField(field) => _ = map.remove(&string_node(field.key())),
+                FmChange::QuotePrereqs => quote_prereqs(&mut map),
+                FmChange::RenamePrereq { from, to } => _ = renames.insert(from, to.as_ref()),
+            }
         }
-    }
-    if !renames.is_empty() {
-        rename_prereqs(&mut map, &renames);
-    }
-    if map.is_empty() {
-        // The blank lines after the block go with it, so the note starts with its text.
-        let end = span.end + blank_lines(&note.text[span.end..]);
-        return Edit::replace(span.start..end, "");
+        if !renames.is_empty() {
+            rename_prereqs(&mut map, &renames);
+        }
+        if map.is_empty() {
+            return Edit::replace(self.frontmatter_reach(), "");
+        }
+
+        Edit::replace(span, emit(map))
     }
 
+    /// The bytes a rewrite of the frontmatter may replace: the block, or where one goes,
+    /// and the blank lines after it, which go with a removed block so the note starts
+    /// with its text.
+    pub fn frontmatter_reach(&self) -> Range<usize> {
+        let block = self.frontmatter.as_ref().map_or(self.body_start()..self.body_start(), |f| f.span.clone());
+        block.start..block.end + blank_lines(&self.text[block.end..])
+    }
+}
+
+/// The frontmatter of a new concept (m0 §9.7): its id and empty prereqs, written as
+/// every rewrite writes frontmatter.
+pub fn new_concept_frontmatter(id: Ulid) -> String {
+    let mut map = Mapping::new();
+    map.insert(string_node(ConceptField::Id.key()), string_node(id.to_string()));
+    map.insert(string_node(ConceptField::Prereqs.key()), Yaml::Sequence(vec![]));
+    emit(map)
+}
+
+/// The frontmatter block holding `map`, in saphyr's canonical form (§6.1): the one
+/// writer of frontmatter.
+fn emit(map: Mapping) -> String {
     // `---` and the mapping, without a final line break.
     let mut out = String::new();
     YamlEmitter::new(&mut out).dump(&Yaml::Mapping(map)).expect("writing to a string cannot fail");
-    Edit::replace(span, out + "\n---\n")
+    out + "\n---\n"
 }
 
 /// The length of the whitespace-only lines, breaks included, at the start of `text`.
@@ -172,7 +223,7 @@ fn blank_lines(text: &str) -> usize {
 }
 
 fn set_id(map: &mut Mapping, id: Ulid) {
-    let (key, value) = (string_node("id"), string_node(id.to_string()));
+    let (key, value) = (string_node(ConceptField::Id.key()), string_node(id.to_string()));
     match map.get_mut(&key) {
         Some(old) => *old = value,
         None => {
@@ -183,27 +234,28 @@ fn set_id(map: &mut Mapping, id: Ulid) {
     }
 }
 
-/// Quotes every unquoted `[[slug]]` in `prereqs`.
+/// Quotes every unquoted `[[slug]]` in `prereqs` (the parsed form is
+/// [`FmValue::is_unquoted_prereq`]'s).
 fn quote_prereqs(map: &mut Mapping) {
-    let Some(Yaml::Sequence(items)) = map.get_mut(&string_node("prereqs")) else { return };
+    let Some(Yaml::Sequence(items)) = map.get_mut(&string_node(ConceptField::Prereqs.key())) else { return };
     for item in items {
         let Yaml::Sequence(outer) = item else { continue };
         let [Yaml::Sequence(inner)] = outer.as_slice() else { continue };
         let [Yaml::Value(Scalar::String(slug))] = inner.as_slice() else { continue };
-        if slug.parse::<crate::id::Slug>().is_ok() {
-            *item = prereq_item(&slug.clone());
+        if let Ok(slug) = slug.parse::<Slug>() {
+            *item = prereq_item(&slug);
         }
     }
 }
 
 /// Renames or removes the `prereqs` items named in `renames` (slug -> new slug, or
 /// `None`); a list left empty loses its key.
-fn rename_prereqs(map: &mut Mapping, renames: &BTreeMap<&str, Option<&str>>) {
-    let key = string_node("prereqs");
+fn rename_prereqs(map: &mut Mapping, renames: &BTreeMap<&Slug, Option<&Slug>>) {
+    let key = string_node(ConceptField::Prereqs.key());
     let Some(Yaml::Sequence(items)) = map.get_mut(&key) else { return };
     items.retain_mut(|item| {
         let Yaml::Value(Scalar::String(s)) = item else { return true };
-        match prereq_slug(s).and_then(|slug| renames.get(slug.as_str()).copied()) {
+        match prereq_slug(s).and_then(|slug| renames.get(&slug).copied()) {
             None => true,
             Some(None) => false,
             Some(Some(new)) => {
@@ -218,7 +270,7 @@ fn rename_prereqs(map: &mut Mapping, renames: &BTreeMap<&str, Option<&str>>) {
 }
 
 /// The `prereqs` item naming `slug`.
-fn prereq_item<'a>(slug: &str) -> Yaml<'a> {
+fn prereq_item<'a>(slug: &Slug) -> Yaml<'a> {
     string_node(format!("[[{slug}]]"))
 }
 
@@ -289,8 +341,8 @@ impl Source {
 mod tests {
     use super::*;
     use crate::parse::{Note, parse};
+    use crate::path::Kind;
     use crate::path::VaultPath;
-    use crate::vault::Kind;
 
     fn p(text: &str) -> Note {
         parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, text.to_string())
@@ -306,7 +358,7 @@ mod tests {
         let prereqs: Vec<_> = n.links.iter().filter(|l| l.form == LinkForm::Prereq).collect();
         assert_eq!(prereqs.len(), 2);
         assert_eq!(&t[prereqs[1].target.span.clone()], "\"[[二分]]\"");
-        assert_eq!(prereqs[1].target.names, Names::Slug("二分".into()));
+        assert_eq!(prereqs[1].target.names, Names::Slug("二分".parse().unwrap()));
     }
 
     #[test]
@@ -318,7 +370,7 @@ mod tests {
 
     fn rewritten(text: &str, changes: &[FmChange]) -> String {
         let n = p(text);
-        crate::splice::apply(text, vec![rewrite_frontmatter(&n, changes)]).unwrap()
+        crate::splice::apply(text, vec![n.rewrite_frontmatter(changes)]).unwrap()
     }
 
     const ID: &str = "01JB9XQ7Z3K4M5N6P7Q8R9S0TV";
@@ -329,15 +381,17 @@ mod tests {
 
     #[test]
     fn rewrite_is_canonical_and_composes() {
-        let t = "---\nnote: x # why\nprereqs: [\"[[a]]\", [[b]], '[[c]]']\n---\n# T\n";
-        let rename =
-            |from: &str, to: Option<&str>| FmChange::RenamePrereq { from: from.into(), to: to.map(Into::into) };
+        let t = "---\ndigest: x # why\nprereqs: [\"[[a]]\", [[b]], '[[c]]']\n---\n# T\n";
+        let rename = |from: &str, to: Option<&str>| FmChange::RenamePrereq {
+            from: from.parse().unwrap(),
+            to: to.map(|t| t.parse().unwrap()),
+        };
         let changes = [
             set_id(),
             FmChange::QuotePrereqs,
             rename("a", Some("c")),
             rename("c", None),
-            FmChange::RemoveField("note".into()),
+            FmChange::RemoveField(ConceptField::Digest),
         ];
         let out = rewritten(t, &changes);
         assert_eq!(out, format!("---\nid: {ID}\nprereqs:\n  - \"[[c]]\"\n  - \"[[b]]\"\n---\n# T\n"));
@@ -348,22 +402,22 @@ mod tests {
     fn rewrite_adds_and_drops_the_block() {
         let added = rewritten("# T\n", &[set_id()]);
         assert_eq!(added, format!("---\nid: {ID}\n---\n# T\n"));
-        assert_eq!(rewritten(&added, &[FmChange::RemoveField("id".into())]), "# T\n");
-        let remove = [FmChange::RemoveField("id".into())];
+        let remove = [FmChange::RemoveField(ConceptField::Id)];
+        assert_eq!(rewritten(&added, &remove), "# T\n");
         let spaced = format!("---\nid: {ID}\n---\n\n \r\n\t\n# T\n");
         assert_eq!(rewritten(&spaced, &remove), "# T\n", "the blank lines after a removed block go with it");
         let code = format!("---\nid: {ID}\n---\n\n    code\n");
         assert_eq!(rewritten(&code, &remove), "    code\n", "not the indentation of the first line");
         assert_eq!(rewritten("\u{feff}# T\n", &[set_id()]), format!("\u{feff}---\nid: {ID}\n---\n# T\n"));
         let one = format!("---\nid: {ID}\nprereqs:\n  - \"[[a]]\"\n---\n# T\n");
-        let gone = [FmChange::RenamePrereq { from: "a".into(), to: None }];
+        let gone = [FmChange::RenamePrereq { from: "a".parse().unwrap(), to: None }];
         assert_eq!(rewritten(&one, &gone), format!("---\nid: {ID}\n---\n# T\n"), "an emptied list loses its key");
     }
 
     #[test]
     fn unquoted_prereq_is_nested_list() {
         let n = p("---\nprereqs: [[a]]\n---\n# T\n");
-        let fm = n.frontmatter.unwrap();
+        let fm = n.markdown.frontmatter.unwrap();
         let FmValue::List(items) = &fm.get("prereqs").unwrap().value.node else { panic!() };
         assert!(matches!(items[0].node, FmValue::List(_)));
     }
@@ -371,7 +425,7 @@ mod tests {
     #[test]
     fn duplicate_keys_rejected() {
         let n = p("---\nid: a\nid: b\n---\n# T\n");
-        assert!(matches!(n.frontmatter.unwrap().node, Frontmatter::Invalid(_)));
+        assert!(matches!(n.markdown.frontmatter.unwrap().node, Frontmatter::Invalid(_)));
     }
 
     #[test]

@@ -12,6 +12,7 @@ use std::sync::LazyLock;
 use pulldown_cmark::{CodeBlockKind, CowStr, Event, LinkType, MetadataBlockKind, Parser, Tag};
 use regex::Regex;
 
+use super::blocks::trailing_id;
 use super::links::wikilink;
 use super::*;
 
@@ -45,6 +46,12 @@ pub(super) fn walk_body(text: &str, base: usize) -> Walker<'_> {
     w.items.sort_by_key(|i| i.span.start);
     w.markdown_links.sort_by_key(|m| m.span.start);
     w
+}
+
+/// A YAML metadata block: its bytes, `---` lines included, and the YAML text inside.
+pub(super) struct Meta {
+    pub(super) block: Range<usize>,
+    pub(super) yaml: Range<usize>,
 }
 
 /// An element that has opened and not yet closed.
@@ -83,9 +90,8 @@ pub(super) struct Walker<'a> {
     /// The paragraphs, where block ids may end (§4.6), but for an item's leading
     /// paragraph, whose id is the item's.
     pub(super) paragraphs: Vec<Range<usize>>,
-    /// The YAML metadata block, `---` lines included, and the YAML text inside it.
-    pub(super) meta_block: Option<Range<usize>>,
-    pub(super) meta_text: Option<Range<usize>>,
+    /// The YAML metadata block.
+    pub(super) meta: Option<Meta>,
 
     text: &'a str,
     stack: Vec<Open<'a>>,
@@ -158,8 +164,9 @@ impl<'a> Walker<'a> {
         let Open { kind, span, inner } = self.stack.pop().expect("an element is open");
         match kind {
             OpenKind::Metadata => {
-                self.meta_block = Some(span);
-                self.meta_text = inner;
+                // An empty block (`---` then `---`) holds an empty YAML text.
+                let yaml = inner.unwrap_or(span.start..span.start);
+                self.meta = Some(Meta { block: span, yaml });
             }
             OpenKind::Heading(level) => {
                 let heading = heading(self.text, level, &span, inner);
@@ -173,7 +180,8 @@ impl<'a> Walker<'a> {
                 // whitespace (a line break, the next line's indent) is not its text.
                 let lead = lead.unwrap_or(marker.span.end..span.end);
                 let lead = Spanned::new(Lead, lead.start..lead.start + self.text[lead].trim_end().len());
-                self.items.push(Spanned::new(ListItem { depth, marker, lead }, span));
+                let id = trailing_id(self.text, &lead.span);
+                self.items.push(Spanned::new(ListItem { depth, marker, lead, id }, span));
             }
             OpenKind::Link { link_type, dest, image } => {
                 let label = inner.unwrap_or(span.end..span.end);

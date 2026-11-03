@@ -3,8 +3,6 @@
 
 use loci_core::config::{self, Config, UpdateId};
 use loci_core::envelope::{Refusal, Report};
-use loci_core::path::VaultPath;
-use loci_core::vault::Kind;
 use serde::Serialize;
 use serde_json::json;
 
@@ -39,8 +37,7 @@ pub fn all() -> Vec<Update> {
 /// The entries of `list`: each is a level-2 heading `<id> · <date> · <title>` and its
 /// section, as loci's markdown parser reads them (a `## ` line in a code block is text).
 fn parse(list: &str) -> Vec<Update> {
-    let path = VaultPath::new("updates.md".into()).expect("one segment is a vault path");
-    let note = loci_core::parse::parse(&path, Kind::Unknown, list.to_string());
+    let note = loci_core::parse::markdown(list.to_string());
     (0..note.headings.len())
         .filter(|&i| note.headings[i].level == 2)
         .map(|i| {
@@ -135,7 +132,7 @@ mod tests {
         let list = all();
         for id in loci_core::lint::update_ids() {
             let entry = list.iter().find(|u| u.id == id).unwrap_or_else(|| panic!("{id} is in updates.md"));
-            let code = loci_core::lint::update_code(id);
+            let code = loci_core::lint::Code::Update(id);
             assert!(entry.text.contains(&format!("--only {code}")), "{id}'s How runs `loci lint --fix --only {code}`");
             let done = entry.text.split("**Done when:**").nth(1).expect("an entry has Done when");
             assert!(done.contains(&format!("`{code}`")), "{id}'s Done when names `{code}`");

@@ -4,7 +4,6 @@
 use std::time::{Duration, SystemTime};
 
 use loci_core::envelope::{Diagnostic, Refusal, Report, sort_diagnostics};
-use loci_core::git;
 
 use super::Ctx;
 use super::lint::lint_vault;
@@ -16,11 +15,11 @@ pub fn run(ctx: &Ctx, notes: &[String]) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let mut linted = lint_vault(&vault);
     let now = SystemTime::now();
-    let record = git::record_agent_tree(&vault.root, now, notes).unwrap_or_else(|e| {
+    let record = vault.repo().record_agent_tree(now, notes).unwrap_or_else(|e| {
         linted.diagnostics.push(Diagnostic::warning("done.record", format!("the agent's work was not recorded: {e}")));
         None
     });
-    if let Err(e) = git::prune_agent_refs(&vault.root, now, KEEP) {
+    if let Err(e) = vault.repo().prune_agent_refs(now, KEEP) {
         linted.diagnostics.push(Diagnostic::warning("done.prune", format!("old records were not deleted: {e}")));
     }
     sort_diagnostics(&mut linted.diagnostics);

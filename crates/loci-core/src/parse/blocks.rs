@@ -30,8 +30,8 @@ static BLOCK_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:^|\s)(\^(\w+
 pub(super) fn blocks(text: &str, items: &[Spanned<ListItem>], paragraphs: &[Range<usize>]) -> Vec<Spanned<Block>> {
     let mut out = vec![];
     for item in items {
-        if let Some(id) = trailing_id(text, &item.lead.span) {
-            out.push(Spanned::new(Block { kind: BlockKind::Item, id }, item.span.clone()));
+        if let Some(id) = &item.id {
+            out.push(Spanned::new(Block { kind: BlockKind::Item, id: id.clone() }, item.span.clone()));
         }
     }
 
@@ -46,7 +46,7 @@ pub(super) fn blocks(text: &str, items: &[Spanned<ListItem>], paragraphs: &[Rang
 }
 
 /// The `^id` ending the text at `range`: the id, spanning `^id`.
-fn trailing_id(text: &str, range: &Range<usize>) -> Option<Spanned<String>> {
+pub(super) fn trailing_id(text: &str, range: &Range<usize>) -> Option<Spanned<String>> {
     let caps = BLOCK_ID.captures(&text[range.clone()])?;
     let (marker, id) = (caps.get(1)?, caps.get(2)?);
     Some(Spanned::new(id.as_str().to_string(), range.start + marker.start()..range.start + marker.end()))
@@ -56,8 +56,8 @@ fn trailing_id(text: &str, range: &Range<usize>) -> Option<Spanned<String>> {
 mod tests {
     use super::*;
     use crate::parse::{Note, parse};
+    use crate::path::Kind;
     use crate::path::VaultPath;
-    use crate::vault::Kind;
 
     fn p(text: &str) -> Note {
         parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, text.to_string())

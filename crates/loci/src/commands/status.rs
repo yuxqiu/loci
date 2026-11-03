@@ -2,13 +2,11 @@
 //! change from task to task are read at session start (`AGENTS.md`), not here.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use loci_core::config::UpdateId;
 use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::git;
-use loci_core::path::VaultPath;
-use loci_core::vault::Kind;
+use loci_core::path::{InboxPlace, VaultPath};
 use serde_json::json;
 
 use super::Ctx;
@@ -22,8 +20,8 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     let mut out = Out::default();
 
     entry_point(files, &mut out);
-    let changes = changes(&vault.root, &mut out);
-    let records = agent_work(&vault.root, &mut out);
+    let changes = changes(vault.repo(), &mut out);
+    let records = agent_work(vault.repo(), &mut out);
     let inbox = inbox(files, changes.as_ref(), &mut out);
     let updates = updates(vault.config.updates, &mut out);
 
@@ -51,16 +49,16 @@ struct Out {
 
 /// The agent entry point, `AGENTS.md`.
 fn entry_point(files: &[VaultPath], out: &mut Out) {
-    if !files.iter().any(|f| f.as_str() == loci_core::vault::AGENTS) {
+    if !files.iter().any(|f| *f == loci_core::path::AGENTS) {
         let warning = Diagnostic::warning("install.missing", "`AGENTS.md` is missing");
         out.diags.push(warning.with_hint("run `loci init` in a new vault"));
     }
 }
 
 /// Uncommitted changes, `None` when git failed (reported; the other sections go on).
-fn changes(root: &Path, out: &mut Out) -> Option<git::Changes> {
+fn changes(repo: git::Repo, out: &mut Out) -> Option<git::Changes> {
     out.human.push_str("## Uncommitted changes\n\n");
-    match git::status(root) {
+    match repo.status() {
         Ok(c) => {
             let (m, d, a, u) = (c.modified.len(), c.deleted.len(), c.added.len(), c.untracked.len());
             out.human.push_str(&format!("{m} modified, {d} deleted, {a} added, {u} untracked\n"));
@@ -75,9 +73,9 @@ fn changes(root: &Path, out: &mut Out) -> Option<git::Changes> {
 }
 
 /// Agent work recorded by `loci done`, waiting for the `improve` skill: how many records.
-fn agent_work(root: &Path, out: &mut Out) -> Option<usize> {
+fn agent_work(repo: git::Repo, out: &mut Out) -> Option<usize> {
     out.human.push_str("\n## Agent work to review\n\n");
-    match git::agent_refs(root) {
+    match repo.agent_refs() {
         Ok(r) => {
             out.human.push_str(&format!("{} task(s) recorded by `loci done`\n", r.len()));
             Some(r.len())
@@ -93,11 +91,10 @@ fn agent_work(root: &Path, out: &mut Out) -> Option<usize> {
 /// The inbox: counts by folder, and the files not yet committed, which block work (at
 /// most [`LISTED`] named), then the next step.
 fn inbox(files: &[VaultPath], changes: Option<&git::Changes>, out: &mut Out) -> serde_json::Value {
-    let inbox: Vec<&VaultPath> = files.iter().filter(|f| f.kind() == Some(Kind::Inbox)).collect();
-    let mut by_folder: BTreeMap<&str, usize> = BTreeMap::new();
-    for f in &inbox {
-        let parts: Vec<&str> = f.components().collect();
-        *by_folder.entry(if parts.len() > 2 { parts[1] } else { "" }).or_default() += 1;
+    let inbox: Vec<&VaultPath> = files.iter().filter(|f| f.inbox_place().is_some()).collect();
+    let mut by_place: BTreeMap<InboxPlace, usize> = BTreeMap::new();
+    for place in inbox.iter().filter_map(|f| f.inbox_place()) {
+        *by_place.entry(place).or_default() += 1;
     }
 
     let uncommitted: Option<Vec<&VaultPath>> = changes.map(|c| {
@@ -107,9 +104,12 @@ fn inbox(files: &[VaultPath], changes: Option<&git::Changes>, out: &mut Out) -> 
 
     let count = uncommitted.as_ref().map_or("unknown".to_string(), |u| u.len().to_string());
     out.human.push_str(&format!("\n## Inbox\n\n{} file(s), {count} uncommitted", inbox.len()));
-    let folders: Vec<String> = by_folder
+    let folders: Vec<String> = by_place
         .iter()
-        .map(|(d, n)| if d.is_empty() { format!("{n} directly in inbox/") } else { format!("{d} {n}") })
+        .map(|(place, n)| match place {
+            InboxPlace::Root => format!("{n} directly in inbox/"),
+            InboxPlace::Folder(d) => format!("{d} {n}"),
+        })
         .collect();
     if !folders.is_empty() {
         out.human.push_str(&format!(" ({})", folders.join(", ")));
@@ -140,6 +140,9 @@ fn inbox(files: &[VaultPath], changes: Option<&git::Changes>, out: &mut Out) -> 
         _ => {}
     }
 
+    // In JSON, files directly in `inbox/` are counted under `""` (m0 §9.6).
+    let by_folder: BTreeMap<&str, usize> =
+        by_place.iter().map(|(place, n)| (if let InboxPlace::Folder(d) = place { *d } else { "" }, *n)).collect();
     json!({"files": inbox.len(), "by_folder": by_folder, "uncommitted": uncommitted})
 }
 

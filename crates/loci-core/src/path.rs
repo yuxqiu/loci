@@ -7,19 +7,94 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 use relative_path::{Component, RelativePath};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::config;
 use crate::envelope::Refusal;
 use crate::id::{SLUG_PATTERN, Slug};
-use crate::vault::{self, Kind, nfc};
+use crate::lint::Code;
+
+/// What a vault file is (m0 §3), by where it is ([`VaultPath::kind`]). Serialized as
+/// its [`Kind::name`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    Concept,
+    Area,
+    View,
+    Journal,
+    Rules,
+    Source,
+    Inbox,
+    /// A non-markdown file outside `sources/` and `inbox/` (images, attachments).
+    Asset,
+    /// A `.md` file outside every known folder.
+    Unknown,
+}
+
+impl Kind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Concept => "concept",
+            Kind::Area => "area",
+            Kind::View => "view",
+            Kind::Journal => "journal",
+            Kind::Rules => "rules",
+            Kind::Source => "source",
+            Kind::Inbox => "inbox",
+            Kind::Asset => "asset",
+            Kind::Unknown => "unknown",
+        }
+    }
+
+    /// The formed notes, written to be read (concepts, area files, views, journal
+    /// entries), as opposed to sources, inbox drafts and rule files.
+    pub fn is_formed(self) -> bool {
+        matches!(self, Kind::Concept | Kind::Area | Kind::View | Kind::Journal)
+    }
+
+    /// The managed kinds (m0 §3): C, A, V, J, R.
+    pub fn is_managed(self) -> bool {
+        matches!(self, Kind::Concept | Kind::Area | Kind::View | Kind::Journal | Kind::Rules)
+    }
+}
+
+/// The rule files at the vault root (m0 §3): the agent entry point, the user's rules
+/// and the user's style.
+pub const AGENTS: &str = "AGENTS.md";
+pub const RULES: &str = "RULES.md";
+pub const STYLE: &str = "STYLE.md";
+
+/// An area's scope note, `concepts/<area>/AREA.md` (m0 §6.3).
+pub const AREA: &str = "AREA.md";
+
+/// NFC form of a string.
+pub fn nfc(s: &str) -> String {
+    s.nfc().collect()
+}
 
 /// A vault-relative path: `/`-separated UTF-8, with no empty, `.` or `..` segment, no
 /// leading or trailing `/`, and no control character (so every message that names one
 /// stays on one line). Not necessarily NFC: git lists the names as stored, and
 /// lint reports a non-NFC one (`path.not-nfc`). Ordered by bytes, as outputs are.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
-#[serde(transparent)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct VaultPath(String);
+
+impl From<VaultPath> for String {
+    fn from(p: VaultPath) -> String {
+        p.0
+    }
+}
+
+/// Read from JSON (a plugin's envelope) only if it is a vault path.
+impl TryFrom<String> for VaultPath {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, String> {
+        Self::new(s.clone()).ok_or_else(|| format!("`{s}` is not a vault path"))
+    }
+}
 
 static SOURCE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(&format!(r"^sources/{SLUG_PATTERN}/{SLUG_PATTERN}\.([a-z0-9]*[a-z][a-z0-9]*)$")).unwrap()
@@ -127,13 +202,13 @@ impl VaultPath {
 
         if parts.len() == 1 {
             return Some(match first {
-                vault::AGENTS | vault::RULES | vault::STYLE => Kind::Rules,
+                AGENTS | RULES | STYLE => Kind::Rules,
                 _ => Kind::Unknown,
             });
         }
 
         Some(match first {
-            "concepts" if parts.len() == 3 && parts[2] == "AREA.md" => Kind::Area,
+            "concepts" if parts.len() == 3 && parts[2] == AREA => Kind::Area,
             "concepts" if parts.len() >= 3 => Kind::Concept,
             "views" => Kind::View,
             "journal" => Kind::Journal,
@@ -202,26 +277,27 @@ impl VaultPath {
         parts.len() >= 3 && parts[0] == "journal" && parts[1].parse::<Slug>().is_ok()
     }
 
-    /// The path rule this path breaks, if any, as (lint code, message): a file under
-    /// `sources/` that is not `sources/<type>/<slug>.<ext>` (§6.4), a `.md` file outside
-    /// every known folder (§3), a concept whose slug fails §6.2, a journal entry outside a
-    /// `journal/<stream>/` folder named by a slug (§6.6). Lint reports it; `new` and `mv`
-    /// refuse a destination that breaks one, with the same code. The message does not
-    /// name the path: each caller does.
-    pub fn problem(&self) -> Option<(&'static str, String)> {
+    /// The path rule this path breaks, if any. Lint reports it; `new` and `mv` refuse a
+    /// destination that breaks one, with the same code.
+    pub fn problem(&self) -> Option<PathProblem> {
         if self.0.starts_with("sources/") && !self.is_source_file() {
-            return Some(("sources.layout", "not a `sources/<type>/<slug>.<ext>` file".to_string()));
+            return Some(PathProblem::SourcesLayout);
         }
         match self.kind() {
-            Some(Kind::Unknown) => Some(("kind.unknown", "file is outside every known folder".to_string())),
-            Some(Kind::Concept) => match self.stem().parse::<Slug>() {
-                Ok(_) => None,
-                Err(e) => Some(("slug.format", format!("slug {e}"))),
-            },
-            Some(Kind::Journal) if !self.journal_ok() => Some((
-                "journal.path",
-                "journal entry is not inside a `journal/<stream>/` folder whose name is a slug".to_string(),
-            )),
+            Some(Kind::Unknown) => Some(PathProblem::KindUnknown),
+            Some(Kind::Concept) => self.stem().parse::<Slug>().err().map(PathProblem::SlugFormat),
+            Some(Kind::Journal) if !self.journal_ok() => Some(PathProblem::JournalPath),
+            _ => None,
+        }
+    }
+
+    /// Where in `inbox/` this file is: directly in it, or under one of its folders.
+    /// `None` outside the inbox.
+    pub fn inbox_place(&self) -> Option<InboxPlace<'_>> {
+        let parts: Vec<&str> = self.components().collect();
+        match parts.as_slice() {
+            ["inbox", _] => Some(InboxPlace::Root),
+            ["inbox", folder, _, ..] => Some(InboxPlace::Folder(folder)),
             _ => None,
         }
     }
@@ -239,6 +315,53 @@ impl VaultPath {
 /// Whether `s` holds a control character (a newline, a tab, …), which no vault path may.
 pub fn has_control(s: &str) -> bool {
     s.chars().any(char::is_control)
+}
+
+/// Where a file in `inbox/` is (m0 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum InboxPlace<'a> {
+    /// Directly in `inbox/`.
+    Root,
+    /// Under `inbox/<folder>/`.
+    Folder(&'a str),
+}
+
+/// A path rule a path breaks (m0 §3, §6.2, §6.4, §6.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathProblem {
+    /// A file under `sources/` that is not `sources/<type>/<slug>.<ext>` (§6.4).
+    SourcesLayout,
+    /// A `.md` file outside every known folder (§3).
+    KindUnknown,
+    /// A concept whose stem is no slug (§6.2), and why.
+    SlugFormat(String),
+    /// A journal entry outside a `journal/<stream>/` folder named by a slug (§6.6).
+    JournalPath,
+}
+
+impl PathProblem {
+    pub fn code(&self) -> Code {
+        match self {
+            PathProblem::SourcesLayout => Code::SourcesLayout,
+            PathProblem::KindUnknown => Code::KindUnknown,
+            PathProblem::SlugFormat(_) => Code::SlugFormat,
+            PathProblem::JournalPath => Code::JournalPath,
+        }
+    }
+}
+
+/// The message, which does not name the path: each caller does.
+impl fmt::Display for PathProblem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PathProblem::SourcesLayout => f.write_str("not a `sources/<type>/<slug>.<ext>` file"),
+            PathProblem::KindUnknown => f.write_str("file is outside every known folder"),
+            PathProblem::SlugFormat(why) => write!(f, "slug {why}"),
+            PathProblem::JournalPath => {
+                f.write_str("journal entry is not inside a `journal/<stream>/` folder whose name is a slug")
+            }
+        }
+    }
 }
 
 impl fmt::Display for VaultPath {
@@ -399,11 +522,11 @@ mod tests {
 
     #[test]
     fn problems() {
-        let code = |p: &str| vp(p).problem().map(|(c, _)| c);
-        assert_eq!(code("sources/x.pdf"), Some("sources.layout"));
-        assert_eq!(code("notes.md"), Some("kind.unknown"));
-        assert_eq!(code("concepts/a/Bad Name.md"), Some("slug.format"));
-        assert_eq!(code("journal/x.md"), Some("journal.path"));
+        let code = |p: &str| vp(p).problem().map(|p| p.code());
+        assert_eq!(code("sources/x.pdf"), Some(Code::SourcesLayout));
+        assert_eq!(code("notes.md"), Some(Code::KindUnknown));
+        assert_eq!(code("concepts/a/Bad Name.md"), Some(Code::SlugFormat));
+        assert_eq!(code("journal/x.md"), Some(Code::JournalPath));
         assert_eq!(code("concepts/a/good.md"), None);
         assert_eq!(code("views/anything.md"), None);
         assert_eq!(vp("concepts/a/AREA.md").why_not_concept(), "would be the area file, not a concept");

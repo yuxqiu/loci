@@ -1,11 +1,11 @@
 //! `loci new` (m0 §9.7).
 
 use loci_core::envelope::{Diagnostic, Refusal, Report};
-use loci_core::git;
-use loci_core::id::Slug;
+use loci_core::id::{Slug, Ulid};
 use loci_core::index::Index;
+use loci_core::path::Kind;
 use loci_core::path::VaultPath;
-use loci_core::vault::{Kind, Vault};
+use loci_core::vault::Vault;
 use serde_json::json;
 
 use super::Ctx;
@@ -15,22 +15,27 @@ pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal
     let path = VaultPath::from_arg(path)?.as_note();
     let slug = refuse_destination(&vault, &path)?;
 
-    let id = loci_core::id::Ulid::generate();
-    let text = format!("---\nid: {id}\nprereqs: []\n---\n# {}\n", title.unwrap_or(slug.as_str()));
+    let id = Ulid::generate();
+    let text = skeleton(id, title.unwrap_or(slug.as_str()));
     let abs = vault.abs(&path);
     std::fs::create_dir_all(abs.parent().expect("a note path has a folder")).map_err(Refusal::io)?;
     std::fs::write(&abs, text).map_err(Refusal::io)?;
 
     // Marked for `git diff`, as the framework rules ask of every file an agent creates.
     let mut diags = vec![];
-    if let Err(e) = git::run(&vault.root, &["add", "-N", "--", path.as_str()]) {
+    if let Err(e) = vault.repo().intent_to_add(&path) {
         diags.push(
             Diagnostic::warning("new.git-add", format!("created, but `git add -N` failed: {e}; run it yourself"))
-                .at_path(path.as_str()),
+                .at_path(&path),
         );
     }
 
     Ok(Report::ok(json!({"path": path, "id": id}), format!("{path} {id}\n")).with_diagnostics(diags))
+}
+
+/// A new concept: its frontmatter, then its title.
+fn skeleton(id: Ulid, title: &str) -> String {
+    format!("{}# {title}\n", loci_core::parse::new_concept_frontmatter(id))
 }
 
 /// The slug of the concept `path` would be, after checking that it can be created there:
@@ -41,8 +46,8 @@ fn refuse_destination(vault: &Vault, path: &VaultPath) -> Result<Slug, Refusal> 
         return Err(Refusal::refused("new.no-area", format!("`{path}` {}", path.why_not_concept())));
     }
 
-    if let Some((code, message)) = path.problem() {
-        return Err(Refusal::refused(code, format!("`{path}`: {message}")));
+    if let Some(problem) = path.problem() {
+        return Err(Refusal::refused(problem.code(), format!("`{path}`: {problem}")));
     }
 
     if vault.abs(path).symlink_metadata().is_ok() {
@@ -50,14 +55,9 @@ fn refuse_destination(vault: &Vault, path: &VaultPath) -> Result<Slug, Refusal> 
     }
 
     let index = Index::open(vault);
-    if let Some((existing, asked)) = index.case_twin(path) {
-        let message = format!(
-            "`{asked}` differs only in letter case from the existing `{existing}`; use the existing spelling or another name"
-        );
-        return Err(Refusal::refused("path.case-twin", message));
-    }
+    loci_core::mv::refuse_case_twin(&index, path, None)?;
 
-    if git::is_ignored(&vault.root, path).map_err(Refusal::git)? {
+    if vault.repo().is_ignored(path).map_err(Refusal::git)? {
         return Err(Refusal::refused("path.ignored", format!("`{path}` is ignored by git")));
     }
 
@@ -69,4 +69,18 @@ fn refuse_destination(vault: &Vault, path: &VaultPath) -> Result<Slug, Refusal> 
     }
 
     Ok(slug)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_skeleton_is_canonical() {
+        let text = skeleton(Ulid::generate(), "BFS");
+        let note =
+            loci_core::parse::parse(&VaultPath::new("concepts/a/bfs.md".into()).unwrap(), Kind::Concept, text.clone());
+        let rewritten = loci_core::splice::apply(&text, vec![note.rewrite_frontmatter(&[])]);
+        assert_eq!(rewritten.unwrap(), text, "a fix would not reformat a new concept");
+    }
 }

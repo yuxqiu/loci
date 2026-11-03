@@ -13,12 +13,15 @@ pub fn run(ctx: &Ctx, slug: &str, depth: Option<usize>) -> Result<Report, Refusa
     let index = Index::open(&vault);
     let slug = VaultPath::from_arg(slug)?;
     let path = index.concept(&slug, "closure.unknown")?.path.clone();
-    let c = closure::closure(&index, &path, depth);
+    let c = closure::Closure::of(&index, &path, depth);
     let mut diags = vec![];
     if c.cyclic {
         diags.push(
-            Diagnostic::warning("prereqs.cycle", "the prerequisites form a cycle; the order breaks it by slug")
-                .at_path(path.as_str()),
+            Diagnostic::warning(
+                loci_core::lint::Code::PrereqsCycle,
+                "the prerequisites form a cycle; the order breaks it by slug",
+            )
+            .at_path(&path),
         );
     }
 

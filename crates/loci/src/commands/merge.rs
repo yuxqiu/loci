@@ -2,8 +2,8 @@
 
 use loci_core::envelope::{Refusal, Report};
 use loci_core::index::Index;
+use loci_core::merge;
 use loci_core::path::VaultPath;
-use loci_core::{merge, relink};
 use serde_json::json;
 
 use super::Ctx;
@@ -12,9 +12,9 @@ pub fn run(ctx: &Ctx, from: &str, into: &str, dry_run: bool) -> Result<Report, R
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
     let (from, into) = (VaultPath::from_arg(from)?, VaultPath::from_arg(into)?);
-    let merge::Merge { from, into, change } = merge::plan(&index, &from, &into)?;
+    let merge::Merge { from, into, change } = merge::Merge::plan(&index, &from, &into)?;
     if !dry_run {
-        relink::apply(&vault, &change).map_err(Refusal::io)?;
+        change.apply(&vault).map_err(Refusal::io)?;
     }
 
     let data = json!({

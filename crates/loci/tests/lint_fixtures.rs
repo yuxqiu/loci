@@ -168,7 +168,7 @@ fn block_ids_resolve_and_duplicate() {
 #[test]
 fn block_id_of_parent_item_spans_its_children() {
     use loci_core::parse::{BlockKind, parse};
-    use loci_core::vault::Kind;
+    use loci_core::path::Kind;
     let text = std::fs::read_to_string(fixtures_dir().join("block-ids/concepts/a/lists.md")).unwrap();
     let note =
         parse(&loci_core::path::VaultPath::new("concepts/a/lists.md".into()).unwrap(), Kind::Concept, text.clone());

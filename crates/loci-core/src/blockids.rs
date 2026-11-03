@@ -8,7 +8,7 @@ use crate::splice::{self, Edit};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Assigned {
-    /// 1-based line of the block's id slice end.
+    /// 1-based line where the id was inserted.
     pub line: usize,
     pub id: Ulid,
 }
@@ -20,31 +20,23 @@ pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> Ulid) -> O
     }
 
     let (items, blocks) = note.section_top_level(heading);
-    let has_id = |block: &Range<usize>| note.blocks.iter().any(|b| &b.span == block);
-
-    // Targets: top-level list items (their leading text) and top-level paragraphs. An
-    // item that starts with a nested block (a quote, a fence) has no leading text to
-    // carry an id.
-    let mut targets: Vec<(Range<usize>, Range<usize>)> = vec![]; // (block, id slice)
-    for item in items.into_iter().filter(|i| !i.lead.span.is_empty()) {
-        if !has_id(&item.span) {
-            targets.push((item.span.clone(), item.lead.span.clone()));
-        }
-    }
-
-    for r in blocks.into_iter().filter(|b| b.node == BlockType::Paragraph).map(|b| &b.span) {
-        if !has_id(r) {
-            targets.push((r.clone(), r.clone()));
-        }
-    }
-
-    targets.sort_by_key(|(b, _)| b.start);
-
     let text = &note.text;
+
+    // Where each new id goes: the end of the leading text of an item without one (an
+    // item that starts with a nested block, a quote or a fence, has none to carry it),
+    // and the end of a paragraph without one.
+    let item_ends = items.into_iter().filter(|i| i.id.is_none() && !i.lead.span.is_empty()).map(|i| i.lead.span.end);
+    let has_id = |block: &Range<usize>| note.blocks.iter().any(|b| &b.span == block);
+    let paragraph_ends = blocks
+        .into_iter()
+        .filter(|b| b.node == BlockType::Paragraph && !has_id(&b.span))
+        .map(|b| b.span.start + b.text(text).trim_end().len());
+    let mut ends: Vec<usize> = item_ends.chain(paragraph_ends).collect();
+    ends.sort();
+
     let mut edits = vec![];
     let mut assigned = vec![];
-    for (_, slice) in targets {
-        let at = slice.start + text[slice.clone()].trim_end().len();
+    for at in ends {
         let id = new_id();
         assigned.push(Assigned { line: crate::envelope::line_col(text, at).0, id });
         edits.push(Edit::insert(at, format!(" ^{id}")));
@@ -58,8 +50,8 @@ pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> Ulid) -> O
 mod tests {
     use super::*;
     use crate::parse::parse;
+    use crate::path::Kind;
     use crate::path::VaultPath;
-    use crate::vault::Kind;
 
     /// The `k`th test id (1-based).
     fn id(k: usize) -> Ulid {
