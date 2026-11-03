@@ -207,7 +207,7 @@ proptest! {
             // Two concepts that share a slug cannot be named by it; any other refusal is not
             // legitimate on these vaults.
             Err(e) => {
-                prop_assert!(before.slug_paths(&from.slug().unwrap()).len() > 1, "merge {} {}: {}", from, into, e.error.message);
+                prop_assert!(before.concepts_named(from.stem()).len() > 1, "merge {} {}: {}", from, into, e.error.message);
                 return Ok(());
             }
         };
@@ -225,7 +225,7 @@ proptest! {
         // The concept kept names no absorbed note, and no prerequisite of itself.
         let kept = after.parsed(&into).expect("the concept kept stays");
         prop_assert!(kept.links.iter().filter_map(|l| after.link_target(kept, l)).all(|t| t != from));
-        prop_assert!(after.prereqs(kept).resolved.iter().all(|p| *p != into));
+        prop_assert!(after.prereqs(kept).resolved.iter().all(|p| p.path != into));
     }
 
     #[test]

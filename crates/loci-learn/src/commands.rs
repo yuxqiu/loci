@@ -5,8 +5,9 @@ use std::io::{BufRead, Read, Write};
 
 use jiff::Timestamp;
 use loci_core::envelope::{Diagnostic, Refusal, Report};
+use loci_core::id::Ulid;
 use loci_core::index::Index;
-use loci_core::parse::Spanned;
+use loci_core::parse::{Note, Spanned};
 use loci_core::plugin::Skill;
 use loci_core::vault::Vault;
 use serde_json::json;
@@ -16,7 +17,7 @@ use crate::config::Config;
 use crate::reviewlog::{Grade, Input, Line, ReviewLog, Subject};
 use crate::schedule::{Estimate, Scheduler};
 
-const SKILL_FILES: &[(&str, &str)] = &[("learn-session", include_str!("../skills/learn-session/SKILL.md"))];
+const SKILL_FILES: &[&str] = &[include_str!("../skills/learn-session/SKILL.md")];
 
 pub fn skills() -> Result<Report, Refusal> {
     let skills = Skill::compiled(SKILL_FILES);
@@ -26,49 +27,43 @@ pub fn skills() -> Result<Report, Refusal> {
 
 pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
     let index = Index::open(vault);
-    let (all, issues) = cards::all(&index);
-    let text_of =
-        |path: &loci_core::path::VaultPath| index.parsed(path).map(|n| n.text.as_str()).expect("cards come from notes");
     let mut diags = vec![];
-    for i in &issues {
-        diags.push(
-            Diagnostic::error(
-                "learn.card-format",
-                "card is not `- question :: answer`, optionally followed by a block id",
-            )
-            .at(&i.path, text_of(&i.path), i.span.clone()),
-        );
-    }
+    let mut count = 0;
+    let mut by_id: BTreeMap<Ulid, Vec<(&Note, Spanned<Card>)>> = BTreeMap::new();
+    for note in index.concepts() {
+        let (cards, issues) = cards::of_note(note);
+        for span in issues {
+            let msg = "card is not `- question :: answer`, optionally followed by a block id";
+            diags.push(Diagnostic::error("learn.card-format", msg).in_note(note, span));
+        }
 
-    let mut by_id: BTreeMap<loci_core::id::Ulid, Vec<&Spanned<Card>>> = BTreeMap::new();
-    for c in &all {
-        let at = |code: &str, msg: String| Diagnostic::error(code, msg).at(&c.path, text_of(&c.path), c.span.clone());
-        match &c.id {
-            CardId::Missing => diags.push(
-                at("learn.no-id", "card has no block id".into())
-                    .with_hint(format!("loci block-ids {} --section Cards", c.path)),
-            ),
-            CardId::Malformed(id) => diags.push(
-                at("learn.id-form", format!("card id `^{id}` is not a ULID"))
-                    .with_hint(format!("delete the id and run `loci block-ids {} --section Cards`", c.path)),
-            ),
-            CardId::Valid(id) => by_id.entry(*id).or_default().push(c),
+        count += cards.len();
+        for c in cards {
+            let fix_hint = format!("loci block-ids {} --section Cards", note.path);
+            match &c.id {
+                CardId::Missing => diags.push(
+                    Diagnostic::error("learn.no-id", "card has no block id")
+                        .in_note(note, c.span.clone())
+                        .with_hint(fix_hint),
+                ),
+                CardId::Malformed(id) => diags.push(
+                    Diagnostic::error("learn.id-form", format!("card id `^{id}` is not a ULID"))
+                        .in_note(note, c.span.clone())
+                        .with_hint(format!("delete the id and run `{fix_hint}`")),
+                ),
+                CardId::Valid(id) => by_id.entry(*id).or_default().push((note, c.clone())),
+            }
         }
     }
 
     for (id, cs) in by_id.iter().filter(|(_, cs)| cs.len() > 1) {
-        let others: Vec<&str> = cs[1..].iter().map(|c| c.path.as_str()).collect();
-        diags.push(
-            Diagnostic::error("learn.id-duplicate", format!("card id `^{id}` is used by {}", others.join(", "))).at(
-                &cs[0].path,
-                text_of(&cs[0].path),
-                cs[0].span.clone(),
-            ),
-        );
+        let others: Vec<&str> = cs[1..].iter().map(|(n, _)| n.path.as_str()).collect();
+        let msg = format!("card id `^{id}` is used by {}", others.join(", "));
+        diags.push(Diagnostic::error("learn.id-duplicate", msg).in_note(cs[0].0, cs[0].1.span.clone()));
     }
 
     let errors = diags.len();
-    Ok(Report::ok(serde_json::Value::Null, format!("{} cards, {errors} errors\n", all.len())).with_diagnostics(diags))
+    Ok(Report::ok(serde_json::Value::Null, format!("{count} cards, {errors} errors\n")).with_diagnostics(diags))
 }
 
 /// Validates a line against the working tree: its card or concept must exist.
@@ -91,51 +86,51 @@ pub fn log(vault: &Vault, mut stdin: impl Read) -> Result<Report, Refusal> {
     let parsed: Input = serde_json::from_str(&input).map_err(|e| bad(e.to_string()))?;
     let line = parsed.into_line(Timestamp::now()).map_err(bad)?;
     let index = Index::open(vault);
-    let (all, _) = cards::all(&index);
+    let all = cards::all(&index);
     check_exists(&line, &all, &index)?;
-    let before = ReviewLog(&vault.root).append(&line).map_err(Refusal::io)?;
-    match ReviewLog(&vault.root).commit("log") {
+    let before = ReviewLog(vault).append(&line).map_err(Refusal::io)?;
+    match ReviewLog(vault).commit("log") {
         Ok(sha) => Ok(Report::ok(json!({"line": line, "commit": sha}), format!("logged {sha}\n"))),
-        Err(e) => Err(match ReviewLog(&vault.root).truncate(before) {
+        Err(e) => Err(match ReviewLog(vault).truncate(before) {
             Ok(()) => Refusal::git(e),
             Err(t) => Refusal::git(format!("{e}; removing the uncommitted line also failed: {t}")),
         }),
     }
 }
 
-pub fn state(vault: &Vault, slug: &str) -> Result<Report, Refusal> {
+pub fn state(vault: &Vault, arg: &str) -> Result<Report, Refusal> {
     let index = Index::open(vault);
-    let slug = loci_core::path::VaultPath::from_arg(slug)?;
-    let note = index.concept(&slug, "learn.unknown-concept")?;
+    let arg = loci_core::path::VaultPath::from_arg(arg)?;
+    let note = index.concept(&arg, "learn.unknown-concept")?;
     let Some(concept) = note.id() else {
-        return Err(Refusal::refused("learn.unknown-concept", format!("`{slug}` has no valid id")));
+        return Err(Refusal::refused("learn.unknown-concept", format!("`{arg}` has no valid id")));
     };
-    let config = Config::load(&vault.root)?;
-    let lines = ReviewLog(&vault.root).read()?;
+    let config = Config::load(vault)?;
+    let lines = ReviewLog(vault).read()?;
     let (note_cards, _) = cards::of_note(note);
     let (estimate, used) =
         Scheduler::new(config.desired_retention).estimate(&note_cards, concept, &lines, Timestamp::now());
     let human = match &estimate {
-        Estimate::Cards { r } => format!("{slug}: recall {:.0}% (from {} line(s))\n", r * 100.0, used.len()),
-        Estimate::Item { grade, age_days } => format!("{slug}: last quiz {} {age_days:.1} days ago\n", grade.outcome()),
-        Estimate::Unknown => format!("{slug}: unknown\n"),
+        Estimate::Cards { r } => format!("{arg}: recall {:.0}% (from {} line(s))\n", r * 100.0, used.len()),
+        Estimate::Item { grade, age_days } => format!("{arg}: last quiz {} {age_days:.1} days ago\n", grade.outcome()),
+        Estimate::Unknown => format!("{arg}: unknown\n"),
     };
     Ok(Report::ok(json!({"concept": concept, "estimate": estimate, "lines": used}), human))
 }
 
 pub fn review(vault: &Vault) -> Result<Report, Refusal> {
-    let config = Config::load(&vault.root)?;
-    let lines = ReviewLog(&vault.root).read()?;
+    let config = Config::load(vault)?;
+    let lines = ReviewLog(vault).read()?;
     let index = Index::open(vault);
-    let (all, _) = cards::all(&index);
+    let all = cards::all(&index);
     let scheduler = Scheduler::new(config.desired_retention);
     let (session, new_count) = scheduler.select(&all, &lines, config.new_per_day, Timestamp::now());
 
     // Each grade is appended at once; the lines are committed at the end (§2.6 step 6).
-    let (reviewed, stopped) = grade_cards(&session, ReviewLog(&vault.root));
+    let (reviewed, stopped) = grade_cards(&session, ReviewLog(vault));
 
     // Lines already appended are committed even when the session stopped on an error.
-    let commit = if reviewed > 0 { Some(ReviewLog(&vault.root).commit("review").map_err(Refusal::git)?) } else { None };
+    let commit = if reviewed > 0 { Some(ReviewLog(vault).commit("review").map_err(Refusal::git)?) } else { None };
     if let Err(e) = stopped {
         let committed = commit.map_or(String::new(), |sha| format!(" ({reviewed} grades committed in {sha})"));
         return Err(Refusal::io(format!("the session stopped: {e}{committed}")));
@@ -149,17 +144,16 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
 /// Asks for a grade on each card of `session` and appends it to the log. Returns how
 /// many it appended, and how it stopped: at the end, on `q` or end of input (`Ok`), or
 /// on an I/O error.
-fn grade_cards(session: &[&Spanned<Card>], log: ReviewLog) -> (usize, std::io::Result<()>) {
+fn grade_cards(session: &[(Ulid, &Spanned<Card>)], log: ReviewLog) -> (usize, std::io::Result<()>) {
     let (mut input, mut err) = (std::io::stdin().lock(), std::io::stderr());
     let mut appended = 0;
-    for (i, card) in session.iter().enumerate() {
+    for (i, &(id, card)) in session.iter().enumerate() {
         let progress = format!("{}/{}", i + 1, session.len());
         let grade = match ask(card, &progress, &mut input, &mut err) {
             Ok(Some(grade)) => grade,
             Ok(None) => break,
             Err(e) => return (appended, Err(e)),
         };
-        let id = card.id.valid().expect("only cards with valid ids are scheduled");
         let line = Line { t: Timestamp::now(), subject: Subject::Card(id), grade };
         if let Err(e) = log.append(&line) {
             return (appended, Err(e));

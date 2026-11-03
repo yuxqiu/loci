@@ -7,13 +7,6 @@ mod common;
 use common::*;
 use insta::assert_snapshot;
 
-const IDS: [&str; 4] = [
-    "01JB9XQ7Z3K4M5N6P7Q8R9S0A1",
-    "01JB9XQ7Z3K4M5N6P7Q8R9S0A2",
-    "01JB9XQ7Z3K4M5N6P7Q8R9S0A3",
-    "01JB9XQ7Z3K4M5N6P7Q8R9S0A4",
-];
-
 /// One fixable problem per file.
 fn broken() -> TestVault {
     TestVault::with_files(
@@ -115,7 +108,7 @@ fn fixes_that_make_the_vault_worse_are_refused() {
     assert_eq!((code, fixed_codes(&env)), (1, vec![]), "an unsafe fix is not applied by default");
     let (code, env) = v.run(&["lint", "--fix", "--unsafe-fixes"]);
     assert_eq!((code, error_code(&env)), (1, "lint.fix-verify"), "{env:#}");
-    assert!(env["error"]["message"].as_str().unwrap().contains("`link.dangling`"), "{env:#}");
+    assert!(error_message(&env).contains("`link.dangling`"), "{env:#}");
     assert_eq!(v.tree(), tree);
 }
 

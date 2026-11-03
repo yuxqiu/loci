@@ -152,20 +152,18 @@ fn status_checks_agents_md_but_not_skills() {
 
 // ---------------------------------------------------------------- material-dropped
 
-fn dropped(env: &serde_json::Value) -> Vec<String> {
-    with_code(env, "material-dropped").iter().map(|d| d["message"].as_str().unwrap().to_string()).collect()
-}
-
 #[test]
 fn material_dropped_when_a_deleted_draft_is_not_absorbed() {
     let v = TestVault::committed(BIN, "agent-workflow");
     std::fs::remove_file(v.root.join("inbox/drafts/draft.md")).unwrap();
     let (code, env) = v.run(&["lint"]);
     assert_eq!(code, 0, "warnings only: {}", diag_lines(&env));
-    let msgs = dropped(&env);
-    assert_eq!(msgs.len(), 3, "{}", diag_lines(&env));
-    assert!(with_code(&env, "material-dropped").iter().all(|d| d["severity"] == "warning"));
-    assert_snapshot!(msgs.join("\n"));
+    let dropped = with_code(&env, "material-dropped");
+    assert_eq!(dropped.len(), 3, "{}", diag_lines(&env));
+    // Warnings, each on the deleted path (§7.1: vault-level rules report on the first
+    // involved path).
+    assert!(dropped.iter().all(|d| d["severity"] == "warning" && path_of(d) == "inbox/drafts/draft.md"));
+    assert_snapshot!(messages(&env, "material-dropped").join("\n"));
 }
 
 #[test]
@@ -176,24 +174,25 @@ fn material_dropped_silent_when_absorbed() {
     let body = draft.strip_prefix("# Draft\n").unwrap();
     v.write("concepts/a/x.md", v.read("concepts/a/x.md") + body);
     let (_, env) = v.run(&["lint"]);
-    assert!(dropped(&env).is_empty(), "{}", diag_lines(&env));
+    assert!(messages(&env, "material-dropped").is_empty(), "{}", diag_lines(&env));
     // Partly absorbed: only the code block is kept.
     let v = TestVault::committed(BIN, "agent-workflow");
     std::fs::remove_file(v.root.join("inbox/drafts/draft.md")).unwrap();
     v.write("views/kept.md", "# Kept\n\n```python\nprint(\"hi\")\n```\n");
     let (_, env) = v.run(&["lint"]);
-    let msgs = dropped(&env);
+    let msgs = messages(&env, "material-dropped");
     assert_eq!(msgs.len(), 2, "{}", diag_lines(&env));
     assert!(msgs.iter().all(|m| !m.contains("code")), "{msgs:?}");
 }
 
 #[test]
 fn material_dropped_skipped_without_head() {
-    let v = TestVault::git_no_head(BIN, "agent-workflow");
+    let v = TestVault::fixture(BIN, "agent-workflow");
+    v.init_git();
     std::fs::remove_file(v.root.join("inbox/drafts/draft.md")).unwrap();
     let (code, env) = v.run(&["lint"]);
     assert_eq!(code, 0, "{}", diag_lines(&env));
-    assert!(dropped(&env).is_empty());
+    assert!(messages(&env, "material-dropped").is_empty());
 }
 
 // ---------------------------------------------------------------- new
@@ -247,21 +246,11 @@ fn new_refusals() {
     // Said as `mv` says it: an area file is in an area, but not a concept.
     let (_, env) = v.run(&["new", "concepts/a/AREA"]);
     assert_eq!(error_code(&env), "new.no-area");
-    assert!(env["error"]["message"].as_str().unwrap().ends_with("would be the area file, not a concept"), "{env:#}");
+    assert!(error_message(&env).ends_with("would be the area file, not a concept"), "{env:#}");
     v.write(".gitignore", "concepts/a/secret.md\n");
     v.commit_all("ignore");
     let (exit, env) = v.run(&["new", "concepts/a/secret"]);
     assert_eq!((exit, error_code(&env)), (1, "path.ignored"), "{env:#}");
-}
-
-#[test]
-fn material_dropped_reports_on_the_deleted_path() {
-    let v = TestVault::committed(BIN, "agent-workflow");
-    std::fs::remove_file(v.root.join("inbox/drafts/draft.md")).unwrap();
-    let (_, env) = v.run(&["lint"]);
-    let d = with_code(&env, "material-dropped");
-    assert!(!d.is_empty());
-    assert!(d.iter().all(|d| path_of(d) == "inbox/drafts/draft.md"), "{}", diag_lines(&env));
 }
 
 // ---------------------------------------------------------------- done

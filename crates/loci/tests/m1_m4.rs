@@ -1,16 +1,9 @@
-//! `merge`, `closure`, `bench` and `export` (docs/specs/m1-m4.md).
+//! `merge`, `closure`, `bench`, `export` and `links` (docs/specs/m1-m4.md).
 
 mod common;
 
 use common::*;
 use serde_json::json;
-
-const IDS: [&str; 4] = [
-    "01JB9XQ7Z3K4M5N6P7Q8R9S0A1",
-    "01JB9XQ7Z3K4M5N6P7Q8R9S0A2",
-    "01JB9XQ7Z3K4M5N6P7Q8R9S0A3",
-    "01JB9XQ7Z3K4M5N6P7Q8R9S0A4",
-];
 
 fn vault(files: &[(&str, String)]) -> TestVault {
     TestVault::with_files(BIN, files)
@@ -173,7 +166,7 @@ fn bench_runs_the_agent_on_every_case() {
     v.write("bench/cases.jsonl", "{\"q\": \"x\", \"check\": \"true\"}\n{\"q\": \"x\", \"expect\": []}\n");
     let (code, env) = v.run(&["bench", "true"]);
     assert_eq!((code, error_code(&env)), (1, "bench.case"));
-    assert!(env["error"]["message"].as_str().unwrap().contains("line 2"), "{env}");
+    assert!(error_message(&env).contains("line 2"), "{env}");
 
     v.write("bench/cases.jsonl", "\n");
     let (code, env) = v.run(&["bench", "true"]);
@@ -209,7 +202,7 @@ fn export_collects_links_and_assets() {
     assert!(!md.contains("id: "), "frontmatter stripped:\n{md}");
     assert!(md.contains("Relax edges.") && !md.contains("Not exported."), "only the linked section:\n{md}");
     assert!(md.contains("](#"), "links to included notes become anchors:\n{md}");
-    assert!(md.contains("see Graph.") && !md.contains("Glossary"), "a note two links away is plain text:\n{md}");
+    assert!(md.contains("see Graph."), "a note two links away is plain text:\n{md}");
     assert!(md.contains("![](assets/grid.png)") || md.contains("](assets/grid.png)"), "{md}");
 
     // Depth 2 pulls graph in.

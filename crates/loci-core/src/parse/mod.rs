@@ -17,7 +17,7 @@ use blocks::blocks;
 use body::{Walker, walk_body};
 use frontmatter::{frontmatter, frontmatter_links};
 
-pub use blocks::{Block, BlockKind};
+pub use blocks::Block;
 pub use frontmatter::{ConceptField, FmChange, FmEntry, FmValue, Frontmatter, new_concept_frontmatter, prereq_slug};
 pub use links::{Fragment, Label, Link, LinkForm, MarkdownLink, Names, Target, heading_key};
 
@@ -266,9 +266,16 @@ pub fn options() -> Options {
         | Options::ENABLE_TASKLISTS
 }
 
-/// Parses `text` (the whole file) as a note at `path`.
-pub fn parse(path: &VaultPath, kind: Kind, text: String) -> Note {
+/// Parses `text` (the whole file) as the note at `path`, a path core reads.
+pub fn parse(path: &VaultPath, text: String) -> Note {
+    let kind = path.kind().expect("a note is at a path core reads");
     Note { path: path.clone(), kind, markdown: markdown(text) }
+}
+
+/// A test concept note, at `concepts/a/x.md`, holding `text`.
+#[cfg(test)]
+pub(crate) fn concept(text: &str) -> Note {
+    parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), text.to_string())
 }
 
 /// Parses `text`, a whole markdown file in the vault or not.
@@ -277,7 +284,7 @@ pub fn markdown(text: String) -> Markdown {
     // as text: the walk starts past it.
     let base = if text.starts_with(BOM) { BOM.len() } else { 0 };
     let walk = walk_body(&text, base);
-    let frontmatter = frontmatter(&text, base, &walk);
+    let frontmatter = frontmatter(&text, base, walk.meta.as_ref());
     let blocks = blocks(&text, &walk.items, &walk.paragraphs);
     let mut links = frontmatter.iter().flat_map(|f| frontmatter_links(f)).collect::<Vec<_>>();
     let Walker { headings, top_blocks, items, links: body_links, markdown_links, counts, .. } = walk;
@@ -290,9 +297,7 @@ pub fn markdown(text: String) -> Markdown {
 mod tests {
     use super::*;
 
-    fn p(text: &str) -> Note {
-        parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, text.to_string())
-    }
+    use crate::parse::concept as p;
 
     #[test]
     fn heading_texts() {
@@ -309,7 +314,7 @@ mod tests {
     #[test]
     fn bom_offsets() {
         let t = format!("{BOM}# T\n\n[[a]]\n");
-        let n = parse(&VaultPath::new("views/v.md".into()).unwrap(), Kind::View, t.clone());
+        let n = parse(&VaultPath::new("views/v.md".into()).unwrap(), t.clone());
         assert!(n.has_bom());
         assert_eq!(&t[n.links[0].target.span.clone()], "a");
     }

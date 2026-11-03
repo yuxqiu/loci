@@ -36,10 +36,10 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
         return Err(Refusal::refused("export.kind", format!("`{path}` is not a view or a concept")));
     }
 
-    let e = export::Export::of(&index, &path, depth);
+    let e = export::Export::of(&index, note, depth);
     let out_path = match output {
         Some(o) => ctx.cwd.join(o),
-        None => vault.root.join(format!(".loci/export/{}.{}", path.stem(), format.ext())),
+        None => vault.abs(&VaultPath::fixed(".loci/export")).join(format!("{}.{}", path.stem(), format.ext())),
     };
 
     let out_dir = out_path.parent().expect("an absolute file path has a parent").to_path_buf();

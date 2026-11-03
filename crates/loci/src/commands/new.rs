@@ -1,5 +1,7 @@
 //! `loci new` (m0 §9.7).
 
+use std::io::Write;
+
 use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::id::{Slug, Ulid};
 use loci_core::index::Index;
@@ -19,7 +21,8 @@ pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal
     let text = skeleton(id, title.unwrap_or(slug.as_str()));
     let abs = vault.abs(&path);
     std::fs::create_dir_all(abs.parent().expect("a note path has a folder")).map_err(Refusal::io)?;
-    std::fs::write(&abs, text).map_err(Refusal::io)?;
+    // `create_new`: never through a symlink, nor over a file made since the check.
+    std::fs::File::create_new(&abs).and_then(|mut f| f.write_all(text.as_bytes())).map_err(Refusal::io)?;
 
     // Marked for `git diff`, as the framework rules ask of every file an agent creates.
     let mut diags = vec![];
@@ -62,7 +65,7 @@ fn refuse_destination(vault: &Vault, path: &VaultPath) -> Result<Slug, Refusal> 
     }
 
     let slug = path.slug().expect("`problem` refused a concept whose stem is no slug");
-    let existing: Vec<String> = index.slug_paths(&slug).iter().map(|p| format!("`{p}`")).collect();
+    let existing: Vec<String> = index.concepts_named(slug.as_str()).iter().map(|p| format!("`{p}`")).collect();
     if !existing.is_empty() {
         let message = format!("`{slug}` is already the slug of {}", existing.join(", "));
         return Err(Refusal::refused("new.collision", message));
@@ -78,8 +81,7 @@ mod tests {
     #[test]
     fn the_skeleton_is_canonical() {
         let text = skeleton(Ulid::generate(), "BFS");
-        let note =
-            loci_core::parse::parse(&VaultPath::new("concepts/a/bfs.md".into()).unwrap(), Kind::Concept, text.clone());
+        let note = loci_core::parse::parse(&VaultPath::new("concepts/a/bfs.md".into()).unwrap(), text.clone());
         let rewritten = loci_core::splice::apply(&text, vec![note.rewrite_frontmatter(&[])]);
         assert_eq!(rewritten.unwrap(), text, "a fix would not reformat a new concept");
     }

@@ -14,10 +14,8 @@ use crate::envelope::Refusal;
 use crate::id::{SLUG_PATTERN, Slug};
 use crate::lint::Code;
 
-/// What a vault file is (m0 §3), by where it is ([`VaultPath::kind`]). Serialized as
-/// its [`Kind::name`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
+/// What a vault file is (m0 §3), by where it is ([`VaultPath::kind`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Kind {
     Concept,
     Area,
@@ -101,6 +99,12 @@ static SOURCE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 impl VaultPath {
+    /// A path loci itself names (`loci.toml`, a plugin's files), a vault path by
+    /// construction.
+    pub fn fixed(s: &'static str) -> Self {
+        Self::new(s.to_string()).unwrap_or_else(|| panic!("`{s}` is a vault path"))
+    }
+
     /// `s` as a vault path, if it already is one; nothing is normalized.
     pub fn new(s: String) -> Option<Self> {
         let rel = RelativePath::new(&s);
@@ -180,38 +184,22 @@ impl VaultPath {
     /// files (m0 §3): `plugins/`, `.git/`, the root `loci.toml` and `.gitignore`.
     pub fn kind(&self) -> Option<Kind> {
         let parts: Vec<&str> = self.components().collect();
-        let first = parts[0];
-        let path = self.as_str();
 
         // Plugin data, git's own files and the vault's configuration are never read as
         // vault files (m0 §3).
-        if first == "plugins" || first == ".git" || path == config::FILE || path == ".gitignore" {
+        if matches!(parts[0], "plugins" | ".git") || matches!(self.as_str(), config::FILE | ".gitignore") {
             return None;
         }
 
-        let is_md = self.is_note();
-        match first {
-            "sources" => return Some(Kind::Source),
-            "inbox" => return Some(Kind::Inbox),
-            _ => {}
-        }
-
-        if !is_md {
-            return Some(Kind::Asset);
-        }
-
-        if parts.len() == 1 {
-            return Some(match first {
-                AGENTS | RULES | STYLE => Kind::Rules,
-                _ => Kind::Unknown,
-            });
-        }
-
-        Some(match first {
-            "concepts" if parts.len() == 3 && parts[2] == AREA => Kind::Area,
-            "concepts" if parts.len() >= 3 => Kind::Concept,
-            "views" => Kind::View,
-            "journal" => Kind::Journal,
+        Some(match parts.as_slice() {
+            ["sources", ..] => Kind::Source,
+            ["inbox", ..] => Kind::Inbox,
+            _ if !self.is_note() => Kind::Asset,
+            [AGENTS | RULES | STYLE] => Kind::Rules,
+            ["concepts", _, AREA] => Kind::Area,
+            ["concepts", _, _, ..] => Kind::Concept,
+            ["views", _, ..] => Kind::View,
+            ["journal", _, ..] => Kind::Journal,
             _ => Kind::Unknown,
         })
     }

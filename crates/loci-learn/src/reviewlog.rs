@@ -1,17 +1,17 @@
 //! The review log `plugins/learn/reviews.jsonl` (learn-plugin §2.4, §3).
 
 use std::io::Write;
-use std::path::Path;
 
 use jiff::Timestamp;
 use loci_core::envelope::Refusal;
-use loci_core::git;
 use loci_core::id::Ulid;
+use loci_core::path::VaultPath;
+use loci_core::vault::Vault;
 use serde::{Deserialize, Serialize};
 
-pub const DIR: &str = "plugins/learn";
-pub const LOG: &str = "plugins/learn/reviews.jsonl";
-pub const ATTRS: &str = "plugins/learn/.gitattributes";
+const DIR: &str = "plugins/learn";
+const LOG: &str = "plugins/learn/reviews.jsonl";
+const ATTRS: &str = "plugins/learn/.gitattributes";
 const ATTRS_LINE: &str = "reviews.jsonl merge=union\n";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -128,25 +128,27 @@ impl Input {
     }
 }
 
-/// The review log of the vault at a root.
+/// The review log of a vault.
 #[derive(Debug, Clone, Copy)]
-pub struct ReviewLog<'a>(pub &'a Path);
+pub struct ReviewLog<'a>(pub &'a Vault);
 
 impl ReviewLog<'_> {
     /// Reads every line of the log, sorted by timestamp (stable for equal times). A line
     /// that does not parse is `learn.log`.
     pub fn read(&self) -> Result<Vec<Line>, Refusal> {
-        let text = match std::fs::read_to_string(self.0.join(LOG)) {
+        let text = match std::fs::read_to_string(self.0.abs(&VaultPath::fixed(LOG))) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
             Err(e) => return Err(Refusal::io(e)),
         };
-        let mut lines = vec![];
-        for (n, l) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
-            let line: Line = serde_json::from_str(l)
-                .map_err(|e| Refusal::refused("learn.log", format!("{LOG} line {}: {e}", n + 1)))?;
-            lines.push(line);
-        }
+        let mut lines: Vec<Line> = text
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.trim().is_empty())
+            .map(|(n, l)| {
+                serde_json::from_str(l).map_err(|e| Refusal::refused("learn.log", format!("{LOG} line {}: {e}", n + 1)))
+            })
+            .collect::<Result<_, _>>()?;
         lines.sort_by_key(|l| l.t);
         Ok(lines)
     }
@@ -154,18 +156,13 @@ impl ReviewLog<'_> {
     /// Appends one line, creating `plugins/learn/` and its `.gitattributes` first if needed.
     /// Returns the file length before the append, for rollback.
     pub fn append(&self, line: &Line) -> std::io::Result<u64> {
-        std::fs::create_dir_all(self.0.join(DIR))?;
-        let attrs = self.0.join(ATTRS);
+        std::fs::create_dir_all(self.0.abs(&VaultPath::fixed(DIR)))?;
+        let attrs = self.0.abs(&VaultPath::fixed(ATTRS));
         if !attrs.exists() {
             std::fs::write(&attrs, ATTRS_LINE)?;
         }
-        let path = self.0.join(LOG);
-        let before = match std::fs::metadata(&path) {
-            Ok(m) => m.len(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
-            Err(e) => return Err(e),
-        };
-        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(self.0.abs(&VaultPath::fixed(LOG)))?;
+        let before = f.metadata()?.len();
         let json = serde_json::to_string(line).expect("a line always serialises");
         // One write, undone on failure, so a partial line never stays in the log.
         if let Err(e) = f.write_all(format!("{json}\n").as_bytes()) {
@@ -177,12 +174,12 @@ impl ReviewLog<'_> {
 
     /// Truncates the log back to `len` bytes (undoing an append).
     pub fn truncate(&self, len: u64) -> std::io::Result<()> {
-        std::fs::OpenOptions::new().write(true).open(self.0.join(LOG))?.set_len(len)
+        std::fs::OpenOptions::new().write(true).open(self.0.abs(&VaultPath::fixed(LOG)))?.set_len(len)
     }
 
     /// Commits the log and its `.gitattributes` alone, as the user (§2.4). Returns the commit.
     pub fn commit(&self, command: &str) -> Result<String, String> {
-        git::Repo::new(self.0).commit_paths(&format!("loci: learn {command}"), &[LOG, ATTRS])
+        self.0.repo().commit_paths(&format!("loci: learn {command}"), &[LOG, ATTRS])
     }
 }
 

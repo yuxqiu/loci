@@ -60,14 +60,14 @@ impl<'a> Unit<'a> {
         self.range.start + (text.len() - text.trim_start().len())
     }
 
-    /// The unit's links to notes and files, resolved, in order.
-    fn links(&self, index: &Index) -> Vec<(&'a Spanned<Link>, Resolved)> {
+    /// The unit's links to notes and files, in order, each with what it resolves to.
+    fn links(&self, index: &'a Index) -> Vec<(&'a Spanned<Link>, Option<Resolved<'a>>)> {
         let note = self.note;
         note.links
             .iter()
             .filter(|l| matches!(l.form, LinkForm::Wiki | LinkForm::Embed))
             .filter(|l| self.range.start <= l.span.start && l.span.end <= self.range.end)
-            .filter_map(|l| index.resolve(note, l).ok().map(|r| (l, r)))
+            .map(|l| (l, index.resolve(note, l).ok()))
             .collect()
     }
 
@@ -106,13 +106,17 @@ impl AnchorIds {
     /// The identifier of the next heading, whose text is `text`.
     fn take(&mut self, text: &str) -> String {
         let base = anchor_id(text);
-        let id =
-            (0..).map(|n| if n == 0 { base.clone() } else { format!("{base}-{n}") }).find(|c| !self.used.contains(c));
-        let id = id.expect("an unused identifier exists");
-        self.used.insert(id.clone());
+        let id = take_unique(&mut self.used, |n| if n == 0 { base.clone() } else { format!("{base}-{n}") });
         self.order.push(id.clone());
         id
     }
+}
+
+/// The first of `candidate(0)`, `candidate(1)`, … not in `taken`, now taken.
+fn take_unique(taken: &mut BTreeSet<String>, candidate: impl Fn(usize) -> String) -> String {
+    let name = (0..).map(candidate).find(|c| !taken.contains(c)).expect("an untaken name exists");
+    taken.insert(name.clone());
+    name
 }
 
 /// The identifiers of the headings of the units: per unit, its anchors; and every
@@ -171,7 +175,7 @@ fn is_image(path: &VaultPath) -> bool {
 }
 
 impl Export {
-    pub fn of(index: &Index, root: &VaultPath, depth: usize) -> Export {
+    pub fn of(index: &Index, root: &Note, depth: usize) -> Export {
         // 1. Collect, then name every heading once.
         let (units, unit_of) = collect(index, root, depth);
         let (anchors, heading_ids) = anchors(&units);
@@ -236,18 +240,19 @@ impl Assembly<'_> {
     }
 
     /// What `link` in `note` becomes in the document: an image under `assets/`, a link
-    /// to an included note's anchor, or plain text (its label, heading or title) for
-    /// anything left out.
-    fn link_replacement(&mut self, note: &Note, link: &Spanned<Link>, resolved: Resolved) -> String {
+    /// to an included note's anchor, or plain text (its label, heading or title; for a
+    /// link that does not resolve, its target as written) for anything left out.
+    fn link_replacement(&mut self, note: &Note, link: &Spanned<Link>, resolved: Option<Resolved<'_>>) -> String {
         let label = link.label.as_ref().map(|l| l.text(&note.text).to_string());
-        let p = match resolved {
-            Resolved::File(p) if link.form == LinkForm::Embed && is_image(&p) => {
-                let name = self.assets.name(&p);
+        let target = match resolved {
+            None => return label.unwrap_or_else(|| link.target.text(&note.text).to_string()),
+            Some(Resolved::File(p)) if link.form == LinkForm::Embed && is_image(p) => {
+                let name = self.assets.name(p);
                 let alt = label.filter(|l| !is_size(l)).unwrap_or_else(|| name.clone());
                 return format!("![{alt}]({ASSETS}/{name})");
             }
-            Resolved::File(p) => return label.unwrap_or_else(|| p.to_string()),
-            Resolved::Note(p) => p,
+            Some(Resolved::File(p)) => return label.unwrap_or_else(|| p.to_string()),
+            Some(Resolved::Note(note)) => note,
         };
 
         let heading = match &link.target.fragment {
@@ -255,9 +260,8 @@ impl Assembly<'_> {
             Some(Fragment::Block(_)) | None => None,
         };
 
-        let title = || self.index.parsed(&p).expect("a resolved note").title();
-        let text = label.unwrap_or_else(|| heading.unwrap_or_else(title).to_string());
-        let anchor = self.unit_of.get(&p).and_then(|&j| {
+        let text = label.unwrap_or_else(|| heading.unwrap_or_else(|| target.title()).to_string());
+        let anchor = self.unit_of.get(&target.path).and_then(|&j| {
             let a = &self.anchors[j];
             heading.and_then(|h| a.headings.get(&heading_key(h))).or(a.top.as_ref())
         });
@@ -271,9 +275,9 @@ impl Assembly<'_> {
 
 /// Step 1 (m1-m4 §4): each note once, at its first appearance, breadth-first from
 /// `root` up to `depth` links away; and each note's unit index.
-fn collect<'a>(index: &'a Index, root: &'a VaultPath, depth: usize) -> (Vec<Unit<'a>>, BTreeMap<&'a VaultPath, usize>) {
-    let mut units = vec![Unit::root(index.parsed(root).expect("the command resolved `root` to a readable note"))];
-    let mut unit_of: BTreeMap<&VaultPath, usize> = BTreeMap::from([(root, 0)]);
+fn collect<'a>(index: &'a Index, root: &'a Note, depth: usize) -> (Vec<Unit<'a>>, BTreeMap<&'a VaultPath, usize>) {
+    let mut units = vec![Unit::root(root)];
+    let mut unit_of: BTreeMap<&VaultPath, usize> = BTreeMap::from([(&root.path, 0)]);
     let mut queue = VecDeque::from([(0usize, 0usize)]);
     while let Some((i, d)) = queue.pop_front() {
         if d >= depth {
@@ -287,8 +291,8 @@ fn collect<'a>(index: &'a Index, root: &'a VaultPath, depth: usize) -> (Vec<Unit
             .links(index)
             .into_iter()
             .filter_map(|(link, resolved)| match resolved {
-                Resolved::Note(p) => Some((link, index.parsed(&p).expect("a resolved note"))),
-                Resolved::File(_) => None,
+                Some(Resolved::Note(note)) => Some((link, note)),
+                Some(Resolved::File(_)) | None => None,
             })
             .map(|(link, note)| (note, link.target.fragment.as_ref(), (parent.level_at(link.span.start) + 1).min(6)))
             .collect();
@@ -323,12 +327,9 @@ impl Assets {
         let file = relative_path::RelativePath::new(path.as_str());
         let stem = file.file_stem().expect("a vault path ends in a name");
         let ext = file.extension().map_or(String::new(), |e| format!(".{e}"));
-        let mut name = path.file_name().to_string();
-        let mut n = 1;
-        while !self.taken.insert(name.clone()) {
-            name = format!("{stem}-{n}{ext}");
-            n += 1;
-        }
+        let name = take_unique(&mut self.taken, |n| {
+            if n == 0 { path.file_name().to_string() } else { format!("{stem}-{n}{ext}") }
+        });
         self.names.insert(path.clone(), name.clone());
         name
     }
@@ -375,6 +376,10 @@ mod tests {
         format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# {title}\n\n{body}")
     }
 
+    fn export(i: &Index, root: &str, depth: usize) -> Export {
+        Export::of(i, i.parsed(&VaultPath::new(root.into()).unwrap()).unwrap(), depth)
+    }
+
     #[test]
     fn anchor_ids() {
         assert_eq!(anchor_id("Dijkstra's algorithm"), "dijkstras-algorithm");
@@ -399,7 +404,7 @@ mod tests {
             ("concepts/a/attachments/g.png", ""),
         ]);
 
-        let e = Export::of(&i, &VaultPath::new("views/algo.md".into()).unwrap(), 1);
+        let e = export(&i, "views/algo.md", 1);
         assert_eq!(e.notes, vec!["views/algo.md", "concepts/a/bfs.md", "concepts/a/dfs.md"]);
         assert_eq!(
             e.assets,
@@ -412,7 +417,6 @@ mod tests {
         assert!(md.contains("#### Proof\n"), "{md}");
         assert!(md.contains("see Queue."), "{md}");
         assert!(md.contains("![graph](assets/g.png)"), "{md}");
-        assert!(!md.contains("Glossary"), "a note left out is plain text, nothing more: {md}");
         assert!(!md.contains("id:"), "{md}");
     }
 
@@ -422,13 +426,19 @@ mod tests {
             ("views/v.md", "# V\n\n[[bfs#Proof]]\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Intro.\n\n## Proof\n\nBy induction.\n\n## Other\n\nX.\n")),
         ]);
-        let e = Export::of(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
+        let e = export(&i, "views/v.md", 1);
         assert!(e.markdown.contains("[Proof](#proof)"), "{}", e.markdown);
         assert!(e.markdown.contains("By induction."));
         assert!(!e.markdown.contains("Intro."));
         assert!(!e.markdown.contains("X."));
-        let none = Export::of(&i, &VaultPath::new("views/v.md".into()).unwrap(), 0);
+        let none = export(&i, "views/v.md", 0);
         assert_eq!(none.notes, vec!["views/v.md"]);
+    }
+
+    #[test]
+    fn unresolved_links_become_plain_text() {
+        let i = Index::from_texts(&[("views/v.md", "# V\n\nSee [[nope]], [[nope|that]] and [[#Missing]].\n")]);
+        assert_eq!(export(&i, "views/v.md", 1).markdown, "# V\n\nSee nope, that and #Missing.\n");
     }
 
     #[test]
@@ -437,7 +447,7 @@ mod tests {
             ("views/v.md", "# V\n\n[[bfs]], then [[bfs#Proof]].\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Intro.\n\n## Proof\n\nBy induction.\n")),
         ]);
-        let e = Export::of(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
+        let e = export(&i, "views/v.md", 1);
         assert_eq!(e.notes, vec!["views/v.md", "concepts/a/bfs.md"]);
         assert_eq!(e.markdown.matches("By induction.").count(), 1, "{}", e.markdown);
         assert!(e.markdown.contains("[BFS](#bfs), then [Proof](#proof)."), "{}", e.markdown);
@@ -450,7 +460,7 @@ mod tests {
             ("views/v.md", &format!("# V\n\nSee [[bfs#^{id}]].\n")),
             ("concepts/a/bfs.md", &concept("BFS", &format!("Intro.\n\nThe key step. ^{id}\n\nOther.\n"))),
         ]);
-        let e = Export::of(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
+        let e = export(&i, "views/v.md", 1);
         let md = &e.markdown;
         assert!(md.contains("The key step.\n") && !md.contains("Intro.") && !md.contains("Other."), "{md}");
         assert!(!md.contains('^'), "block ids are removed: {md}");
@@ -463,7 +473,7 @@ mod tests {
             ("views/v.md", "# V\n\n## Read [[bfs]] first ##\n\nSetext [[bfs]]\ntwo lines\n---\n\nText.\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Body.\n")),
         ]);
-        let md = Export::of(&i, &VaultPath::new("views/v.md".into()).unwrap(), 0).markdown;
+        let md = export(&i, "views/v.md", 0).markdown;
         assert!(md.contains("## Read BFS first ##\n"), "{md}");
         assert!(md.contains("## Setext BFS two lines\n\nText."), "{md}");
     }
@@ -475,13 +485,13 @@ mod tests {
             ("concepts/a/bfs.md", &concept("BFS", "Body.\n")),
             ("concepts/a/untitled.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\n---\nNo heading.\n"),
         ]);
-        let e = Export::of(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
+        let e = export(&i, "views/v.md", 1);
         assert!(e.markdown.contains("[BFS](#bfs-1)"), "{}", e.markdown);
         let i = Index::from_texts(&[
             ("views/v.md", "# V\n\n[[untitled]]\n"),
             ("concepts/a/untitled.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\n---\nNo heading.\n"),
         ]);
-        let e = Export::of(&i, &VaultPath::new("views/v.md".into()).unwrap(), 1);
+        let e = export(&i, "views/v.md", 1);
         assert!(
             e.markdown.contains("[untitled](#untitled)") && e.markdown.contains("## untitled\n\nNo heading."),
             "{}",

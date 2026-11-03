@@ -1,5 +1,8 @@
 //! `loci init` (m0 §9.1).
 
+use std::io::Write;
+use std::path::Path;
+
 use loci_core::config::{self, Config};
 use loci_core::envelope::{Refusal, Report};
 use loci_core::{git, path};
@@ -14,29 +17,42 @@ const GITIGNORE_LINE: &str = "/.loci/";
 pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     // `init` creates the vault where it is told, or right here: it never searches up.
     let dir = ctx.vault.dir().to_path_buf();
+    refuse_destination(&dir)?;
+    ensure_repo_root(&dir)?;
+    let (created, skipped) = write_files(&dir)?;
+    let human = format!("created: {}\nskipped: {}\n", created.join(", "), skipped.join(", "));
+    Ok(Report::ok(json!({"created": created, "skipped": skipped}), human))
+}
 
-    let present = |name: &str| dir.join(name).symlink_metadata().is_ok();
-    if present(config::FILE) {
+/// Refuses a folder that is a vault already (`init.exists`), or where a file `init`
+/// manages is a symlink (`file.symlink`): there is no vault to check yet (`Vault::open`
+/// refuses symlinks), so this is checked before anything is written (m0 §3).
+fn refuse_destination(dir: &Path) -> Result<(), Refusal> {
+    if dir.join(config::FILE).symlink_metadata().is_ok() {
         return Err(Refusal::refused("init.exists", "loci.toml already exists"));
     }
-
-    // There is no vault to check yet (`Vault::open` refuses symlinks): before anything
-    // is written, the files `init` manages must not be links (m0 §3).
     let managed = [path::RULES, path::STYLE, path::AGENTS, ".gitignore"];
     if let Some(name) = managed.into_iter().find(|n| dir.join(n).symlink_metadata().is_ok_and(|m| m.is_symlink())) {
         let message = format!("`{name}` is a symlink; loci does not follow symlinks");
         return Err(Refusal::refused("file.symlink", message));
     }
+    Ok(())
+}
 
-    match git::toplevel(&dir) {
-        // Not in a work tree (or git cannot tell): `git init` creates one or fails loudly.
-        Err(_) => {
-            git::Repo::new(&dir).init().map_err(Refusal::git)?;
-        }
-        Ok(top) if dir.canonicalize().is_ok_and(|d| d == top) => {}
-        Ok(_) => return Err(Refusal::refused("vault.not-git", "run `loci init` at the root of the git work tree")),
+/// Makes `dir` the root of a git work tree: `git init` when it is in none (or git
+/// cannot tell, so `git init` fails loudly), a refusal (`vault.not-git`) when it is
+/// inside one but not at its root.
+fn ensure_repo_root(dir: &Path) -> Result<(), Refusal> {
+    match git::toplevel(dir) {
+        Err(_) => git::Repo::new(dir).init().map_err(Refusal::git),
+        Ok(top) if dir.canonicalize().is_ok_and(|d| d == top) => Ok(()),
+        Ok(_) => Err(Refusal::refused("vault.not-git", "run `loci init` at the root of the git work tree")),
     }
+}
 
+/// Writes the files a vault starts with, leaving any that exist; returns the names
+/// created and skipped.
+fn write_files(dir: &Path) -> Result<(Vec<String>, Vec<String>), Refusal> {
     let files: [(&str, String); 4] = [
         (config::FILE, Config::default_file(super::updates::all().last().expect("updates ship").id)),
         (path::RULES, "# Rules\n\n## Lessons\n".to_string()),
@@ -46,11 +62,14 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
 
     let (mut created, mut skipped) = (vec![], vec![]);
     for (name, content) in files {
-        if present(name) {
-            skipped.push(name.to_string());
-        } else {
-            std::fs::write(dir.join(name), content).map_err(Refusal::io)?;
-            created.push(name.to_string());
+        // `create_new`: an existing file (or symlink) is kept, never written through.
+        match std::fs::File::create_new(dir.join(name)) {
+            Ok(mut f) => {
+                f.write_all(content.as_bytes()).map_err(Refusal::io)?;
+                created.push(name.to_string());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => skipped.push(name.to_string()),
+            Err(e) => return Err(Refusal::io(e)),
         }
     }
 
@@ -59,9 +78,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     } else {
         skipped.push(".gitignore".to_string());
     }
-
-    let human = format!("created: {}\nskipped: {}\n", created.join(", "), skipped.join(", "));
-    Ok(Report::ok(json!({"created": created, "skipped": skipped}), human))
+    Ok((created, skipped))
 }
 
 /// Appends [`GITIGNORE_LINE`] to the `.gitignore` at `path` (created if missing) unless

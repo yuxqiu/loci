@@ -175,9 +175,8 @@ fn deleted_card_lines_are_ignored() {
     let v = vault(&[("concepts/a/x.md", &concept(CONCEPT, &format!("- q1 :: a1 ^{ID1}\n")))]);
     v.write(
         "plugins/learn/reviews.jsonl",
-        r#"{"t":"2020-01-01T00:00:00Z","card":"01JBZZZZZZZZZZZZZZZZZZZZZZ","grade":"good"}"#,
+        "{\"t\":\"2020-01-01T00:00:00Z\",\"card\":\"01JBZZZZZZZZZZZZZZZZZZZZZZ\",\"grade\":\"good\"}\n",
     );
-    v.write("plugins/learn/reviews.jsonl", &(v.read("plugins/learn/reviews.jsonl") + "\n"));
     let (_, env) = learn(&v, &["review"], "q\n");
     assert_eq!(env["data"]["new"], 1, "{env}");
 }

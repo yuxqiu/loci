@@ -57,33 +57,41 @@ fn entry_point(files: &[VaultPath], out: &mut Out) {
 
 /// Uncommitted changes, `None` when git failed (reported; the other sections go on).
 fn changes(repo: git::Repo, out: &mut Out) -> Option<git::Changes> {
-    out.human.push_str("## Uncommitted changes\n\n");
-    match repo.status() {
-        Ok(c) => {
-            let (m, d, a, u) = (c.modified.len(), c.deleted.len(), c.added.len(), c.untracked.len());
-            out.human.push_str(&format!("{m} modified, {d} deleted, {a} added, {u} untracked\n"));
-            Some(c)
-        }
-        Err(e) => {
-            out.human.push_str("unknown: `git status` failed\n");
-            out.diags.push(Diagnostic::warning("status.git", format!("`git status` failed: {e}")));
-            None
-        }
-    }
+    out.git_section("## Uncommitted changes\n\n", repo.status(), "`git status` failed", |c| {
+        let (m, d, a, u) = (c.modified.len(), c.deleted.len(), c.added.len(), c.untracked.len());
+        format!("{m} modified, {d} deleted, {a} added, {u} untracked")
+    })
 }
 
 /// Agent work recorded by `loci done`, waiting for the `improve` skill: how many records.
 fn agent_work(repo: git::Repo, out: &mut Out) -> Option<usize> {
-    out.human.push_str("\n## Agent work to review\n\n");
-    match repo.agent_refs() {
-        Ok(r) => {
-            out.human.push_str(&format!("{} task(s) recorded by `loci done`\n", r.len()));
-            Some(r.len())
-        }
-        Err(e) => {
-            out.human.push_str("unknown: git failed\n");
-            out.diags.push(Diagnostic::warning("status.git", format!("listing agent records failed: {e}")));
-            None
+    let refs = repo.agent_refs().map(|r| r.len());
+    out.git_section("\n## Agent work to review\n\n", refs, "listing agent records failed", |n| {
+        format!("{n} task(s) recorded by `loci done`")
+    })
+}
+
+impl Out {
+    /// A section read from git: `header`, then `line` of the result; when git fails,
+    /// "unknown" and a `status.git` warning, both saying what `failed`.
+    fn git_section<T>(
+        &mut self,
+        header: &str,
+        result: Result<T, String>,
+        failed: &str,
+        line: impl FnOnce(&T) -> String,
+    ) -> Option<T> {
+        self.human.push_str(header);
+        match result {
+            Ok(value) => {
+                self.human.push_str(&format!("{}\n", line(&value)));
+                Some(value)
+            }
+            Err(e) => {
+                self.human.push_str(&format!("unknown: {failed}\n"));
+                self.diags.push(Diagnostic::warning("status.git", format!("{failed}: {e}")));
+                None
+            }
         }
     }
 }
@@ -117,28 +125,7 @@ fn inbox(files: &[VaultPath], changes: Option<&git::Changes>, out: &mut Out) -> 
 
     out.human.push('\n');
 
-    match uncommitted.as_deref() {
-        Some(u) if !u.is_empty() => {
-            for f in u.iter().take(LISTED) {
-                out.human.push_str(&format!("- {f}\n"));
-            }
-            if u.len() > LISTED {
-                out.human.push_str(&format!("- and {} more\n", u.len() - LISTED));
-            }
-            out.human.push_str("Next: ask the user to commit these before processing the inbox.\n");
-            let n = u.len();
-            out.diags.push(Diagnostic::warning(
-                "inbox.uncommitted",
-                format!(
-                    "{n} inbox file(s) uncommitted: commit them before processing; a dissolved draft must be in git"
-                ),
-            ));
-        }
-        Some(_) if !inbox.is_empty() => {
-            out.human.push_str("Next: process them with the intake skill (`loci skill show intake`).\n");
-        }
-        _ => {}
-    }
+    next_step(inbox.len(), uncommitted.as_deref(), out);
 
     // In JSON, files directly in `inbox/` are counted under `""` (m0 §9.6).
     let by_folder: BTreeMap<&str, usize> =
@@ -163,4 +150,31 @@ fn updates(mark: Option<UpdateId>, out: &mut Out) -> Vec<UpdateId> {
         out.human.push_str(&format!("\n## Updates\n\n{line}\n"));
     }
     waiting
+}
+
+/// The next step for the inbox: commit the `uncommitted` files first (`None`: unknown),
+/// else process its `files` with the intake skill.
+fn next_step(files: usize, uncommitted: Option<&[&VaultPath]>, out: &mut Out) {
+    match uncommitted {
+        Some(u) if !u.is_empty() => {
+            for f in u.iter().take(LISTED) {
+                out.human.push_str(&format!("- {f}\n"));
+            }
+            if u.len() > LISTED {
+                out.human.push_str(&format!("- and {} more\n", u.len() - LISTED));
+            }
+            out.human.push_str("Next: ask the user to commit these before processing the inbox.\n");
+            let n = u.len();
+            out.diags.push(Diagnostic::warning(
+                "inbox.uncommitted",
+                format!(
+                    "{n} inbox file(s) uncommitted: commit them before processing; a dissolved draft must be in git"
+                ),
+            ));
+        }
+        Some(_) if files > 0 => {
+            out.human.push_str("Next: process them with the intake skill (`loci skill show intake`).\n");
+        }
+        _ => {}
+    }
 }

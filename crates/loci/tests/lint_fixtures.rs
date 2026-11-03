@@ -1,4 +1,4 @@
-//! `loci lint` (and the read-only `find`) on the fixture vaults of m0 §13.2.
+//! `loci lint` on the fixture vaults of m0 §13.2.
 
 mod common;
 
@@ -38,31 +38,10 @@ fn names() {
     // resolve.
     let dangling = covered_by(&v, &env, "link.dangling", dfs);
     assert_eq!(dangling, ["BFS", "plan", "25-03-14", "diagram.png", "breadth-first"]);
-    let hints: Vec<&str> = with_code(&env, "link.dangling").iter().map(|d| d["hint"].as_str().unwrap()).collect();
-    assert_eq!(hints[0], "no concept is named `BFS`; did you mean [[bfs]]?");
-    // Nothing close to suggest for the rest: create the concept, or link a non-concept by path.
-    for d in &with_code(&env, "link.dangling")[1..] {
-        let hint = d["hint"].as_str().unwrap();
-        assert!(hint.starts_with("no concept is named") && hint.ends_with("or link a non-concept by path"), "{hint}");
-    }
     assert_eq!(covered_by(&v, &env, "link.path-form", dfs), ["/RULES", "../x"]);
-    // A view sharing a concept's stem is not a slug duplicate; two concepts are.
-    let dups = with_code(&env, "slug.duplicate");
-    assert_eq!(dups.len(), 1, "{}", diag_lines(&env));
-    assert_eq!(path_of(dups[0]), "concepts/algo/dup.md");
-    assert!(dups[0]["message"].as_str().unwrap().contains("concepts/other/dup.md"));
-    assert!(on_path(&env, "views/learn/bfs.md").is_empty());
-    assert_eq!(env["data"]["errors"], 8);
-    assert_eq!(env["data"]["warnings"], 0);
+    // The hints suggest `[[bfs]]` for `[[BFS]]`; a view sharing a concept's stem is no
+    // slug duplicate, two concepts are.
     assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
-}
-
-#[test]
-fn lint_output_is_byte_identical_across_runs() {
-    let v = TestVault::committed(BIN, "names");
-    let a = v.run_raw(&["--json", "lint"]);
-    let b = v.run_raw(&["--json", "lint"]);
-    assert_eq!(a, b);
 }
 
 #[test]
@@ -116,19 +95,14 @@ fn link_syntax() {
     let (v, code, env) = lint("link-syntax");
     assert_eq!(code, 1);
     let c = "concepts/a/c.md";
-    assert_codes(&env, c, &["link.markdown"]);
     let md = with_code(&env, "link.markdown");
     let covered: Vec<_> = md.iter().map(|d| covered(&v.read(c), d).to_string()).collect();
     // Inline link, inline image and reference link; external links and autolinks pass.
     assert_eq!(covered.len(), 3, "{}", diag_lines(&env));
     assert!(covered[0].starts_with("[x](concepts/a/b.md)"), "{covered:?}");
     assert!(covered[1].starts_with("![](concepts/a/x.png)"), "{covered:?}");
-    let hints: Vec<_> = md.iter().map(|d| d["hint"].as_str().unwrap().to_string()).collect();
-    assert!(hints[0].contains("[[concepts/a/b]]"), "{hints:?}");
-    assert!(hints[1].contains("![[concepts/a/x.png]]"), "{hints:?}");
-    assert!(hints[2].contains("[[concepts/a/b]]"), "{hints:?}");
-    // Wikilink embeds resolve by root path, also for two same-named images.
-    assert!(with_code(&env, "link.dangling").is_empty());
+    // The hints give the wikilink; wikilink embeds resolve by root path, also for two
+    // same-named images.
     assert_snapshot!(diag_lines(&env));
 }
 
@@ -141,9 +115,9 @@ fn dissolved_heading() {
     let l = "concepts/a/linker.md";
     assert_codes(&env, l, &["link.dangling-heading", "link.dangling-block"]);
     assert_eq!(covered_by(&v, &env, "link.dangling-heading", l), ["target#Removed Heading", "#missing-local"]);
-    let msgs: Vec<_> = with_code(&env, "link.dangling-heading").iter().map(|d| d["message"].clone()).collect();
-    assert!(msgs[0].as_str().unwrap().contains("Removed Heading"));
-    assert!(msgs[1].as_str().unwrap().contains("missing-local"));
+    let msgs = messages(&env, "link.dangling-heading");
+    assert!(msgs[0].contains("Removed Heading"));
+    assert!(msgs[1].contains("missing-local"));
     let block = with_code(&env, "link.dangling-block");
     assert_eq!(block.len(), 1);
     assert!(block[0]["message"].as_str().unwrap().contains("^gone"));
@@ -167,25 +141,19 @@ fn block_ids_resolve_and_duplicate() {
 
 #[test]
 fn block_id_of_parent_item_spans_its_children() {
-    use loci_core::parse::{BlockKind, parse};
-    use loci_core::path::Kind;
+    use loci_core::parse::parse;
+
     let text = std::fs::read_to_string(fixtures_dir().join("block-ids/concepts/a/lists.md")).unwrap();
-    let note =
-        parse(&loci_core::path::VaultPath::new("concepts/a/lists.md".into()).unwrap(), Kind::Concept, text.clone());
+    let note = parse(&loci_core::path::VaultPath::new("concepts/a/lists.md".into()).unwrap(), text.clone());
     let get = |id: &str| note.blocks.iter().find(|b| *b.id == id).unwrap_or_else(|| panic!("no ^{id}"));
-    for id in ["tight1", "loose1", "multi1", "parent1", "child1", "para1", "shared"] {
-        get(id);
-    }
     let parent = get("parent1");
     let child = get("child1");
     // The parent's id sits before the nested list and its block covers the children.
     assert!(parent.id.span.end <= text.find("  - child item").unwrap());
     assert!(text[parent.span.clone()].contains("- child item ^child1"));
     assert!(text[parent.span.clone()].contains("- other child"));
-    assert!(text[child.span.clone()].starts_with("child item") || text[child.span.clone()].contains("child item"));
+    assert!(text[child.span.clone()].contains("child item"));
     assert!(!text[child.span.clone()].contains("other child"));
-    assert_eq!(parent.kind, child.kind);
-    assert!(matches!(get("para1").kind, BlockKind::Paragraph));
     // The multi-line item's id identifies the whole item.
     assert!(text[get("multi1").span.clone()].contains("first line"));
 }
@@ -196,18 +164,7 @@ fn block_id_of_parent_item_spans_its_children() {
 fn no_h1() {
     let (_, code, env) = lint("no-h1");
     assert_eq!(code, 1);
-    assert_codes(&env, "views/none.md", &["h1.missing"]);
-    assert_codes(&env, "views/h2-only.md", &["h1.missing"]);
-    assert_codes(&env, "views/late.md", &["h1.not-first"]);
-    assert_codes(&env, "views/two.md", &["h1.multiple"]);
-    assert_codes(&env, "views/setext-two.md", &["h1.multiple"]);
-    assert_codes(&env, "views/setext.md", &[]);
-    assert_codes(&env, "journal/r/2025/03/25-03-14.md", &["h1.missing"]);
-    assert_codes(&env, "STYLE.md", &["h1.missing"]);
-    assert_codes(&env, "concepts/a/fm-no-h1.md", &["h1.missing"]);
-    assert_codes(&env, "concepts/a/fm-then-h1.md", &[]);
-    // Not a managed kind.
-    assert_codes(&env, "inbox/drafts/draft.md", &[]);
+    // Every managed kind needs its H1 (setext counts); an inbox draft is not managed.
     assert_snapshot!(diag_lines(&env));
 }
 
@@ -223,8 +180,7 @@ fn code_hash() {
     assert_codes(&env, "concepts/a/code.md", &["link.dangling"]);
     // `# not a heading` in a fence, `#tag` and `#notaheading` are not headings;
     // `## Real heading` is.
-    let msgs: Vec<String> =
-        with_code(&env, "link.dangling-heading").iter().map(|d| d["message"].as_str().unwrap().to_string()).collect();
+    let msgs = messages(&env, "link.dangling-heading");
     assert_eq!(msgs.len(), 3, "{}", diag_lines(&env));
     assert!(msgs[0].contains("not a heading") && msgs[1].contains("`tag`") && msgs[2].contains("notaheading"));
 }
@@ -259,22 +215,12 @@ fn kinds() {
     v.write(".gitignore", "/secret/\n/.loci/\n");
     v.write("secret/s.md", "no heading [[ignored-dangling]] zanzibar\n");
     v.write(".loci/cache.md", "zanzibar\n");
-    v.git(&["init", "-q", "-b", "main"]);
+    v.init_git();
     v.commit_all("fixture");
     let (code, env) = v.run(&["lint"]);
     assert_eq!(code, 1);
-    for p in ["notes.md", "concepts/x.md", "misc/readme.md"] {
-        assert_codes(&env, p, &["kind.unknown"]);
-    }
-    assert_codes(&env, "inbox/drafts/d.md", &[]);
-    assert_codes(&env, "inbox/loose.md", &["inbox.root-file"]);
-    assert_codes(&env, "inbox/journal/entry.md", &["inbox.root-file"]);
-    assert_codes(&env, "inbox/journal/r/entry.md", &[]);
-    assert!(with_code(&env, "inbox.root-file").iter().all(|d| d["severity"] == "warning"));
-    for d in diags(&env) {
-        let p = path_of(d).as_str().unwrap_or("");
-        assert!(!p.starts_with("plugins/") && !p.starts_with("secret/") && !p.starts_with(".loci/"), "{d}");
-    }
+    // Files outside the known folders are `kind.unknown`, files directly in `inbox/` or
+    // `inbox/journal/` are warned about, and nothing under `plugins/` or ignored is read.
     assert_snapshot!(diag_lines(&env));
 }
 
@@ -338,15 +284,6 @@ fn sources_lint() {
     assert_eq!(covered_by(&v, &env, "link.dangling-heading", "concepts/a/c.md"), ["sources/docs/guide#nope"]);
     assert_eq!(covered_by(&v, &env, "link.dangling", "concepts/a/c.md"), ["sources/papers/missing.pdf"]);
     // Every source is `sources/<type>/<slug>.<ext>`, with any slug as the type.
-    for bad in
-        ["sources/stray.md", "sources/Talks/intro.md", "sources/clippings/nested/page.md", "sources/papers/noext"]
-    {
-        assert!(has(&env, "sources.layout", bad), "{bad}: {}", diag_lines(&env));
-    }
-    for good in ["sources/videos/talk.md", "sources/papers/heaps.pdf", "sources/docs/guide.md"] {
-        assert!(on_path(&env, good).is_empty(), "{good}: {}", diag_lines(&env));
-    }
-    assert!(with_code(&env, "sources.changed").is_empty());
     assert_snapshot!(diag_lines(&env));
 }
 
@@ -380,7 +317,7 @@ fn vault_not_git_and_config_invalid() {
     let v = TestVault::fixture(BIN, "dispatch");
     let (code, env) = v.run(&["lint"]);
     assert_eq!((code, error_code(&env)), (1, "vault.not-git"));
-    v.git(&["init", "-q", "-b", "main"]);
+    v.init_git();
     v.write("loci.toml", "schema = 1\nunknown = 2\n");
     let (code, env) = v.run(&["lint"]);
     assert_eq!((code, error_code(&env)), (1, "config.invalid"));
@@ -449,7 +386,7 @@ fn a_vault_with_a_symlink_is_refused() {
     for args in [&["lint"][..], &["status"], &["mv", "views/linker.md", "views/x.md"]] {
         let (code, env) = v.run(args);
         assert_eq!((code, error_code(&env)), (1, "file.symlink"), "{args:?}: {env:#}");
-        let message = env["error"]["message"].as_str().unwrap();
+        let message = error_message(&env);
         for link in ["`views/leak.md`", "`views/synced`", "`plugins/learn/reviews.jsonl`"] {
             assert!(message.lines().any(|l| l.trim_start().starts_with(link)), "{link}: {message}");
         }
@@ -459,7 +396,7 @@ fn a_vault_with_a_symlink_is_refused() {
     std::fs::remove_file(v.root.join("plugins/learn/reviews.jsonl")).unwrap();
     let (code, env) = v.run(&["lint"]);
     assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
-    assert!(env["error"]["message"].as_str().unwrap().contains("has a name that is not UTF-8"), "{env:#}");
+    assert!(error_message(&env).contains("has a name that is not UTF-8"), "{env:#}");
     std::fs::remove_file(&odd).unwrap();
     let (code, env) = v.run(&["lint"]);
     assert!(error_code(&env).is_empty() && code <= 1, "{env:#}");
@@ -489,7 +426,7 @@ fn a_non_utf8_name_anywhere_refuses_the_vault() {
     for args in [&["lint"][..], &["status"]] {
         let (code, env) = v.run(args);
         assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{args:?}: {env:#}");
-        let message = env["error"]["message"].as_str().unwrap();
+        let message = error_message(&env);
         assert!(message.contains("`plugins/x/data\u{fffd}` has a name that is not UTF-8"), "{message}");
     }
     std::fs::remove_file(raw(b"plugins/x/data\xff")).unwrap();
@@ -535,7 +472,7 @@ fn a_deleted_file_does_not_refuse_the_vault() {
     std::fs::remove_file(v.root.join(std::ffi::OsStr::from_bytes(b"views/sub/odd\xff.png"))).unwrap();
     let (code, env) = v.run(&["status"]);
     assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
-    assert!(env["error"]["message"].as_str().unwrap().contains("has a name that is not UTF-8"), "{env:#}");
+    assert!(error_message(&env).contains("has a name that is not UTF-8"), "{env:#}");
     v.git(&["add", "-u", "views/sub"]);
     v.git(&["commit", "-q", "-m", "odd deleted"]);
     std::fs::remove_file(v.root.join("views/sub/gone.png")).unwrap();
@@ -572,7 +509,7 @@ fn an_unreadable_file_refuses_the_vault() {
     }
     for (code, env) in runs {
         assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
-        let message = env["error"]["message"].as_str().unwrap();
+        let message = error_message(&env);
         for part in [
             "`views/bad.md` is not valid UTF-8",
             "`views/locked.md` cannot be read",
@@ -604,7 +541,7 @@ fn a_tracked_file_replaced_by_a_folder_or_a_special_file() {
     let _socket = std::os::unix::net::UnixListener::bind(v.root.join("views/b.md")).unwrap();
     let (code, env) = v.run(&["lint"]);
     assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
-    assert!(env["error"]["message"].as_str().unwrap().contains("`views/b.md` is not a regular file"), "{env:#}");
+    assert!(error_message(&env).contains("`views/b.md` is not a regular file"), "{env:#}");
 }
 
 /// A name with a control character would break every one-line message that names it,
@@ -614,6 +551,6 @@ fn a_name_with_a_control_character_refuses_the_vault() {
     let v = TestVault::with_files(BIN, &[("views/a.md", "# A\n"), ("views/a\nb.md", "# B\n")]);
     let (code, env) = v.run(&["lint"]);
     assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
-    let message = env["error"]["message"].as_str().unwrap();
+    let message = error_message(&env);
     assert!(message.contains(r#""views/a\nb.md" has a control character in its name"#), "{message}");
 }

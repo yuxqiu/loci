@@ -152,14 +152,14 @@ impl<'a> Repo<'a> {
     /// Every path git sees in the work tree, or under `pathspec` when given: tracked files
     /// and untracked files it does not ignore (`git ls-files -z --cached --others
     /// --exclude-standard`).
-    pub fn ls_files(&self, pathspec: Option<&VaultPath>) -> Result<Listing, String> {
+    pub fn ls_files(&self, pathspec: Option<&VaultPath>) -> Result<LsFiles, String> {
         let what = "ls-files";
         let mut cmd = self.git();
         cmd.args(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"])
             // A vault path, never a pattern: `*` or `?` in a folder name is literal.
             .args(pathspec.map(|p| format!(":(literal){p}")));
         let out = checked(&mut cmd, what)?;
-        let mut listing = Listing::default();
+        let mut listing = LsFiles::default();
         for name in out.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()) {
             match std::str::from_utf8(name) {
                 Ok(name) => listing.names.push(name.to_string()),
@@ -287,7 +287,7 @@ fn merged_notes(previous: Vec<String>, notes: &[String]) -> Vec<String> {
 
 /// What `git ls-files` lists.
 #[derive(Debug, Default)]
-pub struct Listing {
+pub struct LsFiles {
     /// The names, each valid UTF-8. An untracked nested repository is listed as its
     /// folder, with a trailing `/`.
     pub names: Vec<String>,
@@ -307,7 +307,7 @@ pub fn toplevel(dir: &Path) -> Result<PathBuf, String> {
 
 /// A name git lists, as a vault path: an untracked nested repository's trailing `/`
 /// dropped, so that it names the folder.
-pub(crate) fn vault_path(name: String) -> VaultPath {
+pub fn vault_path(name: String) -> VaultPath {
     let name = name.strip_suffix('/').unwrap_or(&name);
     VaultPath::new(name.to_string())
         .unwrap_or_else(|| panic!("git lists relative paths without empty, `.` or `..` segments, not `{name}`"))
@@ -349,8 +349,10 @@ fn parse_status(out: &[u8]) -> Result<(Vec<String>, Vec<String>), String> {
                 untracked.push(path.to_string());
                 continue;
             }
-            // Headers (`#`) and ignored files (`!`): none requested.
-            _ => continue,
+            // Headers: none requested, and git-status(1) says to ignore unknown ones.
+            Some(b'#') => continue,
+            // Renamed (`2`) and ignored (`!`) records are not requested.
+            _ => return Err(format!("git status: unexpected record `{rec}`")),
         };
         let path =
             rec.splitn(fields, ' ').nth(fields - 1).ok_or_else(|| format!("git status: malformed record `{rec}`"))?;
@@ -378,6 +380,7 @@ mod tests {
         assert_eq!(changed, ["m.md", "wd.md", "c d.md", "dd.md"]);
         assert_eq!(untracked, ["u.md"]);
         assert!(parse_status(b"1 .M N... too short").is_err(), "a record without its fields is no path");
+        assert!(parse_status(b"! ignored.md").is_err(), "an unrequested record is an error");
     }
 
     /// An empty repository whose settings override the user's own: no signing prompts,

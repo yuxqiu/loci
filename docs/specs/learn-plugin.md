@@ -114,7 +114,8 @@ truncated away (exit 3). `data`: `{"line": <the appended object>, "commit"}`.
 ### 2.5 `loci learn state <concept>`
 
 Returns the estimate of a concept (§4.2), given as a note argument (m0 §8). A note
-that is not found or is not a concept is `learn.unknown-concept`. `data`:
+that is not found, is not a concept, or has no valid id (reviews are logged by id) is
+`learn.unknown-concept`. `data`:
 
 ```json
 {"concept": "01JB9XQ7Z3K4M5N6P7Q8R9S0TV",

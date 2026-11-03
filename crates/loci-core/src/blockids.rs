@@ -49,24 +49,24 @@ pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> Ulid) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::parse;
-    use crate::path::Kind;
-    use crate::path::VaultPath;
 
     /// The `k`th test id (1-based).
     fn id(k: usize) -> Ulid {
         format!("01ARZ3NDEKTSV4RRFFQ69G5F{k:02}").parse().unwrap()
     }
 
-    /// Assigns ids, written as `ID1`, `ID2`, … in the returned text.
+    /// Assigns ids, written as `ID1`, `ID2`, … in the returned text, and checks that
+    /// assigning again changes nothing.
     fn run(text: &str) -> (String, Vec<Assigned>) {
-        let n = parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, text.to_string());
+        let n = crate::parse::concept(text);
         let mut k = 0;
         let (mut out, assigned) = assign(&n, "Cards", || {
             k += 1;
             id(k)
         })
         .unwrap();
+        let (again, more) = assign(&crate::parse::concept(&out), "Cards", || unreachable!("no new target")).unwrap();
+        assert_eq!((again.as_str(), more.len()), (out.as_str(), 0), "assigning is idempotent");
         for i in 1..=assigned.len() {
             out = out.replace(&id(i).to_string(), &format!("ID{i}"));
         }
@@ -79,10 +79,6 @@ mod tests {
         let (out, ids) = run(t);
         assert_eq!(ids.len(), 1);
         assert_eq!(out, t.replace("- q :: a\n", "- q :: a ^ID1\n"));
-        let again = parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, out.clone());
-        let (twice, more) = assign(&again, "Cards", || unreachable!("no new target")).unwrap();
-        assert!(more.is_empty());
-        assert_eq!(twice, out);
     }
 
     #[test]
@@ -102,11 +98,6 @@ mod tests {
             "# T\n\nintro\n\n## Cards\n\n- q1 :: a1 ^ID1\n- q2 :: ^ID2\n  - sub\n  - sub2\n- q3 :: a ^old\n\n## Other\n\n- no\n"
         );
         assert_eq!(ids.len(), 2);
-        // Idempotent.
-        let n = parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, out.clone());
-        let (again, more) = assign(&n, "Cards", || unreachable!("no new target")).unwrap();
-        assert_eq!(again, out);
-        assert!(more.is_empty());
     }
 
     #[test]
@@ -126,7 +117,7 @@ mod tests {
 
     #[test]
     fn missing_section() {
-        let n = parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, "# T\n".into());
+        let n = crate::parse::concept("# T\n");
         assert!(assign(&n, "Cards", || unreachable!("no section")).is_none());
     }
 }

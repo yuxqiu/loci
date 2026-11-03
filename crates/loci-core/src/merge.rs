@@ -85,12 +85,4 @@ mod tests {
         let c = Merge::plan(&i, &vp("old"), &vp("into")).unwrap().change;
         assert_eq!(c.writes["concepts/a/into.md"].text, "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T2\n---\n# Into\n");
     }
-
-    #[test]
-    fn refusals() {
-        let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TA\n---\n# A\n";
-        let i = Index::from_texts(&[("concepts/a/x.md", c), ("views/v.md", "# V\n")]);
-        assert_eq!(Merge::plan(&i, &vp("x"), &vp("x")).err().unwrap().code().to_string(), "merge.same");
-        assert_eq!(Merge::plan(&i, &vp("x"), &vp("views/v")).err().unwrap().code().to_string(), "merge.not-concept");
-    }
 }

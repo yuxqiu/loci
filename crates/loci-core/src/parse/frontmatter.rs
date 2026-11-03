@@ -7,7 +7,7 @@ use std::ops::Range;
 use saphyr::{LoadableYamlNode, Mapping, MarkedYaml, Scalar, Yaml, YamlData, YamlEmitter};
 use serde::{Deserialize, Serialize};
 
-use super::body::{Meta, Walker};
+use super::body::Meta;
 use super::links::prereq;
 use super::*;
 use crate::id::{Slug, Ulid};
@@ -70,8 +70,8 @@ impl Frontmatter {
 }
 
 /// The frontmatter (§4.3): a YAML metadata block at the start of the file.
-pub(super) fn frontmatter(text: &str, base: usize, body: &Walker) -> Option<Spanned<Frontmatter>> {
-    let Some(Meta { block: span, yaml }) = body.meta.as_ref().filter(|m| m.block.start == base) else {
+pub(super) fn frontmatter(text: &str, base: usize, meta: Option<&Meta>) -> Option<Spanned<Frontmatter>> {
+    let Some(Meta { block: span, yaml }) = meta.filter(|m| m.block.start == base) else {
         let rest = &text[base..];
         let opening =
             ["---\n", "---\r\n"].into_iter().find(|o| rest.starts_with(o)).or((rest == "---").then_some("---"));
@@ -166,7 +166,7 @@ impl Note {
         let docs = Yaml::load_from_str(yaml).expect("a parsed frontmatter loads");
         let mut map = match docs.into_iter().next() {
             Some(Yaml::Mapping(map)) => map,
-            None | Some(Yaml::Value(Scalar::Null)) => Mapping::new(),
+            None => Mapping::new(),
             Some(other) => panic!("{}: frontmatter is not a mapping: {other:?}", self.path),
         };
 
@@ -184,7 +184,9 @@ impl Note {
             rename_prereqs(&mut map, &renames);
         }
         if map.is_empty() {
-            return Edit::replace(self.frontmatter_reach(), "");
+            // Nothing to write: the block goes, or (with none) nothing changes.
+            let range = if self.frontmatter.is_some() { self.frontmatter_reach() } else { span };
+            return Edit::replace(range, "");
         }
 
         Edit::replace(span, emit(map))
@@ -281,9 +283,6 @@ fn string_node<'a>(s: impl Into<String>) -> Yaml<'a> {
 /// Parses frontmatter YAML into top-level entries with byte spans relative to the file
 /// (`offset` is the byte offset of `yaml` in the file).
 fn parse_yaml(yaml: &str, offset: usize) -> Result<Vec<FmEntry>, String> {
-    if yaml.trim().is_empty() {
-        return Ok(vec![]);
-    }
     // `info()` is the message without the position (§7.1: messages carry no positions).
     let docs = MarkedYaml::load_from_str(yaml).map_err(|e| e.info().to_string())?;
     let Some(doc) = docs.into_iter().next() else { return Ok(vec![]) };
@@ -340,13 +339,8 @@ impl Source {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::{Note, parse};
-    use crate::path::Kind;
-    use crate::path::VaultPath;
 
-    fn p(text: &str) -> Note {
-        parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, text.to_string())
-    }
+    use crate::parse::concept as p;
 
     #[test]
     fn frontmatter_spans() {
@@ -408,6 +402,7 @@ mod tests {
         assert_eq!(rewritten(&spaced, &remove), "# T\n", "the blank lines after a removed block go with it");
         let code = format!("---\nid: {ID}\n---\n\n    code\n");
         assert_eq!(rewritten(&code, &remove), "    code\n", "not the indentation of the first line");
+        assert_eq!(rewritten("\n\n# T\n", &remove), "\n\n# T\n", "no block: nothing changes");
         assert_eq!(rewritten("\u{feff}# T\n", &[set_id()]), format!("\u{feff}---\nid: {ID}\n---\n# T\n"));
         let one = format!("---\nid: {ID}\nprereqs:\n  - \"[[a]]\"\n---\n# T\n");
         let gone = [FmChange::RenamePrereq { from: "a".parse().unwrap(), to: None }];

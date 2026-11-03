@@ -62,15 +62,8 @@ impl TestVault {
     /// A copy of the fixture, `git init`ed and committed.
     pub fn committed(exe: &str, name: &str) -> Self {
         let v = Self::fixture(exe, name);
-        v.git(&["init", "-q", "-b", "main"]);
+        v.init_git();
         v.commit_all("fixture");
-        v
-    }
-
-    /// A copy of the fixture, `git init`ed with no commit.
-    pub fn git_no_head(exe: &str, name: &str) -> Self {
-        let v = Self::fixture(exe, name);
-        v.git(&["init", "-q", "-b", "main"]);
         v
     }
 
@@ -81,9 +74,14 @@ impl TestVault {
         for (p, t) in files {
             v.write(p.as_ref(), t.as_ref());
         }
-        v.git(&["init", "-q", "-b", "main"]);
+        v.init_git();
         v.commit_all("init");
         v
+    }
+
+    /// `git init` in the vault, with no commit.
+    pub fn init_git(&self) {
+        self.git(&["init", "-q", "-b", "main"]);
     }
 
     pub fn home(&self) -> PathBuf {
@@ -244,6 +242,14 @@ pub fn strip_block_ids(s: &str) -> String {
     BLOCK_ID.replace_all(s, "").into_owned()
 }
 
+/// Distinct concept ids for tests.
+pub const IDS: [&str; 4] = [
+    "01JB9XQ7Z3K4M5N6P7Q8R9S0A1",
+    "01JB9XQ7Z3K4M5N6P7Q8R9S0A2",
+    "01JB9XQ7Z3K4M5N6P7Q8R9S0A3",
+    "01JB9XQ7Z3K4M5N6P7Q8R9S0A4",
+];
+
 /// A concept note: frontmatter with `id` and the `extra` lines, then `body`.
 pub fn concept(id: &str, extra: &str, body: &str) -> String {
     format!("---\nid: {id}\n{extra}---\n{body}")
@@ -299,6 +305,16 @@ pub fn codes(env: &Value) -> Vec<(String, String)> {
 /// The diagnostics with a given code.
 pub fn with_code<'a>(env: &'a Value, code: &str) -> Vec<&'a Value> {
     diags(env).iter().filter(|d| d["code"] == code).collect()
+}
+
+/// The messages of the diagnostics with `code`.
+pub fn messages(env: &Value, code: &str) -> Vec<String> {
+    with_code(env, code).iter().map(|d| d["message"].as_str().unwrap().to_string()).collect()
+}
+
+/// The envelope's error message.
+pub fn error_message(env: &Value) -> &str {
+    env["error"]["message"].as_str().unwrap()
 }
 
 /// The diagnostics on a given path.

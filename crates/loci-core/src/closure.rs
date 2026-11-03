@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::id::Slug;
 use crate::index::Index;
+use crate::parse::Note;
 use crate::path::VaultPath;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,99 +26,59 @@ pub struct Closure {
 }
 
 impl Closure {
-    /// The closure of concept `root` (a concept path), up to `max_depth`.
-    pub fn of(index: &Index, root: &VaultPath, max_depth: Option<usize>) -> Closure {
+    /// The closure of concept `root`, up to `max_depth`.
+    pub fn of(index: &Index, root: &Note, max_depth: Option<usize>) -> Closure {
         // Breadth-first for depths.
+        let root_path = &root.path;
         let mut depth: BTreeMap<VaultPath, usize> = BTreeMap::new();
         let mut edges: BTreeMap<VaultPath, Vec<VaultPath>> = BTreeMap::new();
         let mut out = Closure::default();
-        let mut queue = VecDeque::from([(root.clone(), 0usize)]);
-        let mut seen: BTreeSet<VaultPath> = [root.clone()].into();
-        while let Some((p, d)) = queue.pop_front() {
+        let mut queue = VecDeque::from([(root, 0usize)]);
+        while let Some((note, d)) = queue.pop_front() {
             if max_depth.is_some_and(|m| d >= m) {
                 continue;
             }
-            let prereqs = index.prereqs(index.parsed(&p).expect("closure members are notes"));
-            out.unresolved.extend(prereqs.unresolved.into_iter().map(|s| (p.clone(), s.clone())));
-            let ok = prereqs.resolved;
-            for q in &ok {
-                if seen.insert(q.clone()) {
-                    depth.insert(q.clone(), d + 1);
-                    queue.push_back((q.clone(), d + 1));
+            let prereqs = index.prereqs(note);
+            out.unresolved.extend(prereqs.unresolved.into_iter().map(|s| (note.path.clone(), s.clone())));
+            for q in &prereqs.resolved {
+                if q.path != *root_path && !depth.contains_key(&q.path) {
+                    depth.insert(q.path.clone(), d + 1);
+                    queue.push_back((q, d + 1));
                 }
             }
-            edges.insert(p, ok);
+            edges.insert(note.path.clone(), prereqs.resolved.iter().map(|q| q.path.clone()).collect());
         }
 
-        // Topological order over the members, prerequisites first: repeatedly emit the
-        // smallest-slug member whose prerequisites (within the closure) are all emitted.
-        let mut emitted: BTreeSet<&VaultPath> = BTreeSet::new();
-        let mut order: Vec<VaultPath> = vec![];
-        while emitted.len() < depth.len() {
-            let remaining = || depth.keys().filter(|m| !emitted.contains(m));
-            let ready = remaining()
-                .filter(|m| {
-                    edges.get(*m).is_none_or(|ps| ps.iter().all(|p| !depth.contains_key(p) || emitted.contains(p)))
-                })
-                .min_by_key(|m| m.stem());
-            // None ready: a cycle, broken at the smallest remaining slug.
-            let next = ready.unwrap_or_else(|| {
-                out.cyclic = true;
-                remaining().min_by_key(|m| m.stem()).expect("members remain")
-            });
-            emitted.insert(next);
-            order.push(next.clone());
-        }
-
+        let (order, cycle_broken) = prerequisites_first(&depth, &edges);
         out.members = order.into_iter().map(|p| Member { depth: depth[&p], path: p }).collect();
-        if edges.values().flatten().any(|p| p == root) {
-            out.cyclic = true;
-        }
-
+        // A prereq back to the root is a cycle too, though the root is no member.
+        out.cyclic = cycle_broken || edges.values().flatten().any(|p| p == root_path);
         out
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::index::Index;
-
-    fn vp(s: &str) -> VaultPath {
-        VaultPath::new(s.to_string()).unwrap()
+/// The members (`depth`'s keys) in topological order, prerequisites first: repeatedly
+/// the smallest-slug member whose prerequisites (within the closure) are all placed.
+/// When none is ready there is a cycle, broken at the smallest remaining slug; the
+/// second value says whether that happened.
+fn prerequisites_first(
+    depth: &BTreeMap<VaultPath, usize>,
+    edges: &BTreeMap<VaultPath, Vec<VaultPath>>,
+) -> (Vec<VaultPath>, bool) {
+    let mut placed: BTreeSet<&VaultPath> = BTreeSet::new();
+    let mut order: Vec<VaultPath> = vec![];
+    let mut cycle_broken = false;
+    while placed.len() < depth.len() {
+        let remaining = || depth.keys().filter(|m| !placed.contains(m));
+        let ready = remaining()
+            .filter(|m| edges.get(*m).is_none_or(|ps| ps.iter().all(|p| !depth.contains_key(p) || placed.contains(p))))
+            .min_by_key(|m| m.stem());
+        let next = ready.unwrap_or_else(|| {
+            cycle_broken = true;
+            remaining().min_by_key(|m| m.stem()).expect("members remain")
+        });
+        placed.insert(next);
+        order.push(next.clone());
     }
-
-    fn c(prereqs: &[&str]) -> String {
-        let list: Vec<String> = prereqs.iter().map(|p| format!("\"[[{p}]]\"")).collect();
-        format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nprereqs: [{}]\n---\n# T\n", list.join(", "))
-    }
-
-    #[test]
-    fn order_depths_and_unresolved() {
-        let i = Index::from_texts(&[
-            ("concepts/a/dijkstra.md", c(&["heap", "graph", "nope"])),
-            ("concepts/a/heap.md", c(&["array"])),
-            ("concepts/a/graph.md", c(&[])),
-            ("concepts/a/array.md", c(&[])),
-        ]);
-        let cl = Closure::of(&i, &vp("concepts/a/dijkstra.md"), None);
-        let order: Vec<(&str, usize)> = cl.members.iter().map(|m| (m.path.stem(), m.depth)).collect();
-        assert_eq!(order, vec![("array", 2), ("graph", 1), ("heap", 1)]);
-        assert_eq!(cl.unresolved, vec![(vp("concepts/a/dijkstra.md"), "nope".parse().unwrap())]);
-        let shallow = Closure::of(&i, &vp("concepts/a/dijkstra.md"), Some(1));
-        assert_eq!(shallow.members.len(), 2);
-        assert!(!cl.cyclic);
-    }
-
-    #[test]
-    fn cycle_is_broken() {
-        let i = Index::from_texts(&[
-            ("concepts/a/x.md", c(&["y"])),
-            ("concepts/a/y.md", c(&["z"])),
-            ("concepts/a/z.md", c(&["y"])),
-        ]);
-        let cl = Closure::of(&i, &vp("concepts/a/x.md"), None);
-        assert!(cl.cyclic);
-        assert_eq!(cl.members.len(), 2);
-    }
+    (order, cycle_broken)
 }

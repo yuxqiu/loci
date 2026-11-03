@@ -1,4 +1,4 @@
-//! The vault model (m0 §3): discovery, file kinds and the working-tree walk.
+//! The vault model (m0 §3): discovery, configuration and the working-tree walk.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -36,15 +36,16 @@ impl VaultDir {
 
 #[derive(Debug, Clone)]
 pub struct Vault {
-    pub root: PathBuf,
+    root: PathBuf,
     pub config: Config,
     /// The vault's files, listed once when it is opened.
-    listing: Walk,
+    listing: Listing,
 }
 
 impl Vault {
     /// Opens the vault `at` names. The root must be the root of a git work tree.
-    /// Refuses with `vault.not-found`, `vault.not-git` or `config.invalid` (m0 §8).
+    /// Refuses with `vault.not-found`, `vault.not-git`, `file.symlink`, `file.unreadable`,
+    /// `git.failed` or `config.invalid` (m0 §8).
     pub fn open(at: &VaultDir) -> Result<Self, Refusal> {
         let not_found = |m: String| Refusal::refused("vault.not-found", m);
         let root = match at {
@@ -92,16 +93,22 @@ impl Vault {
         abs(&self.root, rel)
     }
 
+    /// The vault's folder, for running processes in it (git, plugins). A file in the
+    /// vault is reached through [`Vault::abs`], never by joining onto this.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// Every file core reads (m0 §3): the files git sees (tracked, or untracked and not
     /// ignored), minus `plugins/` and paths core never reads, as listed at open.
-    pub fn listing(&self) -> &Walk {
+    pub fn listing(&self) -> &Listing {
         &self.listing
     }
 }
 
-/// The result of `walk`.
+/// The vault's files, as `walk` lists them.
 #[derive(Debug, Clone, Default)]
-pub struct Walk {
+pub struct Listing {
     /// Vault-relative `/` paths, sorted by bytes.
     pub files: Vec<VaultPath>,
     /// The text of every `.md` file in `files`, by path.
@@ -140,19 +147,19 @@ pub fn is_regular_file(root: &Path, rel: &VaultPath) -> bool {
 /// listed path is, or lies under, a symlink (`file.symlink`), and one in which any file
 /// core reads cannot be listed, read, or decoded as UTF-8, or in which any name git
 /// lists, anywhere, is not UTF-8 (`file.unreadable`): loci never runs on a guess.
-fn walk(root: &Path) -> Result<Walk, Refusal> {
-    let listing = crate::git::Repo::new(root).ls_files(None).map_err(Refusal::git)?;
+fn walk(root: &Path) -> Result<Listing, Refusal> {
+    let listed = crate::git::Repo::new(root).ls_files(None).map_err(Refusal::git)?;
 
     // Git skips what it cannot read (a directory without permission) with a warning.
     // Wherever the folder is, `plugins/` included, loci cannot tell what it missed.
-    let mut unreadable: Vec<String> = listing.warnings.iter().map(|w| format!("git: {w}")).collect();
+    let mut unreadable: Vec<String> = listed.warnings.iter().map(|w| format!("git: {w}")).collect();
 
     // Every listed name, `plugins/` and files gone from disk included, must be UTF-8.
-    unreadable.extend(listing.not_utf8.iter().map(|n| format!("`{n}` has a name that is not UTF-8")));
+    unreadable.extend(listed.not_utf8.iter().map(|n| format!("`{n}` has a name that is not UTF-8")));
 
-    let mut out = Walk::default();
+    let mut out = Listing::default();
     let mut symlinks = vec![];
-    for name in listing.names {
+    for name in listed.names {
         // Shown escaped, so the message stays one line.
         if crate::path::has_control(&name) {
             unreadable.push(format!("{name:?} has a control character in its name"));
@@ -167,31 +174,15 @@ fn walk(root: &Path) -> Result<Walk, Refusal> {
         match entry(root, &rel) {
             Entry::Skipped => {}
             Entry::Unreadable(why) => unreadable.push(format!("`{rel}` {why}")),
-            Entry::File(text) => {
-                if let Some(text) = text {
-                    out.markdown.insert(rel.clone(), text);
-                }
+            Entry::Note(text) => {
+                out.markdown.insert(rel.clone(), text);
                 out.files.push(rel);
             }
+            Entry::File => out.files.push(rel),
         }
     }
 
-    if !symlinks.is_empty() {
-        symlinks.sort();
-        // Every file listed under a symlinked folder names the same link.
-        symlinks.dedup();
-        let message = listed("loci does not follow symlinks; replace each with the file or folder itself", &symlinks);
-        return Err(Refusal::refused("file.symlink", message));
-    }
-
-    if !unreadable.is_empty() {
-        unreadable.sort();
-        unreadable.dedup();
-        let message =
-            listed("every file loci reads, and every folder git lists, must be readable; fix each", &unreadable);
-        return Err(Refusal::refused("file.unreadable", message));
-    }
-
+    refuse_unsafe(symlinks, unreadable)?;
     out.files.sort();
 
     // An unmerged file is listed once per conflict stage.
@@ -199,10 +190,32 @@ fn walk(root: &Path) -> Result<Walk, Refusal> {
     Ok(out)
 }
 
+/// Refuses the vault when a listed path is under a symlink (`file.symlink`), or when a
+/// file is unreadable (`file.unreadable`), naming each once.
+fn refuse_unsafe(mut symlinks: Vec<String>, mut unreadable: Vec<String>) -> Result<(), Refusal> {
+    if !symlinks.is_empty() {
+        symlinks.sort();
+        // Every file listed under a symlinked folder names the same link.
+        symlinks.dedup();
+        let message = listed("loci does not follow symlinks; replace each with the file or folder itself", &symlinks);
+        return Err(Refusal::refused("file.symlink", message));
+    }
+    if !unreadable.is_empty() {
+        unreadable.sort();
+        unreadable.dedup();
+        let message =
+            listed("every file loci reads, and every folder git lists, must be readable; fix each", &unreadable);
+        return Err(Refusal::refused("file.unreadable", message));
+    }
+    Ok(())
+}
+
 /// What a listed vault path is, for [`walk`].
 enum Entry {
-    /// A file core reads; the text of a note.
-    File(Option<String>),
+    /// A note core reads, with its text.
+    Note(String),
+    /// Any other file core reads.
+    File,
     /// Not a file core reads: outside what core reads, gone from disk, or a folder.
     Skipped,
     /// Why core cannot read it (`file.unreadable`).
@@ -238,7 +251,7 @@ fn entry(root: &Path, rel: &VaultPath) -> Entry {
 
     if rel.is_note() {
         return match std::fs::read(&abs).map(String::from_utf8) {
-            Ok(Ok(text)) => Entry::File(Some(text)),
+            Ok(Ok(text)) => Entry::Note(text),
             Ok(Err(_)) => Entry::Unreadable("is not valid UTF-8".into()),
             Err(e) => Entry::Unreadable(format!("cannot be read: {e}")),
         };
@@ -249,7 +262,7 @@ fn entry(root: &Path, rel: &VaultPath) -> Entry {
     // modified, and lint would say a source changed (`sources.changed`) that nobody
     // edited (D154).
     match std::fs::File::open(&abs) {
-        Ok(_) => Entry::File(None),
+        Ok(_) => Entry::File,
         Err(e) => Entry::Unreadable(format!("cannot be read: {e}")),
     }
 }

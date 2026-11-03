@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use loci_core::envelope::{Refusal, Report};
+use loci_core::path::VaultPath;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -78,7 +79,7 @@ fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::R
 
 pub fn run(ctx: &Ctx, agent: &str, cases_file: Option<&Path>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
-    let path = cases_file.map_or_else(|| vault.root.join(FILE), Path::to_path_buf);
+    let path = cases_file.map_or_else(|| vault.abs(&VaultPath::fixed(FILE)), Path::to_path_buf);
     let shown = path.display();
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
@@ -88,12 +89,14 @@ pub fn run(ctx: &Ctx, agent: &str, cases_file: Option<&Path>) -> Result<Report, 
         Err(e) => return Err(Refusal::io(format!("reading `{shown}`: {e}"))),
     };
 
-    let mut cases = vec![];
-    for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
-        let case = serde_json::from_str::<Case>(line)
-            .map_err(|e| Refusal::refused("bench.case", format!("{shown} line {}: {e}", n + 1)))?;
-        cases.push(case);
-    }
+    let cases: Vec<Case> = text
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| !l.trim().is_empty())
+        .map(|(n, l)| {
+            serde_json::from_str(l).map_err(|e| Refusal::refused("bench.case", format!("{shown} line {}: {e}", n + 1)))
+        })
+        .collect::<Result<_, _>>()?;
 
     if cases.is_empty() {
         return Err(Refusal::refused("bench.none", format!("`{shown}` has no cases")));
@@ -102,7 +105,7 @@ pub fn run(ctx: &Ctx, agent: &str, cases_file: Option<&Path>) -> Result<Report, 
     let (mut passes, mut times, mut results) = (0usize, vec![], vec![]);
     for case in &cases {
         let start = Instant::now();
-        let pass = run_case(&vault.root, agent, case).map_err(|e| Refusal::internal("bench.agent", e))?;
+        let pass = run_case(vault.root(), agent, case).map_err(|e| Refusal::internal("bench.agent", e))?;
         times.push(start.elapsed().as_secs_f64());
         passes += usize::from(pass);
         results.push(json!({"q": case.q, "pass": pass}));

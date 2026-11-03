@@ -79,6 +79,7 @@ fn check_material(
     };
     let mut tally: BTreeMap<Material, Tally> = BTreeMap::new();
 
+    // Deleted: what the deleted notes held, in path order.
     let mut deleted: Vec<&VaultPath> = changes.deleted.iter().filter(|p| p.is_note() && p.is_core()).collect();
     deleted.sort();
     for p in deleted {
@@ -92,7 +93,7 @@ fn check_material(
         }
     }
 
-    // Added: what changed and new files gained since HEAD.
+    // Added: what changed and new notes gained since HEAD.
     let new_files = changes.added.iter().chain(&changes.untracked).map(|p| (p, false));
     let changed = changes.modified.iter().map(|p| (p, true)).chain(new_files);
     for (p, in_head) in changed.filter(|(p, _)| p.is_note() && index.contains(p)) {
@@ -108,6 +109,5 @@ fn check_material(
         let path = t.first.expect("a material deleted files held has a first such file");
         out.push(Diagnostic::warning(Code::MaterialDropped, msg).at_path(path));
     }
-
     Ok(())
 }

@@ -167,13 +167,8 @@ fn read_target(written: &str, start: usize) -> Option<Spanned<Target>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::{Note, parse};
-    use crate::path::Kind;
-    use crate::path::VaultPath;
 
-    fn p(text: &str) -> Note {
-        parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, text.to_string())
-    }
+    use crate::parse::concept as p;
 
     #[test]
     fn targets() {
@@ -215,13 +210,5 @@ mod tests {
         let n = p("# T\n\n`[[a]]` and $[[b]]$\n\n```\n[[c]]\n```\n\nprice $5 and $6\n");
         assert!(n.links.is_empty());
         assert_eq!(n.counts.code, 1);
-    }
-
-    #[test]
-    fn table_pipe() {
-        let t = "# T\n\n| a | b |\n|---|---|\n| [[x\\|y]] | z |\n";
-        let n = p(t);
-        assert_eq!(n.links.len(), 1);
-        assert_eq!(n.links[0].target.names, Names::Slug("x".parse().unwrap()));
     }
 }

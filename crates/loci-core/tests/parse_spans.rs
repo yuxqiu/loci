@@ -7,7 +7,6 @@
 use std::ops::Range;
 
 use loci_core::parse::{FmValue, Frontmatter, Note, Spanned, parse};
-use loci_core::path::Kind;
 use loci_core::path::VaultPath;
 use proptest::prelude::*;
 
@@ -136,7 +135,7 @@ proptest! {
     #[test]
     fn every_span_is_in_the_text(text in markdown()) {
         let path = VaultPath::new("concepts/a/x.md".into()).unwrap();
-        let n = parse(&path, Kind::Concept, text.clone());
+        let n = parse(&path, text.clone());
         let all = 0..text.len();
         for l in &n.links {
             check(&text, &l.span, &all, "link")?;
@@ -177,11 +176,11 @@ proptest! {
     #[test]
     fn a_rewrite_keeps_the_meaning(text in with_frontmatter()) {
         let path = VaultPath::new("concepts/a/x.md".into()).unwrap();
-        let n = parse(&path, Kind::Concept, text.clone());
+        let n = parse(&path, text.clone());
         prop_assume!(n.frontmatter.as_ref().is_some_and(|f| matches!(f.node, Frontmatter::Fields { .. })));
         let edit = n.rewrite_frontmatter(&[]);
         let out = loci_core::splice::apply(&text, vec![edit]).unwrap();
-        let after = parse(&path, Kind::Concept, out.clone());
+        let after = parse(&path, out.clone());
         prop_assert_eq!(meaning(&n), meaning(&after), "rewritten:\n{}", out);
     }
 }

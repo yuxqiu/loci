@@ -64,6 +64,40 @@ impl Change {
         verify(index, &targets, &change, &removed, code)?;
         Ok(change)
     }
+
+    /// Applies a change: renames, writes via temp file + rename, then deletions.
+    pub fn apply(&self, vault: &Vault) -> std::io::Result<()> {
+        for (old, new) in &self.moves {
+            let dest = vault.abs(new);
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::rename(vault.abs(old), &dest)?;
+        }
+
+        // Writes before deletions: a failed write leaves the absorbed note in place.
+        for (path, written) in &self.writes {
+            vault::write_atomic(&vault.abs(path), written.text.as_bytes())?;
+        }
+
+        for path in &self.deleted {
+            std::fs::remove_file(vault.abs(path))?;
+        }
+
+        // Remove directories left empty, up to the first that is not.
+        for old in self.moves.keys().chain(&self.deleted) {
+            let mut dir = old.parent();
+            while let Some(d) = dir {
+                match std::fs::remove_dir(vault.abs(&d)) {
+                    Ok(()) => dir = d.parent(),
+                    Err(e) if matches!(e.kind(), ErrorKind::DirectoryNotEmpty | ErrorKind::NotFound) => break,
+                    Err(e) => return Err(e),
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 /// The edits for every link, in files outside `sources/` that `change` does not
@@ -128,9 +162,7 @@ fn rewrite(note: &Note, link: &Spanned<Link>, new: &VaultPath) -> Option<String>
 
 /// Builds the changed tree in memory and checks that every link outside `sources/` that
 /// resolved before, but for the `removed` ones, resolves to `targets`' image of its old
-/// target (m0 §9.5 step 3). A fragment into a deleted note (the absorbed note of a
-/// merge) may stop resolving. Links are paired by position, which holds because edits
-/// only rewrite targets in place; `fix` checks its own, link-adding edits differently.
+/// target (m0 §9.5 step 3), refusing with `code` when one does not.
 fn verify(
     index: &Index,
     targets: &BTreeMap<VaultPath, VaultPath>,
@@ -138,6 +170,16 @@ fn verify(
     removed: &Removed,
     code: &'static str,
 ) -> Result<(), Refusal> {
+    let after = rebuilt(index, change);
+    for note in index.notes().filter(|n| n.kind != Kind::Source && !change.deleted.contains(&n.path)) {
+        verify_note(index, &after, targets, change, removed, note).map_err(|why| Refusal::refused(code, why))?;
+    }
+    Ok(())
+}
+
+/// The index of the tree `change` would leave: its moves and deletions done, its writes
+/// in place.
+fn rebuilt(index: &Index, change: &Change) -> Index {
     let mut files: Vec<VaultPath> =
         index.files().iter().filter(|f| !change.deleted.contains(*f)).map(|f| change.final_path(f)).collect();
     files.sort();
@@ -150,83 +192,42 @@ fn verify(
             (p, text)
         })
         .collect();
-    let after = Index::build(files, |p| contents[p].clone());
-    for note in index.notes().filter(|n| n.kind != Kind::Source && !change.deleted.contains(&n.path)) {
-        let new_path = change.final_path(&note.path);
-        let Some(new_note) = after.parsed(&new_path) else {
-            return Err(Refusal::refused(code, format!("{new_path} would no longer parse as a note")));
-        };
-        if !note.frontmatter_broken() && new_note.frontmatter_broken() {
-            return Err(Refusal::refused(code, format!("{new_path} would get invalid frontmatter")));
-        }
-        let old_links = note
-            .links
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| !removed.contains(&(note.path.clone(), *i)))
-            .map(|(_, l)| l)
-            .collect::<Vec<_>>();
-        // Edits replace link targets and remove the `removed` prereqs only, so the other
-        // links keep their number and order; pairing by position is sound exactly when
-        // the counts match.
-        let new_links = &new_note.links;
-        if old_links.len() != new_links.len() {
-            return Err(Refusal::refused(
-                code,
-                format!("{new_path} would have {} links instead of {}", new_links.len(), old_links.len()),
-            ));
-        }
-        for (old_link, new_link) in old_links.into_iter().zip(new_links.iter()) {
-            // Targets only: fragments are lint's concern (one into a merged note may dangle).
-            let Some(before) = index.link_target(note, old_link) else { continue };
-            let expected = targets.get(&before).cloned().unwrap_or(before);
-            if after.link_target(new_note, new_link).as_ref() != Some(&expected) {
-                return Err(Refusal::refused(
-                    code,
-                    format!(
-                        "`{}` in {new_path} would no longer resolve to {expected}",
-                        new_link.target.text(&new_note.text)
-                    ),
-                ));
-            }
-        }
-    }
-
-    Ok(())
+    Index::build(files, |p| contents[p].clone())
 }
 
-impl Change {
-    /// Applies a change: renames, writes via temp file + rename, then deletions.
-    pub fn apply(&self, vault: &Vault) -> std::io::Result<()> {
-        for (old, new) in &self.moves {
-            let dest = vault.abs(new);
-            if let Some(parent) = dest.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::rename(vault.abs(old), &dest)?;
-        }
-
-        // Writes before deletions: a failed write leaves the absorbed note in place.
-        for (path, written) in &self.writes {
-            vault::write_atomic(&vault.abs(path), written.text.as_bytes())?;
-        }
-
-        for path in &self.deleted {
-            std::fs::remove_file(vault.abs(path))?;
-        }
-
-        // Remove directories left empty, up to the first that is not.
-        for old in self.moves.keys().chain(&self.deleted) {
-            let mut dir = old.parent();
-            while let Some(d) = dir {
-                match std::fs::remove_dir(vault.abs(&d)) {
-                    Ok(()) => dir = d.parent(),
-                    Err(e) if matches!(e.kind(), ErrorKind::DirectoryNotEmpty | ErrorKind::NotFound) => break,
-                    Err(e) => return Err(e),
-                }
-            }
-        }
-
-        Ok(())
+/// Why `note`'s links would break in `after`, if they would. Links are paired by
+/// position, which holds because edits only rewrite targets in place (`fix` checks its
+/// own, link-adding edits differently), so the counts must match. Targets only:
+/// fragments are lint's concern, and one into a merge's absorbed note may dangle.
+fn verify_note(
+    index: &Index,
+    after: &Index,
+    targets: &BTreeMap<VaultPath, VaultPath>,
+    change: &Change,
+    removed: &Removed,
+    note: &Note,
+) -> Result<(), String> {
+    let new_path = change.final_path(&note.path);
+    let Some(new_note) = after.parsed(&new_path) else {
+        return Err(format!("{new_path} would no longer parse as a note"));
+    };
+    if !note.frontmatter_broken() && new_note.frontmatter_broken() {
+        return Err(format!("{new_path} would get invalid frontmatter"));
     }
+
+    let kept = |(i, _): &(usize, &Spanned<Link>)| !removed.contains(&(note.path.clone(), *i));
+    let old_links: Vec<&Spanned<Link>> = note.links.iter().enumerate().filter(kept).map(|(_, l)| l).collect();
+    if old_links.len() != new_note.links.len() {
+        return Err(format!("{new_path} would have {} links instead of {}", new_note.links.len(), old_links.len()));
+    }
+
+    for (old_link, new_link) in old_links.into_iter().zip(&new_note.links) {
+        let Some(before) = index.link_target(note, old_link) else { continue };
+        let expected = targets.get(&before).cloned().unwrap_or(before);
+        if after.link_target(new_note, new_link).as_ref() != Some(&expected) {
+            let written = new_link.target.text(&new_note.text);
+            return Err(format!("`{written}` in {new_path} would no longer resolve to {expected}"));
+        }
+    }
+    Ok(())
 }

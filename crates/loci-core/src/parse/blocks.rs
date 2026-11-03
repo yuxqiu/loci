@@ -7,17 +7,10 @@ use regex::Regex;
 
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlockKind {
-    Item,
-    Paragraph,
-}
-
 /// A block with a block id, spanning the block (an item with its nested items, or a
 /// paragraph).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
-    pub kind: BlockKind,
     /// The id, without its `^`, spanning `^id`.
     pub id: Spanned<String>,
 }
@@ -31,13 +24,13 @@ pub(super) fn blocks(text: &str, items: &[Spanned<ListItem>], paragraphs: &[Rang
     let mut out = vec![];
     for item in items {
         if let Some(id) = &item.id {
-            out.push(Spanned::new(Block { kind: BlockKind::Item, id: id.clone() }, item.span.clone()));
+            out.push(Spanned::new(Block { id: id.clone() }, item.span.clone()));
         }
     }
 
     for p in paragraphs {
         if let Some(id) = trailing_id(text, p) {
-            out.push(Spanned::new(Block { kind: BlockKind::Paragraph, id }, p.clone()));
+            out.push(Spanned::new(Block { id }, p.clone()));
         }
     }
 
@@ -54,25 +47,20 @@ pub(super) fn trailing_id(text: &str, range: &Range<usize>) -> Option<Spanned<St
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::parse::{Note, parse};
-    use crate::path::Kind;
-    use crate::path::VaultPath;
 
-    fn p(text: &str) -> Note {
-        parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, text.to_string())
-    }
+    use crate::parse::concept as p;
 
     #[test]
     fn block_ids_tight_and_loose() {
         let t = "# T\n\n- one ^aaa\n- two\n  continued ^bbb\n\npara ^ccc\n";
         let n = p(t);
-        let ids: Vec<_> = n.blocks.iter().map(|b| (b.id.as_str(), b.kind)).collect();
-        assert_eq!(ids, vec![("aaa", BlockKind::Item), ("bbb", BlockKind::Item), ("ccc", BlockKind::Paragraph)]);
+        let ids: Vec<_> = n.blocks.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, ["aaa", "bbb", "ccc"]);
+        assert_eq!(n.blocks[2].text(t), "para ^ccc\n", "a paragraph's block is the paragraph");
         let loose = "# T\n\n- one ^aaa\n\n- two ^bbb\n";
         let n = p(loose);
-        let ids: Vec<_> = n.blocks.iter().map(|b| (b.id.as_str(), b.kind)).collect();
-        assert_eq!(ids, vec![("aaa", BlockKind::Item), ("bbb", BlockKind::Item)]);
+        let ids: Vec<_> = n.blocks.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, ["aaa", "bbb"]);
     }
 
     #[test]

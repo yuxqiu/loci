@@ -38,22 +38,8 @@ enum Cmd {
     Init,
     /// Lint the working tree (core rules and every installed plugin).
     Lint {
-        /// Apply the safe fixes of core diagnostics, then lint again.
-        #[arg(long)]
-        fix: bool,
-        /// Apply unsafe fixes too (likely, but they may change meaning).
-        #[arg(long, requires = "fix")]
-        unsafe_fixes: bool,
-        /// Only fix diagnostics with this code.
-        #[arg(long, requires = "fix", value_name = "CODE")]
-        only: Option<String>,
-        /// Fix on a working tree with uncommitted changes (refused otherwise, so the diff
-        /// is the fixes').
-        #[arg(long, requires = "fix")]
-        allow_dirty: bool,
-        /// Report the fixes; write nothing.
-        #[arg(long, requires = "fix")]
-        dry_run: bool,
+        #[command(flatten)]
+        fix: commands::lint::FixArgs,
     },
     /// End an agent task: lint, then record the agent's work for review.
     Done {
@@ -174,10 +160,7 @@ fn main() -> ExitCode {
     let ctx = commands::Ctx { vault, cwd, json: cli.json };
     let report = match cli.command {
         Cmd::Init => commands::init::run(&ctx),
-        Cmd::Lint { fix, unsafe_fixes, only, allow_dirty, dry_run } => {
-            let fix = fix.then_some(commands::lint::FixArgs { unsafe_fixes, only, allow_dirty, dry_run });
-            commands::lint::run(&ctx, fix)
-        }
+        Cmd::Lint { fix } => commands::lint::run(&ctx, &fix),
         Cmd::Done { note } => commands::done::run(&ctx, &note),
         Cmd::Rules => commands::rules::run(),
         Cmd::Updates { all, handled } => commands::updates::run(&ctx, all, handled.as_deref()),

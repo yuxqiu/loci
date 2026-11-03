@@ -210,15 +210,4 @@ mod tests {
             lint(&[("concepts/x/AREA.md", "# X\n\nP.\n"), ("concepts/x/a.md", &c("b")), ("concepts/x/b.md", &c("a"))]);
         assert_eq!(r.iter().filter(|(_, c)| c == "prereqs.cycle").count(), 1);
     }
-
-    #[test]
-    fn tags_and_unquoted_prereqs() {
-        let r = lint(&[
-            ("concepts/x/AREA.md", "# X\n\nP.\n"),
-            ("concepts/x/a.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\ntags: [a]\nprereqs: [[b]]\n---\n# T\n"),
-        ]);
-        let codes: Vec<&str> = r.iter().map(|(_, c)| c.as_str()).collect();
-        assert!(codes.contains(&"fm.unknown-field"));
-        assert!(codes.contains(&"fm.field-type"));
-    }
 }

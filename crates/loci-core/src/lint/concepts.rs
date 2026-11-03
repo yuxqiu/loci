@@ -155,8 +155,10 @@ pub(super) fn duplicates(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
 /// `prereqs.cycle`: each cycle of the prerequisite graph once.
 pub(super) fn prereq_cycles(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     let index = ctx.index;
-    let graph: BTreeMap<VaultPath, Vec<VaultPath>> =
-        index.concepts().map(|n| (n.path.clone(), index.prereqs(n).resolved)).collect();
+    let graph: BTreeMap<VaultPath, Vec<VaultPath>> = index
+        .concepts()
+        .map(|n| (n.path.clone(), index.prereqs(n).resolved.iter().map(|p| p.path.clone()).collect()))
+        .collect();
 
     for cycle in cycles(&graph) {
         let shown: Vec<&str> = cycle.iter().chain(&cycle[..1]).map(VaultPath::stem).collect();
@@ -213,13 +215,12 @@ fn cycles(graph: &BTreeMap<VaultPath, Vec<VaultPath>>) -> BTreeSet<Vec<VaultPath
     found
 }
 
-/// `cycle` rotated to start at its member with the smallest slug, so each cycle has one
-/// form however the walk entered it.
+/// `cycle` rotated to start at its member with the smallest slug (members are reached
+/// by slug, so their slugs differ), so each cycle has one form however the walk entered
+/// it.
 fn canonical(cycle: &[&VaultPath]) -> Vec<VaultPath> {
     let mut cycle: Vec<VaultPath> = cycle.iter().map(|p| (*p).clone()).collect();
-    let first = (0..cycle.len())
-        .min_by_key(|&i| (cycle[i].stem().to_lowercase(), cycle[i].as_str()))
-        .expect("a cycle has members");
+    let first = (0..cycle.len()).min_by_key(|&i| cycle[i].stem()).expect("a cycle has members");
     cycle.rotate_left(first);
     cycle
 }

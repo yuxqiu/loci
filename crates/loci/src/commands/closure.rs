@@ -8,12 +8,11 @@ use serde_json::json;
 
 use super::Ctx;
 
-pub fn run(ctx: &Ctx, slug: &str, depth: Option<usize>) -> Result<Report, Refusal> {
+pub fn run(ctx: &Ctx, concept: &str, depth: Option<usize>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
-    let slug = VaultPath::from_arg(slug)?;
-    let path = index.concept(&slug, "closure.unknown")?.path.clone();
-    let c = closure::Closure::of(&index, &path, depth);
+    let root = index.concept(&VaultPath::from_arg(concept)?, "closure.unknown")?;
+    let c = closure::Closure::of(&index, root, depth);
     let mut diags = vec![];
     if c.cyclic {
         diags.push(
@@ -21,13 +20,13 @@ pub fn run(ctx: &Ctx, slug: &str, depth: Option<usize>) -> Result<Report, Refusa
                 loci_core::lint::Code::PrereqsCycle,
                 "the prerequisites form a cycle; the order breaks it by slug",
             )
-            .at_path(&path),
+            .at_path(&root.path),
         );
     }
 
     let human: String = c.members.iter().map(|m| format!("- [[{}]]\n", m.path.stem())).collect();
     let data = json!({
-        "concept": path,
+        "concept": root.path,
         "closure": c.members.iter().map(|m| json!({
             "slug": m.path.stem(), "path": m.path, "depth": m.depth,
         })).collect::<Vec<_>>(),

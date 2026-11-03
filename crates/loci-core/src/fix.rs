@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::envelope::{Applicability, Diagnostic, Fix, FixEdit, Refusal};
 use crate::index::Index;
 use crate::lint::{self, Code};
-use crate::parse::FmChange;
+use crate::parse::{FmChange, Note};
 use crate::path::VaultPath;
 use crate::relink::{Change, Written};
 use crate::splice::{self, Edit};
@@ -100,16 +100,16 @@ impl Plan {
 }
 
 /// Applies one pass of fixes to `notes`, the notes of `index` as edited so far: every
-/// allowed fix of `diags` that neither overlaps nor touches one
-/// taken before it. A fix whose edits were all taken already (another diagnostic's copy
-/// of it) is applied by them. Returns what it applied.
+/// allowed fix of `diags` that neither overlaps nor touches one taken before it. A fix
+/// whose edits were all taken already (another diagnostic's copy of it) is applied by
+/// them. Returns what it applied.
 fn apply_pass(
     index: &Index,
     notes: &mut BTreeMap<VaultPath, Written>,
     diags: &[Diagnostic],
     opts: &Options,
 ) -> Result<Vec<Applied>, Refusal> {
-    let mut pass = Pass { index, text: BTreeMap::new(), frontmatter: BTreeMap::new() };
+    let mut pass = Pass::default();
     let mut out = vec![];
     for (d, fix) in diags.iter().filter_map(|d| opts.pick(d).map(|f| (d, f))) {
         let planned = planned(index, fix)?;
@@ -126,59 +126,53 @@ fn apply_pass(
     Ok(out)
 }
 
-/// The edits one pass has taken: text edits, and frontmatter changes, which compose
-/// (each note's are applied as one rewrite of its block, which only text edits can
-/// touch).
+/// The edits one pass has taken, by note: text edits, and frontmatter changes, which
+/// compose (each note's are applied as one rewrite of its block, which only text edits
+/// can touch).
+#[derive(Default)]
 struct Pass<'a> {
-    index: &'a Index,
     text: BTreeMap<VaultPath, Vec<Edit>>,
-    frontmatter: BTreeMap<VaultPath, Vec<FmChange>>,
+    frontmatter: BTreeMap<VaultPath, (&'a Note, Vec<FmChange>)>,
 }
 
-impl Pass<'_> {
+impl<'a> Pass<'a> {
     /// Whether every edit of `planned` is taken already.
-    fn holds(&self, planned: &[(VaultPath, Planned)]) -> bool {
-        planned.iter().all(|(p, e)| match e {
-            Planned::Text(e) => self.text.get(p).is_some_and(|es| es.contains(e)),
-            Planned::Frontmatter(c) => self.frontmatter.get(p).is_some_and(|cs| cs.contains(c)),
+    fn holds(&self, planned: &[(&Note, Planned)]) -> bool {
+        planned.iter().all(|(n, e)| match e {
+            Planned::Text(e) => self.text.get(&n.path).is_some_and(|es| es.contains(e)),
+            Planned::Frontmatter(c) => self.frontmatter.get(&n.path).is_some_and(|(_, cs)| cs.contains(c)),
         })
     }
 
     /// Whether an edit of `planned` touches one taken: a text edit touching another, or
-    /// the block of a note whose frontmatter changes.
-    fn clashes(&self, planned: &[(VaultPath, Planned)]) -> bool {
+    /// the bytes a rewrite of a note's frontmatter may replace.
+    fn clashes(&self, planned: &[(&Note, Planned)]) -> bool {
         let touch = |a: &Range<usize>, b: &Range<usize>| a.start <= b.end && b.start <= a.end;
-        planned.iter().any(|(p, e)| {
-            let taken = self.text.get(p).map_or(&[][..], Vec::as_slice);
+        planned.iter().any(|(n, e)| {
+            let taken = self.text.get(&n.path).map_or(&[][..], Vec::as_slice);
             match e {
                 Planned::Text(e) => {
                     taken.iter().any(|t| touch(&t.range, &e.range))
-                        || (self.frontmatter.contains_key(p) && touch(&self.block(p), &e.range))
+                        || (self.frontmatter.contains_key(&n.path) && touch(&n.frontmatter_reach(), &e.range))
                 }
-                Planned::Frontmatter(_) => taken.iter().any(|t| touch(&t.range, &self.block(p))),
+                Planned::Frontmatter(_) => taken.iter().any(|t| touch(&t.range, &n.frontmatter_reach())),
             }
         })
     }
 
-    /// The bytes a rewrite of `path`'s frontmatter may replace.
-    fn block(&self, path: &VaultPath) -> Range<usize> {
-        self.index.parsed(path).expect("`planned` checked the note").frontmatter_reach()
-    }
-
-    fn take(&mut self, planned: Vec<(VaultPath, Planned)>) {
-        for (p, e) in planned {
+    fn take(&mut self, planned: Vec<(&'a Note, Planned)>) {
+        for (n, e) in planned {
             match e {
-                Planned::Text(e) => self.text.entry(p).or_default().push(e),
-                Planned::Frontmatter(c) => self.frontmatter.entry(p).or_default().push(c),
+                Planned::Text(e) => self.text.entry(n.path.clone()).or_default().push(e),
+                Planned::Frontmatter(c) => self.frontmatter.entry(n.path.clone()).or_insert((n, vec![])).1.push(c),
             }
         }
     }
 
     /// Applies the pass to `notes`, counting its edits.
     fn apply(mut self, notes: &mut BTreeMap<VaultPath, Written>) -> Result<(), Refusal> {
-        for (p, cs) in std::mem::take(&mut self.frontmatter) {
+        for (p, (note, cs)) in std::mem::take(&mut self.frontmatter) {
             notes.get_mut(&p).expect("only notes are edited").edits += cs.len();
-            let note = self.index.parsed(&p).expect("`planned` checked the note");
             self.text.entry(p).or_default().push(note.rewrite_frontmatter(&cs));
         }
 
@@ -197,10 +191,10 @@ enum Planned {
     Frontmatter(FmChange),
 }
 
-/// A fix's edits by vault path. Lint made them from `index`, so an edit naming another
-/// file or a broken frontmatter is a loci bug (`lint.fix`); so is a range outside its
-/// text, which `splice::apply` refuses.
-fn planned(index: &Index, fix: &Fix) -> Result<Vec<(VaultPath, Planned)>, Refusal> {
+/// A fix's edits, each with the note it edits. Lint made them from `index`, so an edit
+/// naming another file or a broken frontmatter is a loci bug (`lint.fix`); so is a range
+/// outside its text, which `splice::apply` refuses.
+fn planned<'i>(index: &'i Index, fix: &Fix) -> Result<Vec<(&'i Note, Planned)>, Refusal> {
     let bug = |m: String| Refusal::internal("lint.fix", m);
     let note = |p: &VaultPath| index.parsed(p).ok_or_else(|| bug(format!("a fix edits `{p}`, which is not a note")));
 
@@ -208,14 +202,14 @@ fn planned(index: &Index, fix: &Fix) -> Result<Vec<(VaultPath, Planned)>, Refusa
         .iter()
         .map(|e| match e {
             FixEdit::Text(e) => {
-                note(&e.path)?;
-                Ok((e.path.clone(), Planned::Text(Edit::replace(e.byte_start..e.byte_end, e.new.clone()))))
+                Ok((note(&e.path)?, Planned::Text(Edit::replace(e.byte_start..e.byte_end, e.new.clone()))))
             }
             FixEdit::Frontmatter { path, frontmatter } => {
-                if note(path)?.frontmatter_broken() {
+                let n = note(path)?;
+                if n.frontmatter_broken() {
                     return Err(bug(format!("a fix changes the broken frontmatter of `{path}`")));
                 }
-                Ok((path.clone(), Planned::Frontmatter(frontmatter.clone())))
+                Ok((n, Planned::Frontmatter(frontmatter.clone())))
             }
         })
         .collect()

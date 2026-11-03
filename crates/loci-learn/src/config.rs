@@ -1,11 +1,11 @@
 //! `plugins/learn/config.toml` (learn-plugin §2.1).
 
-use std::path::Path;
-
 use loci_core::envelope::Refusal;
+use loci_core::path::VaultPath;
+use loci_core::vault::Vault;
 use serde::Deserialize;
 
-pub const PATH: &str = "plugins/learn/config.toml";
+const PATH: &str = "plugins/learn/config.toml";
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Config {
@@ -48,8 +48,8 @@ impl Config {
 
     /// Reads the vault's config, or the defaults if the file is absent. An invalid
     /// file is `learn.config`.
-    pub fn load(vault: &Path) -> Result<Self, Refusal> {
-        match std::fs::read_to_string(vault.join(PATH)) {
+    pub fn load(vault: &Vault) -> Result<Self, Refusal> {
+        match std::fs::read_to_string(vault.abs(&VaultPath::fixed(PATH))) {
             Ok(text) => Self::parse(&text).map_err(|e| Refusal::refused("learn.config", e)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(Refusal::io(e)),

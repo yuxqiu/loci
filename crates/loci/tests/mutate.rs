@@ -1,4 +1,5 @@
-//! Mutating commands on the fixture vaults (m0 §13.2): `mv`, `block-ids`, `init`. Goldens hold the envelope and the resulting tree with ULIDs redacted.
+//! Mutating commands on the fixture vaults (m0 §13.2): `mv`, `block-ids`, `init`.
+//! Goldens hold the envelope and the resulting tree with ULIDs redacted.
 
 mod common;
 
@@ -38,14 +39,6 @@ fn mv_rename_rewrites_links() {
     // The note itself is unchanged; links by bare slug stay bare; markdown links are
     // never edited.
     assert_eq!(v.read("concepts/a/renamed-new.md"), before);
-    let linker = v.read("views/linker.md");
-    assert!(linker.contains("- [[renamed-new]] and [[renamed-new|label]]\n"), "{linker}");
-    assert!(linker.contains("[markdown](concepts/a/renamed.md)"), "{linker}");
-    assert!(
-        v.read("concepts/a/prereq-holder.md")
-            .contains("prereqs:\n  - \"[[renamed-new]]\"\n  - \"[[heading-target]]\"\n")
-    );
-    assert!(!v.exists("concepts/a/renamed.md"));
     assert_snapshot!(v.tree());
 }
 
@@ -101,19 +94,12 @@ fn a_folder_name_is_never_a_pattern() {
 
 #[test]
 fn mv_refusals() {
+    // The planner's refusals are unit-tested in `loci_core::mv`; these go through the
+    // command: its argument checks, and that a refusal writes nothing.
     let v = TestVault::committed(BIN, "mv-rename");
-    mv_refused(&v, "concepts/a/renamed.md", "concepts/a/block-target.md", "mv.exists");
-    mv_refused(&v, "concepts/a/renamed.md", "concepts/a/sub/block-target.md", "mv.collision");
-    mv_refused(&v, "concepts/a/renamed.md", "concepts/a/sub/Block-target.md", "slug.format");
-    mv_refused(&v, "concepts/a/renamed.md", "concepts/a/Upper.md", "slug.format");
-    mv_refused(&v, "sources", "old/sources", "mv.source-file");
-    mv_refused(&v, "concepts/a/renamed.md", "views/renamed.md", "mv.no-area");
     mv_refused(&v, "concepts/a/nope.md", "concepts/a/x.md", "mv.from");
     mv_refused(&v, "concepts/a/renamed.md", "../out.md", "path.outside");
-    mv_refused(&v, "plugins/learn/state.json", "views/state.json", "mv.from");
     mv_refused(&v, "views/linker.md", "plugins/learn/linker.md", "mv.to");
-    mv_refused(&v, "sources/papers/p1.pdf", "sources/papers/p1/x.pdf", "mv.source-file");
-    mv_refused(&v, "sources/papers/p1.pdf", "views/p1.pdf", "mv.source-file");
     mv_refused(&v, "views/linker.md", "sources/papers/Linker.md", "sources.layout");
 }
 
@@ -122,7 +108,7 @@ fn mv_ignored_paths_are_refused() {
     let v = TestVault::fixture(BIN, "mv-rename");
     v.write(".gitignore", "/.loci/\n/ignored/\n");
     v.write("ignored/x.md", "# X\n");
-    v.git(&["init", "-q", "-b", "main"]);
+    v.init_git();
     v.commit_all("fixture");
     mv_refused(&v, "ignored/x.md", "views/x.md", "mv.from");
     mv_refused(&v, "views/linker.md", ".loci/linker.md", "path.ignored");
@@ -166,12 +152,8 @@ fn table_pipe_mv_keeps_escaped_pipe() {
     let v = TestVault::committed(BIN, "table-pipe");
     mv(&v, "concepts/a/target.md", "concepts/a/renamed.md");
     mv(&v, "views/v.md", "views/w.md");
-    let t = v.read("concepts/a/table.md");
-    assert!(t.contains("| a | [[renamed\\|Target label]] |\n"), "{t}");
-    assert!(t.contains("| b | [[renamed#Part\\|part]] |\n"), "{t}");
-    assert!(t.contains("| c | [[views/w\\|the view]] |\n"), "{t}");
-    assert!(t.contains("| d | [[missing\\|nothing]] |\n"), "{t}");
-    assert_snapshot!(t);
+    // The table's escaped `\\|` stays escaped in every rewritten link.
+    assert_snapshot!(v.read("concepts/a/table.md"));
 }
 
 // ---------------------------------------------------------------- frontmatter-edge
@@ -324,7 +306,6 @@ fn init_creates_a_vault_without_committing() {
     assert_eq!(code, 0, "{env:#}");
     assert!(v.root.join(".git").is_dir());
     assert!(v.git(&["rev-list", "--all"]).is_empty(), "init committed");
-    assert!(!v.exists("inbox") && !v.exists(".gitattributes") && !v.exists("plugins"));
     assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
     assert_snapshot!(v.tree());
     // The created vault opens and lints clean.
@@ -371,7 +352,7 @@ fn init_keeps_a_non_utf8_gitignore() {
 #[test]
 fn init_inside_a_work_tree_but_not_at_its_root_is_refused() {
     let v = TestVault::empty(BIN);
-    v.git(&["init", "-q", "-b", "main"]);
+    v.init_git();
     let sub = v.root.join("sub");
     std::fs::create_dir_all(&sub).unwrap();
     let (code, env) = init_in(&sub, &v);

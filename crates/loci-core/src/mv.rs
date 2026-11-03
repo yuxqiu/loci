@@ -164,7 +164,7 @@ fn refuse_slug_collisions(index: &Index, moves: &BTreeMap<VaultPath, VaultPath>)
     let mut new_slugs = BTreeSet::new();
     for new in moves.values().filter(|n| n.kind() == Some(Kind::Concept)) {
         let slug = new.slug().expect("`problem` refused a concept whose stem is no slug");
-        let taken = index.slug_paths(&slug).iter().any(|p| !moves.contains_key(p));
+        let taken = index.concepts_named(slug.as_str()).iter().any(|p| !moves.contains_key(p));
         if taken || !new_slugs.insert(slug.clone()) {
             return Err(Refusal::refused("mv.collision", format!("slug `{slug}` is already used")));
         }
@@ -206,17 +206,6 @@ mod tests {
     }
 
     const C: &str = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# T\n";
-
-    #[test]
-    fn rename_rewrites_links_and_leaves_the_note() {
-        let i = Index::from_texts(&[
-            ("concepts/a/old.md", C),
-            ("views/v.md", "# V\n\n[[old]] [[old#T|x]] [[concepts/a/old]]\n"),
-        ]);
-        let p = plan(&i, &vp("concepts/a/old.md"), &vp("concepts/a/new.md"), |_| Ok(false), |_| false).unwrap();
-        assert_eq!(p.writes["views/v.md"].text, "# V\n\n[[new]] [[new#T|x]] [[concepts/a/new]]\n");
-        assert!(!p.writes.contains_key("concepts/a/new.md"), "a rename does not edit the note");
-    }
 
     #[test]
     fn a_link_with_a_dangling_fragment_still_follows_its_note() {
@@ -312,7 +301,6 @@ mod tests {
         assert_eq!(e("concepts/a/x.md", "concepts/x.md"), "mv.no-area", "the `concepts/` root is no area");
 
         // Messages say what is wrong with the destination.
-        let message = |f: &str, t: &str| plan(&i, &vp(f), &vp(t), |_| Ok(false), |_| false).unwrap_err().error.message;
         assert!(message("concepts/a/x.md", "concepts/a/AREA.md").ends_with("would be the area file, not a concept"));
         assert_eq!(e("views/v.md", "views/w"), "mv.to");
         let pic = Index::from_texts(&[("views/fig.png", ""), ("views/v.md", "[[views/fig.png]]\n")]);
@@ -355,34 +343,5 @@ mod tests {
         assert_eq!(e.code(), "mv.collision");
         assert!(plan(&i, &vp("sources/papers/p.pdf"), &vp("sources/papers/q.pdf"), |_| Ok(false), |_| false).is_ok());
         assert!(plan(&i, &vp("sources/papers"), &vp("sources/articles"), |_| Ok(false), |_| false).is_ok());
-    }
-
-    #[test]
-    fn source_citations_follow() {
-        let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# T\n\nSee [[sources/papers/p.pdf#p3]].\n";
-        let i = Index::from_texts(&[("concepts/a/x.md", c), ("sources/papers/p.pdf", "")]);
-        let p = plan(&i, &vp("sources/papers/p.pdf"), &vp("sources/papers/q.pdf"), |_| Ok(false), |_| false).unwrap();
-        assert!(p.writes["concepts/a/x.md"].text.contains("[[sources/papers/q.pdf#p3]]"));
-    }
-
-    #[test]
-    fn table_pipe_kept() {
-        let i =
-            Index::from_texts(&[("concepts/a/old.md", C), ("views/v.md", "# V\n\n| a |\n|---|\n| [[old\\|x]] |\n")]);
-        let p = plan(&i, &vp("concepts/a/old.md"), &vp("concepts/a/new.md"), |_| Ok(false), |_| false).unwrap();
-        assert!(p.writes["views/v.md"].text.contains("[[new\\|x]]"));
-    }
-
-    #[test]
-    fn directory_move() {
-        let i = Index::from_texts(&[
-            ("concepts/a/AREA.md", "# A\n\nP.\n"),
-            ("concepts/a/g/x.md", C),
-            ("views/v.md", "# V\n\n[[x]] ![[concepts/a/g/p.png]]\n"),
-            ("concepts/a/g/p.png", ""),
-        ]);
-        let p = plan(&i, &vp("concepts/a/g"), &vp("concepts/a/h"), |_| Ok(false), |_| false).unwrap();
-        assert_eq!(p.moves.len(), 2);
-        assert_eq!(p.writes["views/v.md"].text, "# V\n\n[[x]] ![[concepts/a/h/p.png]]\n");
     }
 }

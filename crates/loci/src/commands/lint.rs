@@ -46,7 +46,7 @@ pub fn lint_vault(vault: &Vault) -> Linted {
     diagnostics.extend(lint::disk_rules(&index, vault.repo()));
     let installed = plugins();
     for p in &installed {
-        match p.lint(&vault.root, VERSION) {
+        match p.lint(vault.root(), VERSION) {
             Ok(d) => diagnostics.extend(d),
             Err(failed) => diagnostics.push(*failed),
         }
@@ -55,42 +55,58 @@ pub fn lint_vault(vault: &Vault) -> Linted {
     Linted { files: index.files().len(), plugins: installed.into_iter().map(|p| p.name).collect(), diagnostics }
 }
 
-/// The `--fix` options.
+/// `loci lint`'s fix options.
+#[derive(clap::Args)]
 pub struct FixArgs {
-    pub unsafe_fixes: bool,
-    pub only: Option<String>,
-    pub allow_dirty: bool,
-    pub dry_run: bool,
+    /// Apply the safe fixes of core diagnostics, then lint again.
+    #[arg(long)]
+    fix: bool,
+    /// Apply unsafe fixes too (likely, but they may change meaning).
+    #[arg(long, requires = "fix")]
+    unsafe_fixes: bool,
+    /// Only fix diagnostics with this code.
+    #[arg(long, requires = "fix", value_name = "CODE")]
+    only: Option<String>,
+    /// Fix on a working tree with uncommitted changes (refused otherwise, so the diff is
+    /// the fixes').
+    #[arg(long, requires = "fix")]
+    allow_dirty: bool,
+    /// Report the fixes; write nothing.
+    #[arg(long, requires = "fix")]
+    dry_run: bool,
 }
 
-pub fn run(ctx: &Ctx, fix: Option<FixArgs>) -> Result<Report, Refusal> {
+pub fn run(ctx: &Ctx, args: &FixArgs) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
-    let Some(args) = fix else {
+    if !args.fix {
         let linted = lint_vault(&vault);
         let (data, human) = (linted.data(), linted.summary());
         return Ok(Report::ok(data, human).with_diagnostics(linted.diagnostics));
     };
+    let only = fix_preconditions(&vault, args)?;
+    fix_vault(ctx, &vault, args, only)
+}
 
-    let only = match args.only.as_deref() {
-        None => None,
-        Some(code) => match lint::core_code(code) {
-            Some(code) => Some(code),
-            None => {
-                return Err(Refusal::refused("lint.unknown-code", format!("`{code}` is not a code core lint reports")));
-            }
-        },
-    };
-
-    // As `cargo fix`: on a clean tree the diff is exactly the fixes. A dry run writes
-    // nothing, so it may run on a dirty one.
+/// The code `--only` names, after refusing one core lint does not report
+/// (`lint.unknown-code`) and, as `cargo fix` does, a working tree with uncommitted
+/// changes (`lint.dirty`): on a clean tree the diff is exactly the fixes. A dry run
+/// writes nothing, so it may run on a dirty one.
+fn fix_preconditions(vault: &Vault, args: &FixArgs) -> Result<Option<lint::Code>, Refusal> {
+    let unknown =
+        |code: &str| Refusal::refused("lint.unknown-code", format!("`{code}` is not a code core lint reports"));
+    let only = args.only.as_deref().map(|c| lint::core_code(c).ok_or_else(|| unknown(c))).transpose()?;
     if !args.allow_dirty && !args.dry_run && !vault.repo().status().map_err(Refusal::git)?.is_clean() {
         return Err(Refusal::refused(
             "lint.dirty",
             "the working tree has uncommitted changes; commit or stash them so the diff is the fixes', or pass `--allow-dirty`",
         ));
     }
+    Ok(only)
+}
 
-    let index = Index::open(&vault);
+/// `--fix`: plans the fixes, writes them unless it is a dry run, and lints again.
+fn fix_vault(ctx: &Ctx, vault: &Vault, args: &FixArgs, only: Option<lint::Code>) -> Result<Report, Refusal> {
+    let index = Index::open(vault);
     let opts = fix::Options { unsafe_fixes: args.unsafe_fixes, only };
     let plan = fix::Plan::new(&index, &vault.config, &opts)?;
     let mut human: String = plan
@@ -103,7 +119,7 @@ pub fn run(ctx: &Ctx, fix: Option<FixArgs>) -> Result<Report, Refusal> {
         // The core index rules after the fixes; nothing was written to run the rest on.
         Linted { files: index.files().len(), plugins: vec![], diagnostics: plan.remaining }
     } else {
-        plan.change.apply(&vault).map_err(Refusal::io)?;
+        plan.change.apply(vault).map_err(Refusal::io)?;
         lint_vault(&ctx.vault()?)
     };
 

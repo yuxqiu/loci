@@ -31,19 +31,18 @@ pub struct Skill {
 }
 
 impl Skill {
-    /// The skills compiled into a binary, from (name, `SKILL.md`) pairs.
-    pub fn compiled(files: &[(&str, &str)]) -> Vec<Skill> {
-        files.iter().map(|(name, body)| Skill::from_markdown(name, body)).collect()
+    /// The skills compiled into a binary, from their `SKILL.md` files.
+    pub fn compiled(files: &[&str]) -> Vec<Skill> {
+        files.iter().map(|body| Skill::from_markdown(body)).collect()
     }
 
-    /// A skill compiled into a binary, from its `SKILL.md`: the description is the
-    /// `description:` field of the frontmatter. Panics when the frontmatter is broken
-    /// or has no description: the binary was built with a bad skill.
-    pub fn from_markdown(name: &str, body: &str) -> Self {
+    /// A skill compiled into a binary, from its `SKILL.md`: the name and description
+    /// are its frontmatter's `name:` and `description:`. Panics when either is missing:
+    /// the binary was built with a bad skill.
+    fn from_markdown(body: &str) -> Self {
         let skill = crate::parse::markdown(body.to_string());
-        assert!(!skill.frontmatter_broken(), "skill `{name}` has broken frontmatter: {:?}", skill.frontmatter);
-        let description = skill.fm_str("description").unwrap_or_else(|| panic!("skill `{name}` has no description"));
-        Self { name: name.to_string(), description: description.to_string(), body: body.to_string() }
+        let field = |key| skill.fm_str(key).unwrap_or_else(|| panic!("a compiled skill has no `{key}`: {body}"));
+        Self { name: field("name").to_string(), description: field("description").to_string(), body: body.to_string() }
     }
 }
 

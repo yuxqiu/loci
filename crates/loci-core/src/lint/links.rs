@@ -14,6 +14,17 @@ pub(super) fn links(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     }
 }
 
+/// The headings of `note`, the real choices for a heading link that misses, so it can
+/// be relinked without opening the note; picking one is judgement, so there is no fix.
+fn headings_hint(note: &Note) -> String {
+    let headings: Vec<&str> = note.headings.iter().map(|h| h.content.as_str()).collect();
+    if headings.is_empty() {
+        "it has no headings".to_string()
+    } else {
+        format!("its headings are: {}", headings.join(", "))
+    }
+}
+
 /// The unsafe fix pointing `link` at concept `slug` instead: a prereq is renamed with
 /// its frontmatter (m0 §6.1), a body link in place with its fragment kept.
 fn relink_fix(note: &Note, link: &Spanned<Link>, slug: &Slug) -> Fix {
@@ -64,10 +75,13 @@ fn unresolved(index: &Index, note: &Note, link: &Spanned<Link>) -> Option<Diagno
             let shown = if link.form == LinkForm::Prereq { target } else { link.target.text(&note.text) };
             let diag = at(Code::LinkDangling, format!("`{shown}` does not resolve"));
             match why {
-                Dangling::Ambiguous(paths) => diag.with_hint(format!(
-                    "several concepts are named `{target}` ({}); link by path",
-                    paths.iter().map(VaultPath::as_str).collect::<Vec<_>>().join(", ")
-                )),
+                Dangling::Ambiguous(paths) => {
+                    let paths: Vec<&str> = paths.iter().map(VaultPath::as_str).collect();
+                    diag.with_hint(format!(
+                        "several concepts are named `{target}` ({}); link by path",
+                        paths.join(", ")
+                    ))
+                }
                 Dangling::NoConcept { closest: Some(slug) } => diag
                     .with_hint(format!("no concept is named `{target}`; did you mean [[{slug}]]?"))
                     .with_fix(relink_fix(note, link, &slug)),
@@ -78,17 +92,10 @@ fn unresolved(index: &Index, note: &Note, link: &Spanned<Link>) -> Option<Diagno
             }
         }
 
-        // The real choices, so a renamed heading can be relinked without opening the
-        // note; picking one is judgement, so there is no fix.
         LinkError::Heading { note: target_note, heading } => {
             let target_note = index.parsed(&target_note).expect("a heading is checked in a parsed note");
-            let headings: Vec<&str> = target_note.headings.iter().map(|h| h.content.as_str()).collect();
-            let hint = if headings.is_empty() {
-                "it has no headings".to_string()
-            } else {
-                format!("its headings are: {}", headings.join(", "))
-            };
-            at(Code::LinkDanglingHeading, format!("`{target}` has no heading `{heading}`")).with_hint(hint)
+            at(Code::LinkDanglingHeading, format!("`{target}` has no heading `{heading}`"))
+                .with_hint(headings_hint(target_note))
         }
 
         LinkError::Block { id, .. } => at(Code::LinkDanglingBlock, format!("`{target}` has no block `^{id}`"))

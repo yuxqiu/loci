@@ -12,10 +12,6 @@ fn vault_with(stub: Stub) -> TestVault {
     v
 }
 
-fn plugin_failed(env: &Value) -> Vec<String> {
-    with_code(env, "plugin.failed").iter().map(|d| d["message"].as_str().unwrap().to_string()).collect()
-}
-
 #[test]
 fn outside_a_vault_is_vault_not_found() {
     let v = vault_with(Stub::default());
@@ -46,7 +42,7 @@ fn unknown_command_lists_core_commands_and_plugins() {
     let v = vault_with(Stub::default());
     let (code, env) = v.run(&["nosuch"]);
     assert_eq!((code, error_code(&env)), (1, "cmd.unknown"));
-    let msg = env["error"]["message"].as_str().unwrap();
+    let msg = error_message(&env);
     for c in ["init", "lint", "rules", "mv", "status", "new", "skill", "block-ids"] {
         assert!(msg.contains(c), "{msg}");
     }
@@ -134,7 +130,7 @@ fn lint_plugin_failures_drop_the_output() {
         let v = vault_with(stub);
         let (code, env) = v.run(&["lint"]);
         assert_eq!(code, 1, "{what}: {}", diag_lines(&env));
-        let failed = plugin_failed(&env);
+        let failed = messages(&env, "plugin.failed");
         assert_eq!(failed.len(), 1, "{what}: {}", diag_lines(&env));
         assert!(failed[0].contains("stub") && failed[0].contains("lint"), "{what}: {failed:?}");
         if matches!(what, "exit code 2" | "invalid envelope") {
@@ -163,7 +159,7 @@ fn skill_show_lists_plugin_skills() {
     assert_eq!((code, raw.as_str()), (0, STUB_SKILL_BODY));
     let (code, env) = v.run(&["skill", "show", "nope"]);
     assert_eq!((code, error_code(&env)), (1, "skill.unknown"));
-    assert!(env["error"]["message"].as_str().unwrap().contains("stub-hello"));
+    assert!(error_message(&env).contains("stub-hello"));
 }
 
 #[test]
@@ -214,7 +210,7 @@ fn skills_plugin_failures_drop_the_output() {
         let v = vault_with(stub);
         let (code, env) = v.run(&["skill", "show"]);
         assert_eq!(code, 1, "{what}: an error diagnostic fails the command: {env:#}");
-        let failed = plugin_failed(&env);
+        let failed = messages(&env, "plugin.failed");
         assert_eq!(failed.len(), 1, "{what}: {}", diag_lines(&env));
         assert!(failed[0].contains("stub") && failed[0].contains("skills"), "{what}: {failed:?}");
         let skills = env["data"]["skills"].as_array().unwrap();

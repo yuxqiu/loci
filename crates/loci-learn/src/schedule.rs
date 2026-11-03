@@ -89,20 +89,20 @@ impl Scheduler {
         lines: &[Line],
         new_per_day: u32,
         now: Timestamp,
-    ) -> (Vec<&'a Spanned<Card>>, usize) {
+    ) -> (Vec<(Ulid, &'a Spanned<Card>)>, usize) {
         let by_card = lines_by_card(lines);
-        let mut due: Vec<(Timestamp, &Spanned<Card>)> = vec![];
-        let mut fresh: Vec<&Spanned<Card>> = vec![];
+        let mut due: Vec<(Timestamp, Ulid, &Spanned<Card>)> = vec![];
+        let mut fresh: Vec<(Ulid, &Spanned<Card>)> = vec![];
         for c in all {
             let Some(id) = c.id.valid() else { continue };
             match by_card.get(&id).and_then(|ls| self.state(ls)) {
-                Some(state) if state.due <= now => due.push((state.due, c)),
+                Some(state) if state.due <= now => due.push((state.due, id, c)),
                 Some(_) => {}
-                None => fresh.push(c),
+                None => fresh.push((id, c)),
             }
         }
 
-        due.sort_by_key(|(due, c)| (*due, c.id.valid()));
+        due.sort_by_key(|(due, id, _)| (*due, *id));
         let today = now.to_zoned(TimeZone::UTC).date();
         let introduced_today = by_card
             .values()
@@ -110,7 +110,7 @@ impl Scheduler {
             .count();
         let allowance = (new_per_day as usize).saturating_sub(introduced_today);
         let new_count = fresh.len().min(allowance);
-        let mut out: Vec<&Spanned<Card>> = due.into_iter().map(|(_, c)| c).collect();
+        let mut out: Vec<(Ulid, &Spanned<Card>)> = due.into_iter().map(|(_, id, c)| (id, c)).collect();
         out.extend(fresh.into_iter().take(new_count));
         (out, new_count)
     }
@@ -171,10 +171,6 @@ mod tests {
         format!("01ARZ3NDEKTSV4RRFFQ69G5F{n:02}").parse().unwrap()
     }
 
-    fn line(t: &str, grade: Grade) -> Line {
-        Line { t: t.parse().unwrap(), subject: Subject::Card(id(0)), grade }
-    }
-
     #[test]
     fn calendar_day_counts() {
         let a: Timestamp = "2026-10-30T23:59:00Z".parse().unwrap();
@@ -186,8 +182,8 @@ mod tests {
     #[test]
     fn good_reviews_push_due_later() {
         let s = Scheduler::new(0.9);
-        let l1 = line("2026-10-01T10:00:00Z", Grade::Good);
-        let l2 = line("2026-10-04T10:00:00Z", Grade::Good);
+        let l1 = card_line(0, "2026-10-01T10:00:00Z", Grade::Good);
+        let l2 = card_line(0, "2026-10-04T10:00:00Z", Grade::Good);
         let one = s.state(&[&l1]).unwrap();
         let two = s.state(&[&l1, &l2]).unwrap();
         assert!(two.memory.stability > one.memory.stability);
@@ -200,8 +196,8 @@ mod tests {
     #[test]
     fn again_is_due_sooner_than_easy() {
         let s = Scheduler::new(0.9);
-        let a = s.state(&[&line("2026-10-01T10:00:00Z", Grade::Again)]).unwrap();
-        let e = s.state(&[&line("2026-10-01T10:00:00Z", Grade::Easy)]).unwrap();
+        let a = s.state(&[&card_line(0, "2026-10-01T10:00:00Z", Grade::Again)]).unwrap();
+        let e = s.state(&[&card_line(0, "2026-10-01T10:00:00Z", Grade::Easy)]).unwrap();
         assert!(a.due < e.due);
     }
 
@@ -228,7 +224,7 @@ mod tests {
         ];
         let s = Scheduler::new(0.9);
         let (sel, n) = s.select(&all, &lines, 2, "2026-10-30T00:00:00Z".parse().unwrap());
-        let ids: Vec<Ulid> = sel.iter().map(|c| c.id.valid().unwrap()).collect();
+        let ids: Vec<Ulid> = sel.iter().map(|(id, _)| *id).collect();
         assert_eq!(ids, [id(4), id(3), id(2)], "the due card, then new ones in card order");
         assert_eq!(n, 2);
     }

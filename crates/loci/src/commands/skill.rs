@@ -23,7 +23,7 @@ fn all_skills(vault_root: &std::path::Path) -> (Vec<(Skill, Option<String>)>, Ve
 
 pub fn run(ctx: &Ctx, name: Option<&str>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
-    let (skills, diags) = all_skills(&vault.root);
+    let (skills, diags) = all_skills(vault.root());
     match name {
         None => {
             let human: String = skills.iter().map(|(s, _)| format!("{s}\n")).collect();

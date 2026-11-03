@@ -3,6 +3,7 @@
 
 use loci_core::config::{self, Config, UpdateId};
 use loci_core::envelope::{Refusal, Report};
+use loci_core::path::VaultPath;
 use serde::Serialize;
 use serde_json::json;
 
@@ -93,18 +94,18 @@ fn handle(vault: &loci_core::vault::Vault, list: &[Update], id: &str) -> Result<
         let ids: Vec<String> = list.iter().map(|u| u.id.to_string()).collect();
         return Err(Refusal::refused("updates.unknown", format!("no update `{id}`; known: {}", ids.join(", "))));
     };
-    if !waiting(mark, list)?.iter().any(|u| u.id == target.id) {
-        let mark = mark.expect("a handled update is at or before the mark");
+    // Only for its refusal: a vault through a newer update than this loci knows.
+    waiting(mark, list)?;
+    if let Some(mark) = mark.filter(|m| target.id <= *m) {
         return Err(Refusal::refused(
             "updates.order",
             format!("`{id}` is already handled (this vault is through {mark})"),
         ));
     }
 
-    let path = vault.root.join(config::FILE);
+    let path = vault.abs(&VaultPath::fixed(config::FILE));
     let text = std::fs::read_to_string(&path).map_err(Refusal::io)?;
     let updated = Config::set_updates(&text, target.id).map_err(|e| Refusal::refused("config.invalid", e))?;
-    Config::parse(&updated).map_err(|e| Refusal::internal("updates.write", e))?;
     loci_core::vault::write_atomic(&path, updated.as_bytes()).map_err(Refusal::io)?;
     Ok(Report::ok(json!({"handled": target.id}), format!("handled updates through {}\n", target.id)))
 }

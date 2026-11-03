@@ -1,6 +1,7 @@
 //! `loci mv` (m0 §9.5).
 
 use loci_core::envelope::{Refusal, Report};
+use loci_core::git;
 use loci_core::index::Index;
 use loci_core::path::VaultPath;
 
@@ -52,7 +53,7 @@ fn refuse_partial_folder(vault: &Vault, from: &VaultPath, plan: &Change) -> Resu
         return Ok(()); // A file.
     }
     let listing = vault.repo().ls_files(Some(from)).map_err(Refusal::git)?;
-    let on_disk = |name: &String| vault.root.join(name).symlink_metadata().is_ok();
+    let on_disk = |name: &String| vault.abs(&git::vault_path(name.clone())).symlink_metadata().is_ok();
     let mut left: Vec<String> =
         listing.names.into_iter().filter(|n| on_disk(n) && !plan.moves.contains_key(n.as_str())).collect();
     left.extend(listing.not_utf8);

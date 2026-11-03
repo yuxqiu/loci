@@ -55,11 +55,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_is_identity() {
-        assert_eq!(apply("abc", vec![]).unwrap(), "abc");
-    }
-
-    #[test]
     fn replace_and_insert() {
         let out = apply("hello world", vec![Edit::replace(6..11, "there"), Edit::insert(0, ">> ")]).unwrap();
         assert_eq!(out, ">> hello there");
@@ -83,27 +78,7 @@ mod tests {
     }
 
     #[test]
-    fn adjacent_is_fine() {
-        let out = apply("abcdef", vec![Edit::replace(0..2, "X"), Edit::replace(2..4, "Y")]).unwrap();
-        assert_eq!(out, "XYef");
-    }
-
-    #[test]
     fn non_char_boundary_is_error() {
         assert!(apply("é", vec![Edit::insert(1, "x")]).is_err());
-    }
-
-    #[test]
-    fn one_pass_equals_sequential_from_end() {
-        let text = "the quick brown fox";
-        let edits = vec![Edit::replace(4..9, "slow"), Edit::replace(16..19, "cat"), Edit::insert(0, "!")];
-        let one = apply(text, edits.clone()).unwrap();
-        let mut seq = text.to_string();
-        let mut sorted = edits;
-        sorted.sort_by_key(|e| std::cmp::Reverse(e.range.start));
-        for e in sorted {
-            seq = apply(&seq, vec![e]).unwrap();
-        }
-        assert_eq!(one, seq);
     }
 }

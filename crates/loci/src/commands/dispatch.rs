@@ -25,7 +25,7 @@ pub fn run(ctx: &Ctx, args: Vec<String>) -> ExitCode {
         Err(r) => return fail(ctx, name, r),
     };
 
-    let mut cmd = p.command(&vault.root, VERSION);
+    let mut cmd = p.command(vault.root(), VERSION);
     cmd.args(rest);
     if ctx.json {
         cmd.arg("--json");
