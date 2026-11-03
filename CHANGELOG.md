@@ -31,6 +31,14 @@ them under its version.
 
 ### Changed
 
+- When `loci mv`, `loci merge` or `loci lint --fix` changes a concept's frontmatter,
+  the whole block is rewritten in a canonical form: block lists
+  (`prereqs:\n  - "[[bfs]]"`), comments and layout not kept. A `prereqs` item may be
+  any YAML string `[[slug]]` (single quotes and escapes count). `loci links` shows
+  a prereq as written (`raw`: `"[[bfs]]"`); lint messages name it by its slug.
+- A file name holding a control character (a newline, a tab) refuses the vault
+  (`file.unreadable`), so every message names a path on one line; such a path
+  argument is `path.control`.
 - A file git tracks that has become a FIFO, socket or device refuses the vault
   (`file.unreadable`) instead of being skipped.
 - `link.dangling-heading` lists the target note's headings in its hint, so a renamed

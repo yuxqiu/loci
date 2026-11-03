@@ -44,14 +44,11 @@ fn merge_rewrites_links_and_deletes_the_absorbed_note() {
     assert_eq!(dry["data"]["edited"], env["data"]["edited"]);
     assert!(!v.exists("concepts/g/bfs.md"));
     let into = v.read("concepts/g/graph-search.md");
-    assert!(
-        !into.contains("prereqs: [\"[[bfs]]\"]") && !into.contains("[[graph-search]]\"]"),
-        "self-prereq removed:\n{into}"
-    );
+    assert!(!into.contains("prereqs") && !into.contains("\"[[graph-search]]\""), "self-prereq removed:\n{into}");
     assert!(!into.contains("aliases"), "no aliases are added:\n{into}");
     assert!(into.contains("See [[graph-search]]."));
     let d = v.read("concepts/g/dijkstra.md");
-    assert!(d.contains("prereqs: [\"[[graph-search]]\"]"), "{d}");
+    assert!(d.contains("prereqs:\n  - \"[[graph-search]]\"\n"), "{d}");
     assert!(
         d.contains("[[concepts/g/graph-search#Queue|the queue]] and [[graph-search]]."),
         "form, fragment and label kept:\n{d}"

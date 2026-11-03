@@ -179,7 +179,7 @@ fn block_id_of_parent_item_spans_its_children() {
     let parent = get("parent1");
     let child = get("child1");
     // The parent's id sits before the nested list and its block covers the children.
-    assert!(parent.range.end <= text.find("  - child item").unwrap());
+    assert!(parent.span.end <= text.find("  - child item").unwrap());
     assert!(text[parent.block.clone()].contains("- child item ^child1"));
     assert!(text[parent.block.clone()].contains("- other child"));
     assert!(text[child.block.clone()].starts_with("child item") || text[child.block.clone()].contains("child item"));
@@ -605,4 +605,15 @@ fn a_tracked_file_replaced_by_a_folder_or_a_special_file() {
     let (code, env) = v.run(&["lint"]);
     assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
     assert!(env["error"]["message"].as_str().unwrap().contains("`views/b.md` is not a regular file"), "{env:#}");
+}
+
+/// A name with a control character would break every one-line message that names it,
+/// so a vault holding one is refused, the name shown escaped.
+#[test]
+fn a_name_with_a_control_character_refuses_the_vault() {
+    let v = TestVault::with_files(BIN, &[("views/a.md", "# A\n"), ("views/a\nb.md", "# B\n")]);
+    let (code, env) = v.run(&["lint"]);
+    assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
+    let message = env["error"]["message"].as_str().unwrap();
+    assert!(message.contains(r#""views/a\nb.md" has a control character in its name"#), "{message}");
 }

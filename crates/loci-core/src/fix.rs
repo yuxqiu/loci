@@ -118,11 +118,13 @@ fn apply_pass(
         }
         out.push(Applied { code: d.code.clone(), path: d.path().map(str::to_string), message: fix.message.clone() });
     }
+
     for (p, file_edits) in by_file {
         *edits.entry(p.clone()).or_default() += file_edits.len();
         let text = splice::apply(&texts[&p], file_edits).map_err(|e| Refusal::internal("lint.fix", e))?;
         texts.insert(p, text);
     }
+
     Ok(out)
 }
 

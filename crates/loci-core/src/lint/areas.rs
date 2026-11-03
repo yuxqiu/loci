@@ -2,7 +2,7 @@
 
 use super::Ctx;
 use crate::envelope::Diagnostic;
-use crate::parse::{Note, TopBlock};
+use crate::parse::{BlockType, Note, TopBlock};
 use crate::path::VaultPath;
 use crate::vault::Kind;
 
@@ -36,11 +36,13 @@ pub(super) fn areas(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
 
 /// The paragraph of an AREA.md that is exactly an H1 and one paragraph (m0 §6.3).
 fn area_paragraph(note: &Note) -> Option<&str> {
-    if note.frontmatter.is_some() || note.fm_error.is_some() {
+    if note.frontmatter.is_some() {
         return None;
     }
     match note.top_blocks.as_slice() {
-        [(TopBlock::Heading(1), _), (TopBlock::Paragraph, p)] => Some(note.text[p.clone()].trim()),
+        [TopBlock { kind: BlockType::Heading(1), .. }, TopBlock { kind: BlockType::Paragraph, span }] => {
+            Some(note.text[span.clone()].trim())
+        }
         _ => None,
     }
 }

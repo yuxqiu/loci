@@ -24,20 +24,20 @@ pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
     let mut outgoing = vec![];
     if let Some(note) = index.parsed(&path) {
         for link in &note.links {
-            let line = line_col(&note.text, link.range.start).0;
+            let line = line_col(&note.text, link.span.start).0;
             let target = index.link_target(note, link);
             let to = target.as_ref().map_or("(unresolved)", VaultPath::as_str);
-            human.push_str(&format!("  {line}: {} -> {to}{}\n", link.raw, form_note(link.form)));
-            outgoing.push(json!({"line": line, "form": link.form, "raw": link.raw, "target": target}));
+            human.push_str(&format!("  {line}: {} -> {to}{}\n", link.written(&note.text), form_note(link.form)));
+            outgoing.push(json!({"line": line, "form": link.form, "raw": link.written(&note.text), "target": target}));
         }
     }
 
     human.push_str(&format!("links to {path}:\n"));
     let mut incoming = vec![];
     for (note, link) in index.incoming(&path) {
-        let line = line_col(&note.text, link.range.start).0;
-        human.push_str(&format!("  {}:{line}: {}{}\n", note.path, link.raw, form_note(link.form)));
-        incoming.push(json!({"path": note.path, "line": line, "form": link.form, "raw": link.raw}));
+        let line = line_col(&note.text, link.span.start).0;
+        human.push_str(&format!("  {}:{line}: {}{}\n", note.path, link.written(&note.text), form_note(link.form)));
+        incoming.push(json!({"path": note.path, "line": line, "form": link.form, "raw": link.written(&note.text)}));
     }
 
     // Missing links, both ways: notes that name this one, and concepts this one names.

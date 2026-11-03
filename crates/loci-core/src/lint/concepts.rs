@@ -2,12 +2,15 @@
 //! unique ids and slugs, and prerequisite cycles.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
 use super::{Ctx, update_code};
 use crate::config::{Editions, UpdateId};
 use crate::envelope::{Applicability, Diagnostic, Fix};
 use crate::id::Ulid;
-use crate::parse::{FmValue, Note, prereq_item};
+use saphyr::{Mapping, Scalar, Yaml};
+
+use crate::parse::{FmValue, LinkForm, Note, prereq_item, rewrite_frontmatter, yaml_string};
 use crate::path::VaultPath;
 
 /// A concept frontmatter field (m0 §6.1) and the editions it belongs to.
@@ -28,69 +31,95 @@ pub(super) const CONCEPT_FIELDS: &[Field] = &[
 /// The concepts whose frontmatter parsed (malformed frontmatter is reported as
 /// `fm.*`; its fields cannot be checked). No frontmatter counts as an empty mapping.
 fn concepts_with_fields<'a>(ctx: &'a Ctx) -> impl Iterator<Item = &'a Note> {
-    ctx.index.concepts().filter(|n| n.fm_error.is_none())
+    ctx.index.concepts().filter(|n| !n.frontmatter_broken())
 }
 
 /// Field rules of a concept's frontmatter (m0 §6.1), by the vault's edition.
 pub(super) fn concept_fields(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     for note in concepts_with_fields(ctx) {
-        let path = note.path.as_str();
-        let text = note.text.as_str();
-        let d = |code: &str, msg: String| Diagnostic::error(code, msg).at_path(path);
-        let ty = |key: &str, t: &str, span: std::ops::Range<usize>| {
-            d("fm.field-type", format!("`{key}` must be {t}")).at(text, span)
-        };
-        let get = |key: &str| note.fm(key);
-        for e in note.frontmatter.iter().flat_map(|f| &f.entries) {
+        for e in note.frontmatter.iter().flat_map(|f| f.entries()) {
             if !CONCEPT_FIELDS.iter().any(|f| f.name == e.key && f.editions.contains(ctx.mark)) {
-                out.push(
-                    d("fm.unknown-field", format!("field `{}` is not allowed in a concept", e.key))
-                        .at(text, e.key_span.clone()),
-                );
+                let msg = format!("field `{}` is not allowed in a concept", e.key);
+                out.push(error(note, "fm.unknown-field", msg).at(&note.text, e.key_span.clone()));
             }
         }
-        match get("id") {
-            None => {
-                let id = format!("id: {}\n", Ulid::generate());
-                let fix = match &note.frontmatter {
-                    // After the opening `---` line.
-                    Some(fm) => {
-                        let at = fm.range.start + text[fm.range.clone()].find('\n').map_or(0, |i| i + 1);
-                        Fix::new(Applicability::Safe, "add a new id").edit(path, at..at, id)
-                    }
-                    None => {
-                        let at = note.body_start();
-                        Fix::new(Applicability::Safe, "add frontmatter with a new id").edit(
-                            path,
-                            at..at,
-                            format!("---\n{id}---\n"),
-                        )
-                    }
-                };
-                out.push(d("fm.missing-field", "concept has no `id`".into()).with_fix(fix))
-            }
-            Some(FmValue::Str { value, span, .. }) => {
-                if let Err(e) = value.parse::<Ulid>() {
-                    out.push(d("fm.id-format", format!("`id` {e}")).at(text, span.clone()));
-                }
-            }
-            Some(v) => out.push(ty("id", "a string", v.span())),
+        out.extend(id_field(note));
+        out.extend(prereqs_field(note));
+    }
+}
+
+fn error(note: &Note, code: &str, msg: String) -> Diagnostic {
+    Diagnostic::error(code, msg).at_path(note.path.as_str())
+}
+
+/// `fm.field-type` for field `key` of `note`, at `span`.
+fn wrong_type(note: &Note, key: &str, want: &str, span: Range<usize>) -> Diagnostic {
+    error(note, "fm.field-type", format!("`{key}` must be {want}")).at(&note.text, span)
+}
+
+/// A fix that rewrites `note`'s frontmatter with `change` (m0 §6.1).
+fn frontmatter_fix(note: &Note, applicability: Applicability, message: &str, change: impl FnOnce(&mut Mapping)) -> Fix {
+    let edit = rewrite_frontmatter(note, change);
+    Fix::new(applicability, message).edit(note.path.as_str(), edit.range, edit.new)
+}
+
+/// `id`: present, a string, a ULID. A missing one gets a fix adding a new id, first.
+fn id_field(note: &Note) -> Option<Diagnostic> {
+    match note.fm("id") {
+        Some(FmValue::Str { value, span }) => {
+            let e = value.parse::<Ulid>().err()?;
+            Some(error(note, "fm.id-format", format!("`id` {e}")).at(&note.text, span.clone()))
         }
-        // `prereqs`: a list of `"[[slug]]"`, written verbatim.
-        let wrong = |span| ty("prereqs", "a list of `\"[[slug]]\"`", span).with_hint("write \"[[slug]]\"");
-        match get("prereqs") {
-            None => {}
-            Some(FmValue::List { items, .. }) => {
-                out.extend(items.iter().filter(|i| prereq_item(text, i).is_none()).map(|i| {
-                    match unquoted_prereq(text, i) {
-                        Some((slug, written)) => wrong(i.span()).with_fix(
-                            Fix::new(Applicability::Safe, "quote it").edit(path, written, format!("\"[[{slug}]]\"")),
-                        ),
-                        None => wrong(i.span()),
-                    }
-                }))
-            }
-            Some(v) => out.push(wrong(v.span())),
+        Some(v) => Some(wrong_type(note, "id", "a string", v.span())),
+        None => {
+            // Only concepts whose frontmatter is a mapping, or absent, get here.
+            let message = if note.frontmatter.is_some() { "add a new id" } else { "add frontmatter with a new id" };
+            let fix = frontmatter_fix(note, Applicability::Safe, message, |m| {
+                let rest = std::mem::take(m);
+                m.insert(yaml_string("id"), yaml_string(Ulid::generate().to_string()));
+                m.extend(rest);
+            });
+            Some(error(note, "fm.missing-field", "concept has no `id`".into()).with_fix(fix))
+        }
+    }
+}
+
+/// `prereqs`: a list of strings `[[slug]]`. An unquoted `[[slug]]` gets a fix quoting
+/// every such item of the note.
+fn prereqs_field(note: &Note) -> Vec<Diagnostic> {
+    let wrong = |span| wrong_type(note, "prereqs", "a list of `\"[[slug]]\"`", span).with_hint("write \"[[slug]]\"");
+    let quote = || frontmatter_fix(note, Applicability::Safe, "quote it", quote_prereqs);
+    match note.fm("prereqs") {
+        None => vec![],
+        Some(FmValue::List { items, .. }) => items
+            .iter()
+            .filter(|i| !note.links.iter().any(|l| l.form == LinkForm::Prereq && l.span == i.span()))
+            .map(|i| match unquoted_prereq(i) {
+                true => wrong(i.span()).with_fix(quote()),
+                false => wrong(i.span()),
+            })
+            .collect(),
+        Some(v) => vec![wrong(v.span())],
+    }
+}
+
+/// Whether a `prereqs` item is an unquoted `[[slug]]`, which YAML reads as a list
+/// holding a list holding the slug.
+fn unquoted_prereq(item: &FmValue) -> bool {
+    let FmValue::List { items, .. } = item else { return false };
+    let [FmValue::List { items, .. }] = items.as_slice() else { return false };
+    matches!(items.as_slice(), [FmValue::Str { value, .. }] if value.parse::<crate::id::Slug>().is_ok())
+}
+
+/// Quotes every unquoted `[[slug]]` in `prereqs` ([`unquoted_prereq`]).
+fn quote_prereqs(map: &mut Mapping) {
+    let Some(Yaml::Sequence(items)) = map.get_mut(&yaml_string("prereqs")) else { return };
+    for item in items {
+        let Yaml::Sequence(outer) = item else { continue };
+        let [Yaml::Sequence(inner)] = outer.as_slice() else { continue };
+        let [Yaml::Value(Scalar::String(slug))] = inner.as_slice() else { continue };
+        if slug.parse::<crate::id::Slug>().is_ok() {
+            *item = prereq_item(&slug.clone());
         }
     }
 }
@@ -100,14 +129,15 @@ pub(super) fn concept_fields(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
 /// the unsafe fix that deletes them (a field may hold text worth keeping).
 pub(super) fn outdated_fields(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     for note in concepts_with_fields(ctx) {
-        for e in note.frontmatter.iter().flat_map(|f| &f.entries) {
+        for e in note.frontmatter.iter().flat_map(|f| f.entries()) {
             let Some(field) = CONCEPT_FIELDS.iter().find(|f| f.name == e.key && f.editions.contains(ctx.mark)) else {
                 continue;
             };
             let Some(update) = field.editions.until else { continue };
             let path = note.path.as_str();
-            let gone = crate::splice::Edit::remove_lines(&note.text, e.key_span.start..e.value.span().end);
-            let fix = Fix::new(Applicability::Unsafe, format!("delete `{}`", e.key)).edit(path, gone.range, "");
+            let fix = frontmatter_fix(note, Applicability::Unsafe, &format!("delete `{}`", e.key), |m| {
+                m.remove(&yaml_string(e.key.clone()));
+            });
             let code = update_code(update);
             out.push(
                 Diagnostic::warning(&code, format!("vault update {update} removes the concept field `{}`", e.key))
@@ -136,11 +166,11 @@ pub(super) fn duplicates(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
         // Unsafe: plugin data (a review log) may refer to the id of either note.
         let mut fix = Fix::new(Applicability::Unsafe, "give the other notes new ids");
         for n in &notes[1..] {
-            fix = fix.edit(
-                n.path.as_str(),
-                n.fm("id").expect("the note has the id").span(),
-                Ulid::generate().to_string(),
-            );
+            let edit = rewrite_frontmatter(n, |m| {
+                *m.get_mut(&yaml_string("id")).expect("the note has the id") =
+                    yaml_string(Ulid::generate().to_string());
+            });
+            fix = fix.edit(n.path.as_str(), edit.range, edit.new);
         }
         let others: Vec<&str> = notes[1..].iter().map(|n| n.path.as_str()).collect();
         out.push(
@@ -158,19 +188,6 @@ pub(super) fn duplicates(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
             );
         }
     }
-}
-
-/// The slug of a `prereqs` item written as an unquoted `[[slug]]`, which YAML reads as
-/// a list holding a list holding the slug, and the bytes it is written in. saphyr's
-/// span of such a flow list can stop before its last `]`, so the bytes are the exact
-/// text `[[slug]]` at the item's start, or there is no fix.
-fn unquoted_prereq<'a>(text: &str, item: &'a FmValue) -> Option<(&'a str, std::ops::Range<usize>)> {
-    let FmValue::List { items, span, .. } = item else { return None };
-    let [FmValue::List { items, .. }] = items.as_slice() else { return None };
-    let [FmValue::Str { value, quoted: false, .. }] = items.as_slice() else { return None };
-    value.parse::<crate::id::Slug>().ok()?;
-    let written = format!("[[{value}]]");
-    text[span.start..].starts_with(&written).then(|| (value.as_str(), span.start..span.start + written.len()))
 }
 
 pub(super) fn prereq_cycles(ctx: &Ctx, out: &mut Vec<Diagnostic>) {

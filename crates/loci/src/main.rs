@@ -169,7 +169,8 @@ enum SkillCmd {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let cwd = std::env::current_dir().expect("the working directory is readable");
-    let ctx = commands::Ctx { explicit_vault: cli.vault.clone(), cwd, json: cli.json };
+    let vault = loci_core::vault::VaultDir::new(cli.vault.as_deref(), &cwd);
+    let ctx = commands::Ctx { vault, cwd, json: cli.json };
     let (name, report) = match cli.command {
         Cmd::Init => ("init", commands::init::run(&ctx)),
         Cmd::Lint { fix, unsafe_fixes, only, allow_dirty, dry_run } => {

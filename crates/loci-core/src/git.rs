@@ -79,27 +79,9 @@ pub fn record_agent_tree(root: &Path, now: SystemTime, notes: &[String]) -> Resu
     }
 
     let head = head(root)?;
-    let git_dir = String::from_utf8(run(root, &["rev-parse", "--absolute-git-dir"])?)
-        .map_err(|_| "the git directory's path is not UTF-8".to_string())?;
-
-    // A private index, so the user's staging is untouched; removed when `scratch` drops.
-    let scratch = tempfile::Builder::new()
-        .prefix("loci-agent-")
-        .tempdir_in(git_dir.trim())
-        .map_err(|e| format!("cannot create a temporary index: {e}"))?;
-    let index = scratch.path().join("index");
-    let with_index = |args: &[&str]| exec(git(root).env("GIT_INDEX_FILE", &index).args(args), &args.join(" "));
-    let tree = with_index(&["read-tree", &head])
-        .and_then(|_| with_index(&["add", "-A"]))
-        .and_then(|_| with_index(&["write-tree"]).map(trimmed))?;
-    scratch.close().map_err(|e| format!("cannot remove the temporary index: {e}"))?;
+    let tree = working_tree(root, &head)?;
     let name = format!("{AGENT_REFS}{head}");
-    let mut all = agent_notes(root, &name)?;
-    for n in notes.iter().map(|n| n.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|n| !n.is_empty()) {
-        if !all.contains(&n) {
-            all.push(n);
-        }
-    }
+    let all = merged_notes(agent_notes(root, &name)?, notes);
 
     if all.is_empty() && tree == trimmed(run(root, &["rev-parse", &format!("{head}^{{tree}}")])?) {
         return Ok(None);
@@ -125,6 +107,37 @@ pub fn record_agent_tree(root: &Path, now: SystemTime, notes: &[String]) -> Resu
     )?;
     run(root, &["update-ref", &name, &trimmed(commit)])?;
     Ok(Some(name))
+}
+
+/// The id of a git tree holding the working tree as `git add -A` would stage it, built
+/// in a private index from `head`, so the user's staging is untouched.
+fn working_tree(root: &Path, head: &str) -> Result<String, String> {
+    let git_dir = String::from_utf8(run(root, &["rev-parse", "--absolute-git-dir"])?)
+        .map_err(|_| "the git directory's path is not UTF-8".to_string())?;
+    // Removed when `scratch` drops, on any return.
+    let scratch = tempfile::Builder::new()
+        .prefix("loci-agent-")
+        .tempdir_in(git_dir.trim())
+        .map_err(|e| format!("cannot create a temporary index: {e}"))?;
+    let index = scratch.path().join("index");
+    let with_index = |args: &[&str]| exec(git(root).env("GIT_INDEX_FILE", &index).args(args), &args.join(" "));
+    let tree = with_index(&["read-tree", head])
+        .and_then(|_| with_index(&["add", "-A"]))
+        .and_then(|_| with_index(&["write-tree"]).map(trimmed))?;
+    scratch.close().map_err(|e| format!("cannot remove the temporary index: {e}"))?;
+    Ok(tree)
+}
+
+/// `previous` notes followed by the new `notes` not among them, each with its
+/// whitespace collapsed; blank notes are dropped.
+fn merged_notes(previous: Vec<String>, notes: &[String]) -> Vec<String> {
+    let mut all = previous;
+    for n in notes.iter().map(|n| n.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|n| !n.is_empty()) {
+        if !all.contains(&n) {
+            all.push(n);
+        }
+    }
+    all
 }
 
 /// The agent records (`loci done`), as (ref, time of the record), by ref name.

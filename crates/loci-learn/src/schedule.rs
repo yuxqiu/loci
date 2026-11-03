@@ -110,11 +110,13 @@ pub fn estimate<'a>(
             used.extend(card_lines.iter().copied());
         }
     }
+
     if !rs.is_empty() {
         used.sort_by_key(|l| l.t);
         let r = rs.iter().sum::<f32>() / rs.len() as f32;
         return (Estimate::Cards { r }, used);
     }
+
     let items: Vec<&Line> = lines.iter().filter(|l| l.subject == Subject::Concept(concept)).collect();
     match items.last() {
         Some(last) => (Estimate::Item { grade: last.grade, age_days: days_since(last.t, now) }, items),
@@ -142,6 +144,7 @@ pub fn select<'a>(
             None => fresh.push(c),
         }
     }
+
     due.sort_by_key(|(due, c)| (*due, c.id.valid()));
     let today = now.to_zoned(TimeZone::UTC).date();
     let introduced_today =

@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::envelope::Refusal;
 use crate::index::{self, Index};
-use crate::parse::{Link, Note};
+use crate::parse::{Link, LinkForm, Names, Note, rename_prereqs, rewrite_frontmatter};
 use crate::path::VaultPath;
 use crate::splice::{self, Edit};
 use crate::vault::{self, Kind, Vault};
@@ -39,43 +39,62 @@ impl Change {
 
 /// Builds the edits for every link, in files outside `sources/` that `change` does not
 /// delete, whose resolved target is a key of `targets` (old target path -> new target
-/// path).
+/// path). Prereqs are rewritten with their note's frontmatter (m0 §6.1); one that would
+/// name its own note (the absorbed note of a merge) is removed, and recorded in
+/// `change.removed_links`.
 pub fn link_edits(
     index: &Index,
     targets: &BTreeMap<VaultPath, VaultPath>,
-    change: &Change,
+    change: &mut Change,
 ) -> BTreeMap<VaultPath, Vec<Edit>> {
     let mut edits: BTreeMap<VaultPath, Vec<Edit>> = BTreeMap::new();
+    let mut removed = vec![];
     for note in index.notes().filter(|n| n.kind != Kind::Source && !change.deleted.contains(&n.path)) {
-        for link in &note.links {
-            if let Some(new_raw) = rewrite(index, note, link, targets) {
-                edits.entry(note.path.clone()).or_default().push(Edit::replace(link.target_range.clone(), new_raw));
+        // Prereq slug -> its new slug, or `None` to remove it.
+        let mut prereqs: BTreeMap<&str, Option<&str>> = BTreeMap::new();
+        for (i, link) in note.links.iter().enumerate() {
+            let Some(new) = index.link_target(note, link).and_then(|t| targets.get(&t)) else { continue };
+            if link.form != LinkForm::Prereq {
+                if let Some(written) = rewrite(note, link, new) {
+                    edits.entry(note.path.clone()).or_default().push(Edit::replace(link.target.span.clone(), written));
+                }
+                continue;
+            }
+
+            let slug = link.target.names.name().expect("a prereq names a slug");
+            if *new == change.final_path(&note.path) {
+                prereqs.insert(slug, None);
+                removed.push((note.path.clone(), i));
+            } else if new.stem() != slug {
+                prereqs.insert(slug, Some(new.stem()));
             }
         }
+
+        if !prereqs.is_empty() {
+            let edit = rewrite_frontmatter(note, |m| rename_prereqs(m, &prereqs));
+            edits.entry(note.path.clone()).or_default().push(edit);
+        }
     }
+
+    change.removed_links.extend(removed);
     edits
 }
 
-/// The new raw target for a link whose target moves, keeping its form.
-fn rewrite(index: &Index, note: &Note, link: &Link, targets: &BTreeMap<VaultPath, VaultPath>) -> Option<String> {
-    if link.target.is_empty() {
-        return None; // `[[#frag]]` follows its own note.
-    }
-    // The target without its fragment: a link whose fragment no longer resolves still
-    // follows its note (lint reports the fragment).
-    let new = targets.get(&index.link_target(note, link)?)?;
-    let mut raw = if !link.target.contains('/') {
-        new.stem().to_string()
-    } else {
+/// The new written target for a body link whose target moves to `new`, named the same
+/// way (a slug stays a slug, a path a path) with its fragment kept. A link into its own
+/// note follows the note. The fragment is not checked: one that no longer resolves
+/// still follows its note (lint reports it).
+fn rewrite(note: &Note, link: &Link, new: &VaultPath) -> Option<String> {
+    let mut written = match &link.target.names {
+        Names::ThisNote => return None,
+        Names::Slug(_) => new.stem().to_string(),
         // A note is linked without `.md`, any other file with its extension.
-        new.as_str().strip_suffix(".md").unwrap_or(new.as_str()).to_string()
+        Names::Path(_) => new.as_str().strip_suffix(".md").unwrap_or(new.as_str()).to_string(),
     };
-    // The fragment stays (a prerequisite, a bare `"[[slug]]"`, has none); a table's
-    // escaping `\` is outside the target, so it stays too.
-    if let Some(f) = &link.fragment {
-        raw.push_str(&format!("#{f}"));
+    if let Some(f) = &link.target.fragment {
+        written.push_str(&format!("#{f}"));
     }
-    (raw != link.raw).then_some(raw)
+    (written != link.written(&note.text)).then_some(written)
 }
 
 /// Completes `change` (its moves, deletions and removed links set) with per-file
@@ -124,7 +143,7 @@ fn verify(
         let Some(new_note) = after.parsed(&new_path) else {
             return Err(Refusal::refused(code, format!("{new_path} would no longer parse as a note")));
         };
-        if note.fm_error.is_none() && new_note.fm_error.is_some() {
+        if !note.frontmatter_broken() && new_note.frontmatter_broken() {
             return Err(Refusal::refused(code, format!("{new_path} would get invalid frontmatter")));
         }
         let old_links = note
@@ -134,8 +153,9 @@ fn verify(
             .filter(|(i, _)| !change.removed_links.contains(&(note.path.clone(), *i)))
             .map(|(_, l)| l)
             .collect::<Vec<_>>();
-        // Edits replace link targets only, so links keep their number and order; pairing
-        // by position is sound exactly when the counts match.
+        // Edits replace link targets and remove prereqs in `removed_links` only, so the
+        // other links keep their number and order; pairing by position is sound exactly
+        // when the counts match.
         let new_links = &new_note.links;
         if old_links.len() != new_links.len() {
             return Err(Refusal::refused(
@@ -150,11 +170,15 @@ fn verify(
             if after.link_target(new_note, new_link).as_ref() != Some(&expected) {
                 return Err(Refusal::refused(
                     code,
-                    format!("`{}` in {new_path} would no longer resolve to {expected}", new_link.raw),
+                    format!(
+                        "`{}` in {new_path} would no longer resolve to {expected}",
+                        new_link.written(&new_note.text)
+                    ),
                 ));
             }
         }
     }
+
     Ok(())
 }
 

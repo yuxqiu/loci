@@ -70,6 +70,31 @@ pub fn nfc(s: &str) -> String {
     s.nfc().collect()
 }
 
+/// Where the vault is (m0 §8, global options): the folder `--vault` gives, or the
+/// nearest folder holding `loci.toml` from a folder up. Both absolute.
+#[derive(Debug, Clone)]
+pub enum VaultDir {
+    Given(PathBuf),
+    Search(PathBuf),
+}
+
+impl VaultDir {
+    /// From `--vault` (relative to `cwd`), else a search from `cwd`.
+    pub fn new(given: Option<&Path>, cwd: &Path) -> Self {
+        match given {
+            Some(dir) => Self::Given(cwd.join(dir)),
+            None => Self::Search(cwd.to_path_buf()),
+        }
+    }
+
+    /// The folder itself: the one given, or the one the search starts from.
+    pub fn dir(&self) -> &Path {
+        match self {
+            Self::Given(dir) | Self::Search(dir) => dir,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Vault {
     pub root: PathBuf,
@@ -79,20 +104,18 @@ pub struct Vault {
 }
 
 impl Vault {
-    /// Finds the vault: `explicit`, or the nearest ancestor of `cwd` containing
-    /// `loci.toml`. The root must be the root of a git work tree.
+    /// Opens the vault `at` names. The root must be the root of a git work tree.
     /// Refuses with `vault.not-found`, `vault.not-git` or `config.invalid` (m0 §8).
-    pub fn open(explicit: Option<&Path>, cwd: &Path) -> Result<Self, Refusal> {
+    pub fn open(at: &VaultDir) -> Result<Self, Refusal> {
         let not_found = |m: String| Refusal::refused("vault.not-found", m);
-        let root = match explicit {
-            Some(dir) => {
-                let dir = if dir.is_absolute() { dir.to_path_buf() } else { cwd.join(dir) };
+        let root = match at {
+            VaultDir::Given(dir) => {
                 if !dir.join(config::FILE).is_file() {
                     return Err(not_found(format!("{} has no loci.toml", dir.display())));
                 }
-                dir
+                dir.clone()
             }
-            None => cwd
+            VaultDir::Search(dir) => dir
                 .ancestors()
                 .find(|d| d.join(config::FILE).is_file())
                 .map(Path::to_path_buf)
@@ -186,6 +209,11 @@ fn walk(root: &Path) -> Result<Walk, Refusal> {
     let mut out = Walk::default();
     let mut symlinks = vec![];
     for name in listing.names {
+        // Shown escaped, so the message stays one line.
+        if crate::path::has_control(&name) {
+            unreadable.push(format!("{name:?} has a control character in its name"));
+            continue;
+        }
         // Every name, `plugins/` and `loci.toml` included, is checked for symlinks.
         if let Some(link) = symlink_on_path(root, &name) {
             symlinks.push(format!("`{link}`"));

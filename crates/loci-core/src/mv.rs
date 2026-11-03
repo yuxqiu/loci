@@ -10,7 +10,8 @@ use crate::vault::{self, Kind};
 
 /// Computes the move of `from` to `to` without writing: `from` as stored
 /// ([`stored_name`]). `ignored` tells whether a vault path is gitignored, and `exists`
-/// whether it exists on disk (including files the index does not hold).
+/// whether it exists on disk (including files the index does not hold). The checks run
+/// in this order, so the first refusal is the most telling one.
 pub fn plan(
     index: &Index,
     from: &VaultPath,
@@ -18,61 +19,102 @@ pub fn plan(
     ignored: impl Fn(&VaultPath) -> Result<bool, Refusal>,
     exists: impl Fn(&VaultPath) -> bool,
 ) -> Result<Change, Refusal> {
+    refuse_ends(from, to, &ignored)?;
+    let moves = moves(index, from, to)?;
+    refuse_changed_kinds(&moves)?;
+    refuse_unsafe_destination(index, from, to, &exists)?;
+    refuse_lost_files(&moves, &ignored, &exists)?;
+    refuse_slug_collisions(index, &moves)?;
+
+    let mut change = Change { moves: moves.clone(), ..Change::default() };
+    let edits = relink::link_edits(index, &moves, &mut change);
+    relink::finish(index, change, &moves, edits, "mv.verify")
+}
+
+/// `from` and `to` are paths core moves, and `to` is not ignored (checked before the
+/// path rules, so a move into an ignored folder says so).
+fn refuse_ends(
+    from: &VaultPath,
+    to: &VaultPath,
+    ignored: &impl Fn(&VaultPath) -> Result<bool, Refusal>,
+) -> Result<(), Refusal> {
     if !from.is_core() {
         return Err(Refusal::refused("mv.from", format!("`{from}` cannot be moved")));
     }
     if !to.is_core() {
         return Err(Refusal::refused("mv.to", format!("`{to}` is not a valid destination")));
     }
-    // Before the path rules, so a move into an ignored folder says so.
     if ignored(to)? {
         return Err(Refusal::refused("path.ignored", format!("`{to}` is ignored by git")));
     }
-    let is_file = index.contains(from);
-    let dir_files: Vec<&VaultPath> = index.files.iter().filter(|f| f.starts_with_folder(from)).collect();
-    if !is_file && dir_files.is_empty() {
+    Ok(())
+}
+
+/// Every file the move renames, old path -> new path: `from` itself, or every file
+/// under folder `from`.
+fn moves(index: &Index, from: &VaultPath, to: &VaultPath) -> Result<BTreeMap<VaultPath, VaultPath>, Refusal> {
+    if index.contains(from) {
+        return Ok(BTreeMap::from([(from.clone(), to.clone())]));
+    }
+    let moves: BTreeMap<VaultPath, VaultPath> = index
+        .files
+        .iter()
+        .filter(|f| f.starts_with_folder(from))
+        .map(|f| (f.clone(), f.with_prefix_replaced(from, to).expect("`f` is inside `from`")))
+        .collect();
+    if moves.is_empty() {
         return Err(Refusal::refused("mv.from", format!("`{from}` does not exist or is ignored")));
     }
-    let mut map: BTreeMap<VaultPath, VaultPath> = BTreeMap::new();
-    if is_file {
-        map.insert(from.clone(), to.clone());
-    } else {
-        for f in dir_files {
-            map.insert(f.clone(), f.with_prefix_replaced(from, to).expect("`f` is inside `from`"));
-        }
-    }
+    Ok(moves)
+}
+
+/// Every moved file stays what it is, and its new path follows the path rules lint
+/// checks (`VaultPath::problem`).
+fn refuse_changed_kinds(moves: &BTreeMap<VaultPath, VaultPath>) -> Result<(), Refusal> {
     // A source can be renamed, keeping its extension, but not moved out of `sources/`.
     if let Some((_, new)) =
-        map.iter().find(|(old, new)| old.source_ext().is_some_and(|ext| new.source_ext() != Some(ext)))
+        moves.iter().find(|(old, new)| old.source_ext().is_some_and(|ext| new.source_ext() != Some(ext)))
     {
         return Err(Refusal::refused(
             "mv.source-file",
             format!("`{new}` is not a `sources/<type>/<slug>.<ext>` file with the same extension"),
         ));
     }
-    // A file stays what it is: a note keeps its `.md`, and another file does not gain
-    // one (it would be read as a note that is not one).
-    if let Some((old, new)) = map.iter().find(|(old, new)| old.is_note() != new.is_note()) {
+
+    // A note keeps its `.md`, and another file does not gain one (it would be read as a
+    // note that is not one).
+    if let Some((old, new)) = moves.iter().find(|(old, new)| old.is_note() != new.is_note()) {
         let what =
             if old.is_note() { "a note keeps the `.md` extension" } else { "only a note has the `.md` extension" };
         return Err(Refusal::refused("mv.to", format!("`{new}`: {what}")));
     }
+
     // A concept stays a concept (as `new` checks before the path rules).
-    if let Some((_, new)) =
-        map.iter().find(|(old, new)| old.kind() == Some(Kind::Concept) && new.kind() != Some(Kind::Concept))
-    {
+    let concept = |p: &VaultPath| p.kind() == Some(Kind::Concept);
+    if let Some((_, new)) = moves.iter().find(|(old, new)| concept(old) && !concept(new)) {
         return Err(Refusal::refused("mv.no-area", format!("`{new}` {}", new.why_not_concept())));
     }
-    // Every destination follows the path rules lint checks (`VaultPath::problem`),
-    // first, so the case advice below never leads to a name lint rejects.
-    if let Some((new, (code, message))) = map.values().find_map(|n| n.problem().map(|p| (n, p))) {
+
+    // The path rules come before the case advice below, so it never leads to a name
+    // lint rejects.
+    if let Some((new, (code, message))) = moves.values().find_map(|n| n.problem().map(|p| (n, p))) {
         return Err(Refusal::refused(code, format!("`{new}`: {message}")));
     }
-    // A destination that differs from an existing name only in letter case (the source
-    // itself, or a folder on its path) cannot be used safely: on a case-insensitive file
-    // system (macOS) it is the existing file or folder, and git with `core.ignorecase`
-    // keeps the existing spelling, so rewritten links would dangle; on other systems it
-    // makes twin folders.
+
+    Ok(())
+}
+
+/// `to` neither exists nor differs from an existing name only in letter case.
+fn refuse_unsafe_destination(
+    index: &Index,
+    from: &VaultPath,
+    to: &VaultPath,
+    exists: &impl Fn(&VaultPath) -> bool,
+) -> Result<(), Refusal> {
+    // A case twin (the source itself, or a folder on its path) cannot be used safely: on
+    // a case-insensitive file system (macOS) it is the existing file or folder, and git
+    // with `core.ignorecase` keeps the existing spelling, so rewritten links would
+    // dangle; on other systems it makes twin folders.
     if let Some((existing, asked)) = index.case_twin(to) {
         // `git mv -f` fits only a case-only rename of the source itself; for anyone
         // else's name it would make the twin, or on macOS overwrite the other file.
@@ -89,34 +131,45 @@ pub fn plan(
             format!("`{asked}` differs only in letter case from the existing `{existing}`; {what_to_do}"),
         ));
     }
+
     if exists(to) || index.has_entry(to) {
         return Err(Refusal::refused("mv.exists", format!("`{to}` already exists")));
     }
-    // A moved file must stay in the vault: a tracked file matched by an ignore rule
-    // would become an untracked, ignored one.
-    for new in map.values() {
+
+    Ok(())
+}
+
+/// No moved file is lost: none becomes ignored (a tracked file matched by an ignore rule
+/// would become an untracked, ignored one), and none overwrites a file on disk the index
+/// does not hold.
+fn refuse_lost_files(
+    moves: &BTreeMap<VaultPath, VaultPath>,
+    ignored: &impl Fn(&VaultPath) -> Result<bool, Refusal>,
+    exists: &impl Fn(&VaultPath) -> bool,
+) -> Result<(), Refusal> {
+    for new in moves.values() {
         if ignored(new)? {
             return Err(Refusal::refused("path.ignored", format!("`{new}` would be ignored by git")));
         }
     }
-    // A destination that exists on disk (a file the index does not hold) is never
-    // overwritten.
-    if let Some(new) = map.values().find(|n| exists(n)) {
+    if let Some(new) = moves.values().find(|n| exists(n)) {
         return Err(Refusal::refused("mv.exists", format!("`{new}` already exists")));
     }
-    // Every file that ends as a concept needs a slug that collides neither with a
-    // concept that stays nor with another moved file.
+    Ok(())
+}
+
+/// Every file that ends as a concept has a slug that collides neither with a concept
+/// that stays nor with another moved file.
+fn refuse_slug_collisions(index: &Index, moves: &BTreeMap<VaultPath, VaultPath>) -> Result<(), Refusal> {
     let mut new_slugs = BTreeSet::new();
-    for new in map.values().filter(|n| n.kind() == Some(Kind::Concept)) {
-        let new_slug = new.slug().expect("`problem` refused a concept whose stem is no slug");
-        if index.slug_paths(&new_slug).iter().any(|p| !map.contains_key(p)) || !new_slugs.insert(new_slug.clone()) {
-            return Err(Refusal::refused("mv.collision", format!("slug `{new_slug}` is already used")));
+    for new in moves.values().filter(|n| n.kind() == Some(Kind::Concept)) {
+        let slug = new.slug().expect("`problem` refused a concept whose stem is no slug");
+        let taken = index.slug_paths(&slug).iter().any(|p| !moves.contains_key(p));
+        if taken || !new_slugs.insert(slug.clone()) {
+            return Err(Refusal::refused("mv.collision", format!("slug `{slug}` is already used")));
         }
     }
-
-    let change = Change { moves: map.clone(), ..Change::default() };
-    let edits = relink::link_edits(index, &map, &change);
-    relink::finish(index, change, &map, edits, "mv.verify")
+    Ok(())
 }
 
 /// The stored spelling of `from`: itself when a file or folder has that name, else the

@@ -17,13 +17,6 @@ impl Edit {
     pub fn insert(at: usize, new: impl Into<String>) -> Self {
         Self { range: at..at, new: new.into() }
     }
-
-    /// The edit that removes the whole lines of `text` spanned by `range`.
-    pub fn remove_lines(text: &str, range: Range<usize>) -> Self {
-        let line_start = text[..range.start].rfind('\n').map_or(0, |i| i + 1);
-        let line_end = text[range.end..].find('\n').map_or(text.len(), |i| range.end + i + 1);
-        Self::replace(line_start..line_end, "")
-    }
 }
 
 /// Applies `edits` to `original`. Edits are sorted by start, an insert before a

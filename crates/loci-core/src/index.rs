@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::envelope::Refusal;
 use crate::id::Slug;
-use crate::parse::{self, Fragment, Link, LinkForm, Note};
+use crate::parse::{self, Fragment, Link, LinkForm, Names, Note};
 use crate::path::VaultPath;
 use crate::vault::{self, Kind};
 
@@ -115,14 +115,14 @@ impl Index {
         }
     }
 
-    /// The `prereqs` of concept `note`: resolved note paths, and the raw targets that do
-    /// not resolve.
+    /// The `prereqs` of concept `note`: resolved note paths, and the slugs that do not
+    /// resolve.
     pub fn prereqs(&self, note: &Note) -> (Vec<VaultPath>, Vec<String>) {
         let (mut resolved, mut unresolved) = (vec![], vec![]);
         for l in note.links.iter().filter(|l| l.form == LinkForm::Prereq) {
             match self.resolve(note, l) {
                 Ok(Resolved::Note(p)) => resolved.push(p),
-                _ => unresolved.push(l.raw.clone()),
+                _ => unresolved.push(l.target.names.name().expect("a prereq names a slug").to_string()),
             }
         }
         (resolved, unresolved)
@@ -253,7 +253,7 @@ impl Index {
     /// fragment (§5.4).
     pub fn resolve(&self, from: &Note, link: &Link) -> Result<Resolved, LinkError> {
         let resolved = self.resolve_target(from, link)?;
-        if let (Some(frag), Resolved::Note(path)) = (&link.fragment, &resolved) {
+        if let (Some(frag), Resolved::Note(path)) = (&link.target.fragment, &resolved) {
             self.check_fragment(path, frag)?;
         }
         Ok(resolved)
@@ -261,44 +261,48 @@ impl Index {
 
     /// The note or file `link` points at (§5.3), ignoring its fragment.
     fn resolve_target(&self, from: &Note, link: &Link) -> Result<Resolved, LinkError> {
-        let target = &link.target;
-        let resolved = if target.is_empty() {
-            // `[[#frag]]`: the linking note itself.
-            Resolved::Note(from.path.clone())
-        } else if !target.contains('/') {
-            match target.parse::<Slug>().ok().and_then(|s| self.slugs.get(&s)).map(Vec::as_slice) {
-                Some([path]) => Resolved::Note(path.clone()),
-                // A slug shared by several concepts (`slug.duplicate`) names none of them.
-                Some(paths @ [_, _, ..]) => {
-                    let hint = format!("several concepts are named `{target}` ({}); link by path", paths.join(", "));
-                    return Err(LinkError::Dangling { hint: Some(hint), closest: None });
-                }
-                Some([]) | None => {
-                    let closest = self.closest_slug(target).cloned();
-                    let hint = match &closest {
-                        Some(s) => format!("no concept is named `{target}`; did you mean [[{s}]]?"),
-                        None => format!(
-                            "no concept is named `{target}`; create it with `loci new`, or link a non-concept by path"
-                        ),
-                    };
-                    return Err(LinkError::Dangling { hint: Some(hint), closest });
-                }
-            }
-        } else {
-            if target.starts_with('/') || target.split('/').any(|s| s == "..") {
-                return Err(LinkError::PathForm);
-            }
-            // A note is linked without `.md`, any other file with its extension.
-            match self.listed(&format!("{target}.md")) {
-                Some(note) => Resolved::Note(note.clone()),
-                None => match self.listed(target).filter(|_| !target.ends_with(".md")) {
-                    Some(file) => Resolved::File(file.clone()),
-                    None => return Err(LinkError::Dangling { hint: None, closest: None }),
-                },
-            }
-        };
+        match &link.target.names {
+            Names::ThisNote => Ok(Resolved::Note(from.path.clone())),
+            Names::Slug(slug) => self.resolve_slug(slug),
+            Names::Path(path) => self.resolve_path(path),
+        }
+    }
 
-        Ok(resolved)
+    /// The concept a bare link names: exactly one concept with that slug.
+    fn resolve_slug(&self, slug: &str) -> Result<Resolved, LinkError> {
+        match slug.parse::<Slug>().ok().and_then(|s| self.slugs.get(&s)).map(Vec::as_slice) {
+            Some([path]) => Ok(Resolved::Note(path.clone())),
+            // A slug shared by several concepts (`slug.duplicate`) names none of them.
+            Some(paths @ [_, _, ..]) => {
+                let hint = format!("several concepts are named `{slug}` ({}); link by path", paths.join(", "));
+                Err(LinkError::Dangling { hint: Some(hint), closest: None })
+            }
+            Some([]) | None => {
+                let closest = self.closest_slug(slug).cloned();
+                let hint = match &closest {
+                    Some(s) => format!("no concept is named `{slug}`; did you mean [[{s}]]?"),
+                    None => format!(
+                        "no concept is named `{slug}`; create it with `loci new`, or link a non-concept by path"
+                    ),
+                };
+                Err(LinkError::Dangling { hint: Some(hint), closest })
+            }
+        }
+    }
+
+    /// The file a path link names: a note without `.md`, any other file with its
+    /// extension.
+    fn resolve_path(&self, path: &str) -> Result<Resolved, LinkError> {
+        if path.starts_with('/') || path.split('/').any(|s| s == "..") {
+            return Err(LinkError::PathForm);
+        }
+        if let Some(note) = self.listed(&format!("{path}.md")) {
+            return Ok(Resolved::Note(note.clone()));
+        }
+        match self.listed(path).filter(|_| !path.ends_with(".md")) {
+            Some(file) => Ok(Resolved::File(file.clone())),
+            None => Err(LinkError::Dangling { hint: None, closest: None }),
+        }
     }
 
     /// Checks a `#fragment` against the headings or block ids of note `path` (§5.4).
@@ -355,7 +359,7 @@ fn first_mention(note: &Note, names: &[String]) -> Option<std::ops::Range<usize>
     let edge = |c: Option<char>| !c.is_some_and(|c| c.is_ascii_alphanumeric());
     let text = fold(&note.text);
     let start = note.body_start();
-    let in_link = |at: usize| note.links.iter().any(|l| l.range.contains(&at));
+    let in_link = |at: usize| note.links.iter().any(|l| l.span.clone().contains(&at));
     names
         .iter()
         .filter_map(|name| {

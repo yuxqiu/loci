@@ -151,17 +151,14 @@ mod tests {
     }
 
     #[test]
-    fn escaped_frontmatter_links_are_rejected_not_linked() {
+    fn escaped_frontmatter_links_are_links() {
         let note = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nprereqs: [\"[[caf\\u00e9]]\"]\n---\n# X\n";
         let files = [("concepts/a/x.md", note), ("concepts/a/AREA.md", "# A\n\nArea.\n"), ("concepts/a/café.md", "")];
         let d = lint(&files);
-        let x = |code: &str| d.iter().filter(|(p, c)| p == "concepts/a/x.md" && c == code).count();
-        assert_eq!(x("fm.field-type"), 1, "{d:?}");
+        assert!(!d.iter().any(|(p, c)| p == "concepts/a/x.md" && c == "fm.field-type"), "{d:?}");
         let index = crate::index::from_texts(&files);
-        assert!(
-            index.parsed(&VaultPath::new("concepts/a/x.md".into()).unwrap()).unwrap().links.is_empty(),
-            "no link from an escaped scalar"
-        );
+        let x = index.parsed(&VaultPath::new("concepts/a/x.md".into()).unwrap()).unwrap();
+        assert_eq!(x.links[0].target.names, crate::parse::Names::Slug("café".into()));
     }
 
     const OK: &str = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# A\n\nSee [[journal/r/2025/03/25-03-14]].\n";

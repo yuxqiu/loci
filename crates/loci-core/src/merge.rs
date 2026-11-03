@@ -5,10 +5,8 @@ use std::collections::BTreeMap;
 
 use crate::envelope::Refusal;
 use crate::index::Index;
-use crate::parse::{FmValue, LinkForm, Note};
 use crate::path::VaultPath;
 use crate::relink::{self, Change};
-use crate::splice::Edit;
 
 /// Plans merging concept `from` into concept `into` (each a concept path or slug).
 pub fn plan(index: &Index, from: &VaultPath, into: &VaultPath) -> Result<Merge, Refusal> {
@@ -19,40 +17,11 @@ pub fn plan(index: &Index, from: &VaultPath, into: &VaultPath) -> Result<Merge, 
         return Err(Refusal::refused("merge.same", "a concept cannot be merged into itself"));
     }
 
+    // A prereq of `into` that named `from` would name `into` itself: `link_edits`
+    // removes it.
     let targets: BTreeMap<VaultPath, VaultPath> = [(from.clone(), into.clone())].into();
     let mut change = Change { deleted: [from.clone()].into(), ..Change::default() };
-    let mut edits = relink::link_edits(index, &targets, &change);
-
-    // A prereq of `into` that named `from` would now name `into` itself: remove it.
-    let into_note = index.parsed(&into).expect("`concept` resolved `into` to a readable note");
-    let self_prereqs = self_prereqs(index, into_note, &from);
-    let mut into_edits = edits.remove(&into).unwrap_or_default();
-    into_edits.retain(|e| !self_prereqs.iter().any(|(_, r)| r.contains(&e.range.start)));
-    if let Some(entry) = into_note.frontmatter.as_ref().and_then(|f| f.get("prereqs"))
-        && let FmValue::List { items, flow, .. } = &entry.value
-        && !self_prereqs.is_empty()
-    {
-        let text = &into_note.text;
-        let removed = |item: &FmValue| self_prereqs.iter().any(|(_, r)| *r == item.span());
-        let (first, last) = (items[0].span(), items.last().expect("the list holds the removed items").span());
-        if *flow {
-            // One edit for the whole list, so adjacent removals cannot overlap. Items are
-            // verbatim (m0 §6.1), so their text is copied as written.
-            let kept: Vec<&str> = items.iter().filter(|i| !removed(i)).map(|i| &text[i.span()]).collect();
-            into_edits.push(Edit::replace(first.start..last.end, kept.join(", ")));
-        } else if self_prereqs.len() == items.len() {
-            // An emptied block list would leave `prereqs:` (null): drop the whole entry.
-            into_edits.push(Edit::remove_lines(text, entry.key_span.start..last.end));
-        } else {
-            into_edits.extend(self_prereqs.iter().map(|(_, r)| Edit::remove_lines(text, r.clone())));
-        }
-        change.removed_links.extend(self_prereqs.iter().map(|(i, _)| (into.clone(), *i)));
-    }
-
-    if !into_edits.is_empty() {
-        edits.insert(into.clone(), into_edits);
-    }
-
+    let edits = relink::link_edits(index, &targets, &mut change);
     let change = relink::finish(index, change, &targets, edits, "merge.verify")?;
     Ok(Merge { from, into, change })
 }
@@ -63,17 +32,6 @@ pub struct Merge {
     pub from: VaultPath,
     pub into: VaultPath,
     pub change: Change,
-}
-
-/// `into`'s prereq links that resolve to `from`: (index into `links`, item span).
-fn self_prereqs(index: &Index, into: &Note, from: &VaultPath) -> Vec<(usize, std::ops::Range<usize>)> {
-    into.links
-        .iter()
-        .enumerate()
-        .filter(|(_, l)| l.form == LinkForm::Prereq)
-        .filter(|(_, l)| index.link_target(into, l).as_ref() == Some(from))
-        .map(|(i, l)| (i, l.range.clone()))
-        .collect()
 }
 
 #[cfg(test)]
@@ -102,7 +60,7 @@ mod tests {
         assert_eq!(e.error.message, "`views/v.md` is not a concept");
         assert_eq!(c.writes["views/v.md"].text, "# V\n\n[[dijkstra]] [[concepts/a/dijkstra#A]]\n");
         let d = &c.writes["concepts/a/dijkstra.md"].text;
-        assert!(d.contains("prereqs: [\"[[heap]]\"]"), "{d}");
+        assert!(d.contains("prereqs:\n  - \"[[heap]]\"\n"), "{d}");
     }
 
     #[test]
@@ -112,7 +70,7 @@ mod tests {
         let i =
             from_texts(&[("concepts/a/w.md", id("W")), ("concepts/a/y.md", id("Y")), ("concepts/a/c.md", c.into())]);
         let d = &plan(&i, &vp("y"), &vp("c")).unwrap().change.writes["concepts/a/c.md"].text;
-        assert!(d.contains("prereqs: [\"[[w]]\"]\n"), "{d}");
+        assert!(d.contains("prereqs:\n  - \"[[w]]\"\n"), "{d}");
     }
 
     #[test]

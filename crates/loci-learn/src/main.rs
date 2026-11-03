@@ -54,7 +54,7 @@ fn main() -> ExitCode {
 fn run(cmd: Cmd) -> Result<Report, Refusal> {
     let root =
         plugin::check_env(std::env::var_os(plugin::ENV_VERSION), std::env::var_os(plugin::ENV_VAULT), NAME, VERSION)?;
-    let vault = Vault::open(Some(&root), &root)?;
+    let vault = Vault::open(&loci_core::vault::VaultDir::Given(root))?;
     match cmd {
         Cmd::Lint => commands::lint(&vault),
         Cmd::Skills => commands::skills(),

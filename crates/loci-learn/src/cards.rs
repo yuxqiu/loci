@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use loci_core::id::Ulid;
 use loci_core::index::Index;
-use loci_core::parse::{BlockKind, Note, TopBlock};
+use loci_core::parse::{BlockKind, BlockType, Note};
 use loci_core::path::VaultPath;
 
 pub const SECTION: &str = "Cards";
@@ -70,36 +70,36 @@ pub fn of_note(note: &Note) -> (Vec<Card>, Vec<FormatIssue>) {
     let found = note.h2_sections(SECTION);
     let mut issues = vec![];
     if let Some((second, _)) = found.get(1) {
-        issues.push(FormatIssue { path: note.path.clone(), range: second.range.clone() });
+        issues.push(FormatIssue { path: note.path.clone(), range: second.span.clone() });
     }
 
     let (items, blocks) = note.section_top_level(SECTION);
 
     // Anything at the top level of the section other than a list is a format issue.
-    for (_, range) in blocks.into_iter().filter(|(b, _)| !matches!(b, TopBlock::List)) {
+    for range in blocks.into_iter().filter(|b| b.kind != BlockType::List).map(|b| &b.span) {
         issues.push(FormatIssue { path: note.path.clone(), range: range.clone() });
     }
 
     let mut cards = vec![];
     for item in items {
-        let id = note.block_ids.iter().find(|b| b.kind == BlockKind::Item && b.block == item.range);
+        let id = note.block_ids.iter().find(|b| b.kind == BlockKind::Item && b.block == item.span);
         // The item's content, after its list marker, without its block id (cut by its
         // byte range).
-        let content = item.content_start..item.range.end;
+        let content = item.content_start..item.span.end;
         let mut raw = note.text[content.clone()].to_string();
         if let Some(b) = id {
-            let (start, end) = (b.range.start - content.start, b.range.end - content.start);
+            let (start, end) = (b.span.start - content.start, b.span.end - content.start);
             raw = format!("{}{}", raw[..start].trim_end(), &raw[end..]);
         }
         match split(&raw) {
             Some((question, answer)) => cards.push(Card {
                 path: note.path.clone(),
-                range: item.range.clone(),
+                range: item.span.clone(),
                 id: CardId::of(id.map(|b| b.id.as_str())),
                 question,
                 answer,
             }),
-            None => issues.push(FormatIssue { path: note.path.clone(), range: item.range.clone() }),
+            None => issues.push(FormatIssue { path: note.path.clone(), range: item.span.clone() }),
         }
     }
 

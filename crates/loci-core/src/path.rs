@@ -13,8 +13,9 @@ use crate::envelope::Refusal;
 use crate::id::{SLUG_PATTERN, Slug};
 use crate::vault::{self, Kind, nfc};
 
-/// A vault-relative path: `/`-separated UTF-8, with no empty, `.` or `..` segment and
-/// no leading or trailing `/`. Not necessarily NFC: git lists the names as stored, and
+/// A vault-relative path: `/`-separated UTF-8, with no empty, `.` or `..` segment, no
+/// leading or trailing `/`, and no control character (so every message that names one
+/// stays on one line). Not necessarily NFC: git lists the names as stored, and
 /// lint reports a non-NFC one (`path.not-nfc`). Ordered by bytes, as outputs are.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
 #[serde(transparent)]
@@ -30,7 +31,7 @@ impl VaultPath {
         let rel = RelativePath::new(&s);
         let normal =
             !s.is_empty() && rel.normalize().as_str() == s && rel.components().next() != Some(Component::ParentDir);
-        normal.then_some(Self(s))
+        (normal && !has_control(&s)).then_some(Self(s))
     }
 
     /// A path argument given by the user, as a vault path, normalized by the
@@ -51,6 +52,9 @@ impl VaultPath {
         }
         if path.as_str().is_empty() {
             return Err(Refusal::refused("path.root", format!("`{p}` is the vault root, not a file or folder in it")));
+        }
+        if has_control(p) {
+            return Err(Refusal::refused("path.control", format!("{p:?} has a control character")));
         }
         Ok(Self::new(nfc(path.as_str())).expect("a normalized path that neither is empty nor climbs out"))
     }
@@ -232,6 +236,11 @@ impl VaultPath {
     }
 }
 
+/// Whether `s` holds a control character (a newline, a tab, …), which no vault path may.
+pub fn has_control(s: &str) -> bool {
+    s.chars().any(char::is_control)
+}
+
 impl fmt::Display for VaultPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
@@ -260,7 +269,7 @@ mod tests {
 
     #[test]
     fn invariant() {
-        for bad in ["", "/a", "a//b", "a/./b", "a/../b", "a/", ".", "..", "../a", "./a"] {
+        for bad in ["", "/a", "a//b", "a/./b", "a/../b", "a/", ".", "..", "../a", "./a", "a\nb", "a\tb"] {
             assert!(VaultPath::new(bad.to_string()).is_none(), "{bad:?}");
         }
         for good in ["a", "a/b", "views/caf\u{65}\u{301}.md", ".gitignore", "a/.b/c..d"] {
@@ -294,6 +303,7 @@ mod tests {
             ("..", "path.outside"),
             ("a/../../b", "path.outside"),
             ("", "path.root"),
+            ("views/a\nb.md", "path.control"),
             ("./", "path.root"),
             ("a/..", "path.root"),
         ] {

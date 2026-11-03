@@ -3,7 +3,7 @@
 use std::ops::Range;
 
 use crate::id::Ulid;
-use crate::parse::{Note, TopBlock};
+use crate::parse::{BlockType, Note};
 use crate::splice::{self, Edit};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,12 +28,12 @@ pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> Ulid) -> O
     let mut targets: Vec<(Range<usize>, Range<usize>)> = vec![]; // (block, id slice)
     for item in items.into_iter().filter(|i| !note.text[i.content_start.min(i.lead.end)..i.lead.end].trim().is_empty())
     {
-        if !has_id(&item.range) {
-            targets.push((item.range.clone(), item.lead.clone()));
+        if !has_id(&item.span) {
+            targets.push((item.span.clone(), item.lead.clone()));
         }
     }
 
-    for (_, r) in blocks.into_iter().filter(|(b, _)| matches!(b, TopBlock::Paragraph)) {
+    for r in blocks.into_iter().filter(|b| b.kind == BlockType::Paragraph).map(|b| &b.span) {
         if !has_id(r) {
             targets.push((r.clone(), r.clone()));
         }

@@ -67,48 +67,49 @@ pub fn waiting(mark: Option<UpdateId>, list: &[Update]) -> Result<Vec<&Update>, 
 pub fn run(ctx: &Ctx, every: bool, handled: Option<&str>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let list = all();
+    match (every, handled) {
+        (true, _) => {
+            let text: String = list.iter().map(|u| format!("{}\n", u.text)).collect();
+            Ok(Report::ok(json!({"updates": list}), text))
+        }
+        (false, None) => show_waiting(waiting(vault.config.updates, &list)?),
+        (false, Some(id)) => handle(&vault, &list, id),
+    }
+}
+
+/// The waiting updates in full, after the procedure for applying them.
+fn show_waiting(waiting: Vec<&Update>) -> Result<Report, Refusal> {
+    let human = if waiting.is_empty() {
+        "No updates waiting.\n".to_string()
+    } else {
+        let entries: String = waiting.iter().map(|u| format!("\n{}", u.text)).collect();
+        format!("{} update(s) waiting.\n\n{PROCEDURE}{entries}", waiting.len())
+    };
+    Ok(Report::ok(json!({"waiting": waiting}), human))
+}
+
+/// `--handled <id>`: records every update through `id` as handled, by setting the
+/// `updates` key in place. Refuses an unknown id and one already handled.
+fn handle(vault: &loci_core::vault::Vault, list: &[Update], id: &str) -> Result<Report, Refusal> {
     let mark = vault.config.updates;
-    if every {
-        let text: String = list.iter().map(|u| format!("{}\n", u.text)).collect();
-        return Ok(Report::ok(json!({"updates": list}), text));
+    let Some(target) = list.iter().find(|u| id.parse() == Ok(u.id)) else {
+        let ids: Vec<String> = list.iter().map(|u| u.id.to_string()).collect();
+        return Err(Refusal::refused("updates.unknown", format!("no update `{id}`; known: {}", ids.join(", "))));
+    };
+    if !waiting(mark, list)?.iter().any(|u| u.id == target.id) {
+        let mark = mark.expect("a handled update is at or before the mark");
+        return Err(Refusal::refused(
+            "updates.order",
+            format!("`{id}` is already handled (this vault is through {mark})"),
+        ));
     }
 
-    let waiting = waiting(mark, &list)?;
-    match handled {
-        None => {
-            let human = if waiting.is_empty() {
-                "No updates waiting.\n".to_string()
-            } else {
-                let entries: String = waiting.iter().map(|u| format!("\n{}", u.text)).collect();
-                format!("{} update(s) waiting.\n\n{PROCEDURE}{entries}", waiting.len())
-            };
-            Ok(Report::ok(json!({"waiting": waiting}), human))
-        }
-        Some(id) => {
-            let Some(target) = list.iter().find(|u| id.parse() == Ok(u.id)) else {
-                let ids: Vec<String> = list.iter().map(|u| u.id.to_string()).collect();
-                return Err(Refusal::refused(
-                    "updates.unknown",
-                    format!("no update `{id}`; known: {}", ids.join(", ")),
-                ));
-            };
-            if !waiting.iter().any(|u| u.id == target.id) {
-                return Err(Refusal::refused(
-                    "updates.order",
-                    format!(
-                        "`{id}` is already handled (this vault is through {})",
-                        mark.expect("a handled update is at or before the mark")
-                    ),
-                ));
-            }
-            let path = vault.root.join(config::FILE);
-            let text = std::fs::read_to_string(&path).map_err(Refusal::io)?;
-            let updated = Config::set_updates(&text, target.id).map_err(|e| Refusal::refused("config.invalid", e))?;
-            Config::parse(&updated).map_err(|e| Refusal::internal("updates.write", e))?;
-            loci_core::vault::write_atomic(&path, updated.as_bytes()).map_err(Refusal::io)?;
-            Ok(Report::ok(json!({"handled": target.id}), format!("handled updates through {}\n", target.id)))
-        }
-    }
+    let path = vault.root.join(config::FILE);
+    let text = std::fs::read_to_string(&path).map_err(Refusal::io)?;
+    let updated = Config::set_updates(&text, target.id).map_err(|e| Refusal::refused("config.invalid", e))?;
+    Config::parse(&updated).map_err(|e| Refusal::internal("updates.write", e))?;
+    loci_core::vault::write_atomic(&path, updated.as_bytes()).map_err(Refusal::io)?;
+    Ok(Report::ok(json!({"handled": target.id}), format!("handled updates through {}\n", target.id)))
 }
 
 #[cfg(test)]

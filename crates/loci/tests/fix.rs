@@ -132,6 +132,23 @@ fn a_name_not_in_nfc_is_fixed_by_mv_not_lint() {
     assert!(d[0].get("fixes").is_none(), "renames are `mv`'s, not `--fix`'s");
 }
 
+#[test]
+fn a_misspelt_prereq_is_named_by_its_slug_and_fixed_in_the_frontmatter() {
+    let v = TestVault::with_files(
+        BIN,
+        &[
+            ("concepts/a/queue.md", concept(IDS[0], "", "# Queue\n")),
+            ("concepts/a/x.md", concept(IDS[1], "prereqs: ['[[queu]]'] # why\n", "# X\n")),
+        ],
+    );
+    let (_, env) = v.run(&["lint"]);
+    let d = with_code(&env, "link.dangling");
+    assert_eq!(d[0]["message"], "`queu` does not resolve", "{env:#}");
+    let (_, env) = v.run(&["lint", "--fix", "--unsafe-fixes", "--only", "link.dangling"]);
+    assert_eq!(fixed_codes(&env), ["link.dangling"], "{env:#}");
+    assert_eq!(v.read("concepts/a/x.md"), concept(IDS[1], "prereqs:\n  - \"[[queue]]\"\n", "# X\n"));
+}
+
 /// A concept with u0001's removed `digest` field and another unknown field.
 fn with_digest() -> TestVault {
     TestVault::with_files(

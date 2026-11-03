@@ -12,11 +12,8 @@ use crate::assets;
 const GITIGNORE_LINE: &str = "/.loci/";
 
 pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
-    let dir = match &ctx.explicit_vault {
-        Some(d) if d.is_absolute() => d.clone(),
-        Some(d) => ctx.cwd.join(d),
-        None => ctx.cwd.clone(),
-    };
+    // `init` creates the vault where it is told, or right here: it never searches up.
+    let dir = ctx.vault.dir().to_path_buf();
 
     let present = |name: &str| dir.join(name).symlink_metadata().is_ok();
     if present(config::FILE) {
@@ -57,26 +54,32 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         }
     }
 
-    // Read as bytes and append, so a `.gitignore` that is not UTF-8 is kept intact.
-    let gi = dir.join(".gitignore");
-    let existing = match std::fs::read(&gi) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
-        Err(e) => return Err(Refusal::io(format!("reading `.gitignore`: {e}"))),
-    };
-
-    if existing.split(|b| *b == b'\n').any(|l| l.strip_suffix(b"\r").unwrap_or(l) == GITIGNORE_LINE.as_bytes()) {
-        skipped.push(".gitignore".to_string());
-    } else {
-        let mut bytes = existing;
-        if !bytes.is_empty() && !bytes.ends_with(b"\n") {
-            bytes.push(b'\n');
-        }
-        bytes.extend_from_slice(format!("{GITIGNORE_LINE}\n").as_bytes());
-        std::fs::write(&gi, bytes).map_err(Refusal::io)?;
+    if add_gitignore_line(&dir.join(".gitignore"))? {
         created.push(".gitignore".to_string());
+    } else {
+        skipped.push(".gitignore".to_string());
     }
 
     let human = format!("created: {}\nskipped: {}\n", created.join(", "), skipped.join(", "));
     Ok(Report::ok(json!({"created": created, "skipped": skipped}), human))
+}
+
+/// Appends [`GITIGNORE_LINE`] to the `.gitignore` at `path` (created if missing) unless
+/// it has it; returns whether it wrote. Bytes, not text, so a `.gitignore` that is not
+/// UTF-8 is kept intact.
+fn add_gitignore_line(path: &std::path::Path) -> Result<bool, Refusal> {
+    let mut bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
+        Err(e) => return Err(Refusal::io(format!("reading `.gitignore`: {e}"))),
+    };
+    if bytes.split(|b| *b == b'\n').any(|l| l.strip_suffix(b"\r").unwrap_or(l) == GITIGNORE_LINE.as_bytes()) {
+        return Ok(false);
+    }
+    if !bytes.is_empty() && !bytes.ends_with(b"\n") {
+        bytes.push(b'\n');
+    }
+    bytes.extend_from_slice(format!("{GITIGNORE_LINE}\n").as_bytes());
+    std::fs::write(path, bytes).map_err(Refusal::io)?;
+    Ok(true)
 }

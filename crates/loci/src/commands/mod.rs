@@ -22,10 +22,12 @@ use std::path::PathBuf;
 
 use loci_core::envelope::Refusal;
 use loci_core::plugin::{self, Plugin};
-use loci_core::vault::Vault;
+use loci_core::vault::{Vault, VaultDir};
 
 pub struct Ctx {
-    pub explicit_vault: Option<PathBuf>,
+    /// Where the vault is.
+    pub vault: VaultDir,
+    /// The working directory, which file options are relative to (`export -o`).
     pub cwd: PathBuf,
     pub json: bool,
 }
@@ -33,7 +35,7 @@ pub struct Ctx {
 impl Ctx {
     /// Opens the vault, or refuses (m0 §8, global options).
     pub fn vault(&self) -> Result<Vault, Refusal> {
-        Vault::open(self.explicit_vault.as_deref(), &self.cwd)
+        Vault::open(&self.vault)
     }
 }
 

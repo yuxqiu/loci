@@ -38,7 +38,7 @@ impl Skill {
         // Parsed for its frontmatter only; the file is a plugin's, not the vault's.
         let path = crate::path::VaultPath::new("SKILL.md".to_string()).expect("one segment is a vault path");
         let note = crate::parse::parse(&path, crate::vault::Kind::Unknown, body.to_string());
-        assert!(note.fm_error.is_none(), "skill `{name}` has broken frontmatter: {:?}", note.fm_error);
+        assert!(!note.frontmatter_broken(), "skill `{name}` has broken frontmatter: {:?}", note.frontmatter);
         let description = note.fm_str("description").unwrap_or_else(|| panic!("skill `{name}` has no description"));
         Self { name: name.to_string(), description: description.to_string(), body: body.to_string() }
     }

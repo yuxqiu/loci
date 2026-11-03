@@ -41,7 +41,10 @@ fn mv_rename_rewrites_links() {
     let linker = v.read("views/linker.md");
     assert!(linker.contains("- [[renamed-new]] and [[renamed-new|label]]\n"), "{linker}");
     assert!(linker.contains("[markdown](concepts/a/renamed.md)"), "{linker}");
-    assert!(v.read("concepts/a/prereq-holder.md").contains(r#"prereqs: ["[[renamed-new]]", "[[heading-target]]"]"#));
+    assert!(
+        v.read("concepts/a/prereq-holder.md")
+            .contains("prereqs:\n  - \"[[renamed-new]]\"\n  - \"[[heading-target]]\"\n")
+    );
     assert!(!v.exists("concepts/a/renamed.md"));
     assert_snapshot!(v.tree());
 }
@@ -59,10 +62,15 @@ fn mv_rename_rewrites_fragments_and_prereqs() {
     let v = TestVault::committed(BIN, "mv-rename");
     mv(&v, "concepts/a/heading-target.md", "concepts/a/heading-target-new.md");
     assert!(v.read("views/linker.md").contains("- [[heading-target-new#Heading]]\n"));
-    assert!(v.read("concepts/a/prereq-holder.md").contains(r#"prereqs: ["[[renamed]]", "[[heading-target-new]]"]"#));
+    assert!(
+        v.read("concepts/a/prereq-holder.md")
+            .contains("prereqs:\n  - \"[[renamed]]\"\n  - \"[[heading-target-new]]\"\n")
+    );
     // Renaming back is a rename like any other.
     mv(&v, "concepts/a/heading-target-new.md", "concepts/a/heading-target.md");
-    assert!(v.read("concepts/a/prereq-holder.md").contains(r#"prereqs: ["[[renamed]]", "[[heading-target]]"]"#));
+    assert!(
+        v.read("concepts/a/prereq-holder.md").contains("prereqs:\n  - \"[[renamed]]\"\n  - \"[[heading-target]]\"\n")
+    );
     // The vault still lints the same: no new link errors.
     let (_, env) = v.run(&["lint"]);
     assert_eq!(env["data"]["errors"], 1, "{}", diag_lines(&env)); // the markdown link
@@ -179,14 +187,14 @@ fn frontmatter_edge_crlf_note_moves_unchanged() {
 }
 
 #[test]
-fn frontmatter_edge_prereqs_edited_inside_quotes() {
+fn frontmatter_edge_prereqs_follow_a_move() {
     let v = TestVault::committed(BIN, "frontmatter-edge");
     mv(&v, "journal/r/2025/01/25-01-01.md", "journal/r/2025/01/25-01-03.md");
     mv(&v, "concepts/a/target.md", "concepts/a/target-two.md");
     let text = v.read("concepts/a/scalars.md");
     assert_eq!(
         text,
-        "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0J6\nprereqs: [\"[[target-two]]\"]\n---\n\
+        "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0J6\nprereqs:\n  - \"[[target-two]]\"\n---\n\
          # Scalars\n\nSee [[journal/r/2025/01/25-01-03]] and [[journal/r/2025/01/25-01-03#Morning]].\n"
     );
     let (_, env) = v.run(&["lint"]);
@@ -196,13 +204,13 @@ fn frontmatter_edge_prereqs_edited_inside_quotes() {
 // ---------------------------------------------------------------- cjk
 
 #[test]
-fn cjk_mv_edits_frontmatter_at_the_right_offset() {
+fn cjk_mv_rewrites_prereqs() {
     let v = TestVault::committed(BIN, "cjk");
     let env = mv(&v, "concepts/algo/排序.md", "concepts/algo/排序算法.md");
     assert_json_snapshot!(v.redact(&env), {".loci" => "[version]"});
     assert_eq!(
         v.read("concepts/algo/二分查找.md"),
-        "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0G1\nprereqs: [\"[[排序算法]]\"]\n---\n# 二分\n"
+        "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0G1\nprereqs:\n  - \"[[排序算法]]\"\n---\n# 二分\n"
     );
     assert_eq!(v.read("concepts/algo/排序算法.md"), "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0G2\n---\n# 排序\n");
     mv(&v, "views/zh.md", "views/中文.md");

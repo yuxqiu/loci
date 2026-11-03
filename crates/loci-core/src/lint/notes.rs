@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use super::{Ctx, managed};
 use crate::envelope::{Applicability, Diagnostic, Fix};
 use crate::id::Ulid;
-use crate::parse::{BOM, FmError, TopBlock};
+use crate::parse::{BOM, BlockType, Frontmatter};
 use crate::vault::Kind;
 
 /// A byte-order mark, broken frontmatter, and frontmatter outside concepts.
@@ -15,25 +15,22 @@ pub(super) fn note_format(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
         let path = note.path.as_str();
         let text = note.text.as_str();
         let d = |code: &str, msg: String| Diagnostic::error(code, msg).at_path(path);
-        if note.bom {
+        if note.has_bom() {
             let fix = Fix::new(Applicability::Safe, "delete the byte-order mark").edit(path, 0..BOM.len(), "");
             out.push(d("file.bom", "file starts with a byte-order mark".into()).with_fix(fix));
         }
-        match &note.fm_error {
-            Some(FmError::Unterminated) => {
+        match &note.frontmatter {
+            Some(Frontmatter::Unterminated) => {
                 out.push(d("fm.unterminated", "frontmatter opened with `---` is not a closed block".into()))
             }
-            Some(FmError::Yaml(reason)) => {
-                let r = note.frontmatter.as_ref().map_or(0..0, |f| f.range.clone());
-                out.push(d("fm.yaml", format!("frontmatter is not a YAML mapping: {reason}")).at(text, r));
+            Some(Frontmatter::Invalid { span, reason }) => {
+                out.push(d("fm.yaml", format!("frontmatter is not a YAML mapping: {reason}")).at(text, span.clone()));
             }
-            None => {}
+            Some(Frontmatter::Fields { .. }) | None => {}
         }
-        if let Some(fm) = note.frontmatter.as_ref().filter(|_| note.kind != Kind::Concept) {
-            out.push(
-                d("fm.not-allowed", format!("{} files have no frontmatter", note.kind.name()))
-                    .at(text, fm.range.clone()),
-            );
+        if let Some(span) = note.frontmatter.as_ref().and_then(Frontmatter::span).filter(|_| note.kind != Kind::Concept)
+        {
+            out.push(d("fm.not-allowed", format!("{} files have no frontmatter", note.kind.name())).at(text, span));
         }
     }
 }
@@ -62,7 +59,7 @@ pub(super) fn block_ids(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
                 // Unsafe: a link may mean this occurrence.
                 let fix = Fix::new(Applicability::Unsafe, "give this block a new id").edit(
                     note.path.as_str(),
-                    b.range.clone(),
+                    b.span.clone(),
                     format!("^{}", Ulid::generate()),
                 );
                 out.push(
@@ -71,7 +68,7 @@ pub(super) fn block_ids(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
                         format!("block id `^{}` appears more than once in this note", b.id),
                     )
                     .at_path(note.path.as_str())
-                    .at(&note.text, b.range.clone())
+                    .at(&note.text, b.span.clone())
                     .with_fix(fix),
                 );
             }
@@ -95,14 +92,14 @@ pub(super) fn h1(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
         }
         if h1s.len() > 1 {
             out.push(
-                Diagnostic::error("h1.multiple", "more than one H1").at_path(path).at(&note.text, h1s[1].range.clone()),
+                Diagnostic::error("h1.multiple", "more than one H1").at_path(path).at(&note.text, h1s[1].span.clone()),
             );
         }
-        if !matches!(note.top_blocks.first(), Some((TopBlock::Heading(1), _))) {
+        if !note.top_blocks.first().is_some_and(|b| b.kind == BlockType::Heading(1)) {
             out.push(
                 Diagnostic::error("h1.not-first", "the H1 is not the first block after the frontmatter")
                     .at_path(path)
-                    .at(&note.text, h1s[0].range.clone()),
+                    .at(&note.text, h1s[0].span.clone()),
             );
         }
     }

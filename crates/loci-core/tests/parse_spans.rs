@@ -1,11 +1,12 @@
 //! A fuzz property for the parser (research 18 §5): on markdown assembled from the
 //! constructs loci reads, parsing never panics and every byte range it reports lies in
 //! the text, on character boundaries, and inside the range that holds it. Every edit,
-//! rename and fix relies on these offsets.
+//! rename and fix relies on these offsets. A second property: rewriting a frontmatter
+//! with no change keeps its fields, links and body.
 
 use std::ops::Range;
 
-use loci_core::parse::{FmValue, parse};
+use loci_core::parse::{FmValue, Frontmatter, Note, parse, rewrite_frontmatter};
 use loci_core::path::VaultPath;
 use loci_core::vault::Kind;
 use proptest::prelude::*;
@@ -59,9 +60,53 @@ const PIECES: &[&str] = &[
     "- [ ] ",
 ];
 
+/// Frontmatter fields: comments, quoting styles, escapes, and values of each kind.
+const FIELDS: &[&str] = &[
+    "id: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n",
+    "# a comment\n",
+    "digest: \"é \\\"x\\\"\"\n",
+    "note: plain text\n",
+    "n: 12\n",
+    "flag: yes\n",
+    "empty:\n",
+    "nested: {a: 1}\n",
+    "multi: >\n  folded\n  lines\n",
+];
+
+/// The forms of `prereqs`: quoting styles, an escape, a comment, unquoted.
+const PREREQS: &[&str] = &[
+    "",
+    "prereqs: [\"[[a]]\", '[[二分]]']\n",
+    "prereqs:\n  - \"[[b]]\" # why\n  - \"[[\\u0063]]\"\n",
+    "prereqs: [[a]]\n",
+    "prereqs: []\n",
+];
+
+/// A note that starts with a frontmatter: some `FIELDS`, shuffled, and a `PREREQS`.
+fn with_frontmatter() -> impl Strategy<Value = String> {
+    let fields = proptest::sample::subsequence(FIELDS, 0..FIELDS.len()).prop_shuffle();
+    (fields, proptest::sample::select(PREREQS), markdown())
+        .prop_map(|(fields, prereqs, body)| format!("---\n{}{prereqs}---\n{body}", fields.concat()))
+}
+
 fn markdown() -> impl Strategy<Value = String> {
     let piece = prop_oneof![4 => proptest::sample::select(PIECES).prop_map(str::to_string), 1 => "\\PC{0,4}"];
     proptest::collection::vec(piece, 0..40).prop_map(|ps| ps.concat())
+}
+
+/// What a rewrite must keep of a note: each field's key and value (string values, list
+/// shapes), the links' targets, and the body.
+fn meaning(n: &Note) -> (Vec<(String, String)>, Vec<String>, &str) {
+    fn value(v: &FmValue) -> String {
+        match v {
+            FmValue::Str { value, .. } => format!("{value:?}"),
+            FmValue::List { items, .. } => format!("[{}]", items.iter().map(value).collect::<Vec<_>>().join(",")),
+            FmValue::Other { .. } => "other".into(),
+        }
+    }
+    let fields = n.frontmatter.iter().flat_map(|f| f.entries()).map(|e| (e.key.clone(), value(&e.value))).collect();
+    let links = n.links.iter().map(|l| format!("{:?} {:?}", l.form, l.target.names)).collect();
+    (fields, links, &n.text[n.body_start()..])
 }
 
 fn check(text: &str, r: &Range<usize>, within: &Range<usize>, what: &str) -> Result<(), TestCaseError> {
@@ -89,38 +134,48 @@ proptest! {
         let n = parse(&path, Kind::Concept, text.clone());
         let all = 0..text.len();
         for l in &n.links {
-            check(&text, &l.range, &all, "link")?;
-            check(&text, &l.target_range, &l.range, "link target")?;
-            prop_assert_eq!(&text[l.target_range.clone()], l.raw.as_str());
+            check(&text, &l.span, &all, "link")?;
+            check(&text, &l.target.span, &l.span, "link target")?;
             if let Some(label) = &l.label {
-                check(&text, label, &l.range, "link label")?;
+                check(&text, label, &l.span, "link label")?;
             }
         }
         for h in &n.headings {
-            check(&text, &h.range, &all, "heading")?;
-            check(&text, &h.content, &h.range, "heading content")?;
+            check(&text, &h.span, &all, "heading")?;
+            check(&text, &h.content, &h.span, "heading content")?;
         }
         for i in &n.items {
-            check(&text, &i.range, &all, "item")?;
-            check(&text, &i.lead, &i.range, "item lead")?;
-            prop_assert!(i.range.start <= i.content_start && i.content_start <= i.range.end, "item content start");
+            check(&text, &i.span, &all, "item")?;
+            check(&text, &i.lead, &i.span, "item lead")?;
+            prop_assert!(i.span.start <= i.content_start && i.content_start <= i.span.end, "item content start");
         }
         for b in &n.block_ids {
             check(&text, &b.block, &all, "block")?;
-            check(&text, &b.range, &b.block, "block id")?;
+            check(&text, &b.span, &b.block, "block id")?;
         }
-        for (_, r) in &n.top_blocks {
-            check(&text, r, &all, "top-level block")?;
+        for b in &n.top_blocks {
+            check(&text, &b.span, &all, "top-level block")?;
         }
-        for m in &n.md_links {
-            check(&text, &m.range, &all, "markdown link")?;
+        for m in &n.markdown_links {
+            check(&text, &m.span, &all, "markdown link")?;
         }
-        if let Some(fm) = &n.frontmatter {
-            check(&text, &fm.range, &all, "frontmatter")?;
-            for e in &fm.entries {
-                check(&text, &e.key_span, &fm.range, "frontmatter key")?;
-                check_value(&text, &e.value, &fm.range)?;
+        if let Some(span) = n.frontmatter.as_ref().and_then(|f| f.span()) {
+            check(&text, &span, &all, "frontmatter")?;
+            for e in n.frontmatter.iter().flat_map(|f| f.entries()) {
+                check(&text, &e.key_span, &span, "frontmatter key")?;
+                check_value(&text, &e.value, &span)?;
             }
         }
+    }
+
+    #[test]
+    fn a_rewrite_keeps_the_meaning(text in with_frontmatter()) {
+        let path = VaultPath::new("concepts/a/x.md".into()).unwrap();
+        let n = parse(&path, Kind::Concept, text.clone());
+        prop_assume!(matches!(n.frontmatter, Some(Frontmatter::Fields { .. })));
+        let edit = rewrite_frontmatter(&n, |_| {});
+        let out = loci_core::splice::apply(&text, vec![edit]).unwrap();
+        let after = parse(&path, Kind::Concept, out.clone());
+        prop_assert_eq!(meaning(&n), meaning(&after), "rewritten:\n{}", out);
     }
 }
