@@ -155,13 +155,20 @@ pub fn rewrite_frontmatter(note: &Note, changes: &[FmChange]) -> Edit {
         rename_prereqs(&mut map, &renames);
     }
     if map.is_empty() {
-        return Edit::replace(span, "");
+        // The blank lines after the block go with it, so the note starts with its text.
+        let end = span.end + blank_lines(&note.text[span.end..]);
+        return Edit::replace(span.start..end, "");
     }
 
     // `---` and the mapping, without a final line break.
     let mut out = String::new();
     YamlEmitter::new(&mut out).dump(&Yaml::Mapping(map)).expect("writing to a string cannot fail");
     Edit::replace(span, out + "\n---\n")
+}
+
+/// The length of the whitespace-only lines, breaks included, at the start of `text`.
+fn blank_lines(text: &str) -> usize {
+    text.split_inclusive('\n').take_while(|l| l.trim().is_empty() && l.ends_with('\n')).map(str::len).sum()
 }
 
 fn set_id(map: &mut Mapping, id: Ulid) {
@@ -342,6 +349,11 @@ mod tests {
         let added = rewritten("# T\n", &[set_id()]);
         assert_eq!(added, format!("---\nid: {ID}\n---\n# T\n"));
         assert_eq!(rewritten(&added, &[FmChange::RemoveField("id".into())]), "# T\n");
+        let remove = [FmChange::RemoveField("id".into())];
+        let spaced = format!("---\nid: {ID}\n---\n\n \r\n\t\n# T\n");
+        assert_eq!(rewritten(&spaced, &remove), "# T\n", "the blank lines after a removed block go with it");
+        let code = format!("---\nid: {ID}\n---\n\n    code\n");
+        assert_eq!(rewritten(&code, &remove), "    code\n", "not the indentation of the first line");
         assert_eq!(rewritten("\u{feff}# T\n", &[set_id()]), format!("\u{feff}---\nid: {ID}\n---\n# T\n"));
         let one = format!("---\nid: {ID}\nprereqs:\n  - \"[[a]]\"\n---\n# T\n");
         let gone = [FmChange::RenamePrereq { from: "a".into(), to: None }];

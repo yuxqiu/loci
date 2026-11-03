@@ -26,10 +26,7 @@ pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> Ulid) -> O
     // item that starts with a nested block (a quote, a fence) has no leading text to
     // carry an id.
     let mut targets: Vec<(Range<usize>, Range<usize>)> = vec![]; // (block, id slice)
-    for item in items
-        .into_iter()
-        .filter(|i| !note.text[i.marker.span.end.min(i.lead.span.end)..i.lead.span.end].trim().is_empty())
-    {
+    for item in items.into_iter().filter(|i| !i.lead.span.is_empty()) {
         if !has_id(&item.span) {
             targets.push((item.span.clone(), item.lead.span.clone()));
         }

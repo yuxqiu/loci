@@ -26,7 +26,7 @@ pub struct Block {
 static BLOCK_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:^|\s)(\^(\w+))\s*$").unwrap());
 
 /// Block ids (§4.6), in file order: an item's ends its lead; a paragraph's ends a
-/// paragraph that is no item's lead.
+/// paragraph (`paragraphs` holds none that is an item's lead).
 pub(super) fn blocks(text: &str, items: &[Spanned<ListItem>], paragraphs: &[Range<usize>]) -> Vec<Spanned<Block>> {
     let mut out = vec![];
     for item in items {
@@ -35,8 +35,7 @@ pub(super) fn blocks(text: &str, items: &[Spanned<ListItem>], paragraphs: &[Rang
         }
     }
 
-    let leads: std::collections::HashSet<&Range<usize>> = items.iter().map(|i| &i.lead.span).collect();
-    for p in paragraphs.iter().filter(|p| !leads.contains(p)) {
+    for p in paragraphs {
         if let Some(id) = trailing_id(text, p) {
             out.push(Spanned::new(Block { kind: BlockKind::Paragraph, id }, p.clone()));
         }
@@ -83,7 +82,7 @@ mod tests {
         let ids: Vec<_> = n.blocks.iter().map(|b| b.id.as_str()).collect();
         assert_eq!(ids, vec!["ppp", "ccc"]);
         let parent = &n.items[0];
-        assert_eq!(parent.lead.text(t).trim_end(), "- parent ^ppp");
+        assert_eq!(parent.lead.text(t), "parent ^ppp");
         assert_eq!(n.items[1].depth, 2);
     }
 }

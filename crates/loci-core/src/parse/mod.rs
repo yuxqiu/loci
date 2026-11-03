@@ -69,11 +69,13 @@ pub struct ListItem {
     pub depth: usize,
     /// The list marker; the item's content starts after it.
     pub marker: Spanned<Marker>,
-    /// The item's leading text (§4.6).
+    /// The item's leading text (§4.6): after the marker, up to its first nested block,
+    /// without trailing whitespace. Its block id ends it.
     pub lead: Spanned<Lead>,
 }
 
-/// A list item's marker (`-`, `1.`) and the spaces after it: its value is its bytes.
+/// A list item's marker (`-`, `1.`, with a task box `[ ]`) and the spaces after it: its
+/// value is its bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Marker;
 

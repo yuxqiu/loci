@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc 1654b2bd4e4c0a5efe27d17a204c915977d286241a45395b7869b37f99f5588f # shrinks to text = "# `[["
 cc 290f13720d76bbffa3e99f5e0d294d5ddf8b3e7adb7c55a16c31da8746d79801 # shrinks to text = "- [ ] ---\n  - \n"
+cc 120824c3a9b4f1a44eb5746b67c4370a47e185baaadcb7bc9adc2b6c7f44c740 # shrinks to text = "---\n# a comment\n---\n\n"

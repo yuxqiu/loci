@@ -95,7 +95,8 @@ fn markdown() -> impl Strategy<Value = String> {
 }
 
 /// What a rewrite must keep of a note: each field's key and value (string values, list
-/// shapes), the links' targets, and the body.
+/// shapes), the links' targets, and the body but for its leading blank lines (which go
+/// with a removed block, m0 §6.1).
 fn meaning(n: &Note) -> (Vec<(String, String)>, Vec<String>, &str) {
     fn value(v: &FmValue) -> String {
         match v {
@@ -107,7 +108,10 @@ fn meaning(n: &Note) -> (Vec<(String, String)>, Vec<String>, &str) {
     let fields =
         n.frontmatter.iter().flat_map(|f| f.entries()).map(|e| (e.key.node.clone(), value(&e.value))).collect();
     let links = n.links.iter().map(|l| format!("{:?} {:?}", l.form, l.target.names)).collect();
-    (fields, links, &n.text[n.body_start()..])
+    let body = &n.text[n.body_start()..];
+    let blank: usize =
+        body.split_inclusive('\n').take_while(|l| l.trim().is_empty() && l.ends_with('\n')).map(str::len).sum();
+    (fields, links, &body[blank..])
 }
 
 fn check(text: &str, r: &Range<usize>, within: &Range<usize>, what: &str) -> Result<(), TestCaseError> {
