@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::envelope::Refusal;
 use crate::index::{self, Index};
-use crate::parse::{Link, LinkForm, Names, Note, rename_prereqs, rewrite_frontmatter};
+use crate::parse::{FmChange, Link, LinkForm, Names, Note, rewrite_frontmatter};
 use crate::path::VaultPath;
 use crate::splice::{self, Edit};
 use crate::vault::{self, Kind, Vault};
@@ -50,8 +50,7 @@ pub fn link_edits(
     let mut edits: BTreeMap<VaultPath, Vec<Edit>> = BTreeMap::new();
     let mut removed = vec![];
     for note in index.notes().filter(|n| n.kind != Kind::Source && !change.deleted.contains(&n.path)) {
-        // Prereq slug -> its new slug, or `None` to remove it.
-        let mut prereqs: BTreeMap<&str, Option<&str>> = BTreeMap::new();
+        let mut prereqs = vec![];
         for (i, link) in note.links.iter().enumerate() {
             let Some(new) = index.link_target(note, link).and_then(|t| targets.get(&t)) else { continue };
             if link.form != LinkForm::Prereq {
@@ -63,15 +62,15 @@ pub fn link_edits(
 
             let slug = link.target.names.name().expect("a prereq names a slug");
             if *new == change.final_path(&note.path) {
-                prereqs.insert(slug, None);
+                prereqs.push(FmChange::RenamePrereq { from: slug.into(), to: None });
                 removed.push((note.path.clone(), i));
             } else if new.stem() != slug {
-                prereqs.insert(slug, Some(new.stem()));
+                prereqs.push(FmChange::RenamePrereq { from: slug.into(), to: Some(new.stem().into()) });
             }
         }
 
         if !prereqs.is_empty() {
-            let edit = rewrite_frontmatter(note, |m| rename_prereqs(m, &prereqs));
+            let edit = rewrite_frontmatter(note, &prereqs);
             edits.entry(note.path.clone()).or_default().push(edit);
         }
     }

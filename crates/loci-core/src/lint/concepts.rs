@@ -8,9 +8,7 @@ use super::{Ctx, update_code};
 use crate::config::{Editions, UpdateId};
 use crate::envelope::{Applicability, Diagnostic, Fix};
 use crate::id::Ulid;
-use saphyr::{Mapping, Scalar, Yaml};
-
-use crate::parse::{FmValue, LinkForm, Note, prereq_item, rewrite_frontmatter, yaml_string};
+use crate::parse::{FmChange, FmValue, LinkForm, Note};
 use crate::path::VaultPath;
 
 /// A concept frontmatter field (m0 §6.1) and the editions it belongs to.
@@ -57,10 +55,9 @@ fn wrong_type(note: &Note, key: &str, want: &str, span: Range<usize>) -> Diagnos
     error(note, "fm.field-type", format!("`{key}` must be {want}")).at(&note.text, span)
 }
 
-/// A fix that rewrites `note`'s frontmatter with `change` (m0 §6.1).
-fn frontmatter_fix(note: &Note, applicability: Applicability, message: &str, change: impl FnOnce(&mut Mapping)) -> Fix {
-    let edit = rewrite_frontmatter(note, change);
-    Fix::new(applicability, message).edit(note.path.as_str(), edit.range, edit.new)
+/// A fix making `change` to `note`'s frontmatter (m0 §6.1).
+fn frontmatter_fix(note: &Note, applicability: Applicability, message: &str, change: FmChange) -> Fix {
+    Fix::new(applicability, message).frontmatter(note.path.as_str(), change)
 }
 
 /// `id`: present, a string, a ULID. A missing one gets a fix adding a new id, first.
@@ -74,11 +71,7 @@ fn id_field(note: &Note) -> Option<Diagnostic> {
         None => {
             // Only concepts whose frontmatter is a mapping, or absent, get here.
             let message = if note.frontmatter.is_some() { "add a new id" } else { "add frontmatter with a new id" };
-            let fix = frontmatter_fix(note, Applicability::Safe, message, |m| {
-                let rest = std::mem::take(m);
-                m.insert(yaml_string("id"), yaml_string(Ulid::generate().to_string()));
-                m.extend(rest);
-            });
+            let fix = frontmatter_fix(note, Applicability::Safe, message, FmChange::SetId(Ulid::generate()));
             Some(error(note, "fm.missing-field", "concept has no `id`".into()).with_fix(fix))
         }
     }
@@ -88,7 +81,7 @@ fn id_field(note: &Note) -> Option<Diagnostic> {
 /// every such item of the note.
 fn prereqs_field(note: &Note) -> Vec<Diagnostic> {
     let wrong = |span| wrong_type(note, "prereqs", "a list of `\"[[slug]]\"`", span).with_hint("write \"[[slug]]\"");
-    let quote = || frontmatter_fix(note, Applicability::Safe, "quote it", quote_prereqs);
+    let quote = || frontmatter_fix(note, Applicability::Safe, "quote it", FmChange::QuotePrereqs);
     match note.fm("prereqs") {
         None => vec![],
         Some(FmValue::List { items, .. }) => items
@@ -111,19 +104,6 @@ fn unquoted_prereq(item: &FmValue) -> bool {
     matches!(items.as_slice(), [FmValue::Str { value, .. }] if value.parse::<crate::id::Slug>().is_ok())
 }
 
-/// Quotes every unquoted `[[slug]]` in `prereqs` ([`unquoted_prereq`]).
-fn quote_prereqs(map: &mut Mapping) {
-    let Some(Yaml::Sequence(items)) = map.get_mut(&yaml_string("prereqs")) else { return };
-    for item in items {
-        let Yaml::Sequence(outer) = item else { continue };
-        let [Yaml::Sequence(inner)] = outer.as_slice() else { continue };
-        let [Yaml::Value(Scalar::String(slug))] = inner.as_slice() else { continue };
-        if slug.parse::<crate::id::Slug>().is_ok() {
-            *item = prereq_item(&slug.clone());
-        }
-    }
-}
-
 /// Concept fields a pending vault update removes (a row with `Editions::until` an
 /// update the vault has not handled): valid in its edition, reported as outdated, with
 /// the unsafe fix that deletes them (a field may hold text worth keeping).
@@ -135,9 +115,8 @@ pub(super) fn outdated_fields(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
             };
             let Some(update) = field.editions.until else { continue };
             let path = note.path.as_str();
-            let fix = frontmatter_fix(note, Applicability::Unsafe, &format!("delete `{}`", e.key), |m| {
-                m.remove(&yaml_string(e.key.clone()));
-            });
+            let change = FmChange::RemoveField(e.key.clone());
+            let fix = frontmatter_fix(note, Applicability::Unsafe, &format!("delete `{}`", e.key), change);
             let code = update_code(update);
             out.push(
                 Diagnostic::warning(&code, format!("vault update {update} removes the concept field `{}`", e.key))
@@ -166,11 +145,7 @@ pub(super) fn duplicates(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
         // Unsafe: plugin data (a review log) may refer to the id of either note.
         let mut fix = Fix::new(Applicability::Unsafe, "give the other notes new ids");
         for n in &notes[1..] {
-            let edit = rewrite_frontmatter(n, |m| {
-                *m.get_mut(&yaml_string("id")).expect("the note has the id") =
-                    yaml_string(Ulid::generate().to_string());
-            });
-            fix = fix.edit(n.path.as_str(), edit.range, edit.new);
+            fix = fix.frontmatter(n.path.as_str(), FmChange::SetId(Ulid::generate()));
         }
         let others: Vec<&str> = notes[1..].iter().map(|n| n.path.as_str()).collect();
         out.push(

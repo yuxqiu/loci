@@ -5,10 +5,12 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use saphyr::{LoadableYamlNode, Mapping, MarkedYaml, Scalar, Yaml, YamlData, YamlEmitter};
+use serde::{Deserialize, Serialize};
 
 use super::body::Walker;
 use super::links::prereq;
 use super::*;
+use crate::id::Ulid;
 use crate::splice::Edit;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,16 +117,101 @@ pub fn prereq_slug(item: &str) -> Option<String> {
     Some(crate::vault::nfc(&slug.to_string()))
 }
 
-/// The `prereqs` item naming `slug`.
-pub fn prereq_item<'a>(slug: &str) -> Yaml<'a> {
-    yaml_string(format!("[[{slug}]]"))
+/// A change to a concept's frontmatter (§6.1), by key or slug rather than by bytes, so
+/// changes to one block compose: [`rewrite_frontmatter`] applies a note's changes in
+/// one rewrite.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FmChange {
+    /// Sets `id`, as the first key when there is none.
+    SetId(Ulid),
+    RemoveField(String),
+    /// Quotes every unquoted `[[slug]]` in `prereqs` (YAML reads one as a list holding
+    /// a list holding the slug).
+    QuotePrereqs,
+    /// Renames prereq `from` to `to`, or removes it; a `prereqs` list left empty loses
+    /// its key.
+    RenamePrereq {
+        from: String,
+        to: Option<String>,
+    },
 }
 
-/// Renames or removes the `prereqs` items of `map` named in `renames` (slug -> new
-/// slug, or `None` to remove it); a list left empty loses its key.
-pub fn rename_prereqs(map: &mut Mapping, renames: &BTreeMap<&str, Option<&str>>) {
-    let key = yaml_string("prereqs");
-    let Some(Yaml::Sequence(items)) = map.get_mut(&key) else { panic!("a note with prereqs has a `prereqs` list") };
+/// The edit that rewrites `note`'s frontmatter (§6.1) with `changes`: the whole block
+/// in saphyr's canonical form, comments not kept. A note without frontmatter gets a
+/// block at the start of its body; a mapping left empty loses its block.
+///
+/// # Panics
+/// When the frontmatter is broken (unterminated or not a mapping): it is not edited.
+pub fn rewrite_frontmatter(note: &Note, changes: &[FmChange]) -> Edit {
+    let (span, block) = match &note.frontmatter {
+        None => (note.body_start()..note.body_start(), ""),
+        Some(Frontmatter::Fields { span, .. }) => (span.clone(), &note.text[span.clone()]),
+        Some(_) => panic!("{}: broken frontmatter is not rewritten", note.path),
+    };
+
+    // The block is a YAML document between `---` lines; the closing line opens an
+    // empty second one.
+    let docs = Yaml::load_from_str(block).expect("a parsed frontmatter loads");
+    let mut map = match docs.into_iter().next() {
+        Some(Yaml::Mapping(map)) => map,
+        None | Some(Yaml::Value(Scalar::Null)) => Mapping::new(),
+        Some(other) => panic!("{}: frontmatter is not a mapping: {other:?}", note.path),
+    };
+
+    // Renames go in one sweep, so `a -> b` beside `b -> c` renames each item once.
+    let mut renames: BTreeMap<&str, Option<&str>> = BTreeMap::new();
+    for change in changes {
+        match change {
+            FmChange::SetId(id) => set_id(&mut map, *id),
+            FmChange::RemoveField(key) => _ = map.remove(&string_node(key.clone())),
+            FmChange::QuotePrereqs => quote_prereqs(&mut map),
+            FmChange::RenamePrereq { from, to } => _ = renames.insert(from, to.as_deref()),
+        }
+    }
+    if !renames.is_empty() {
+        rename_prereqs(&mut map, &renames);
+    }
+    if map.is_empty() {
+        return Edit::replace(span, "");
+    }
+
+    // `---` and the mapping, without a final line break.
+    let mut out = String::new();
+    YamlEmitter::new(&mut out).dump(&Yaml::Mapping(map)).expect("writing to a string cannot fail");
+    Edit::replace(span, out + "\n---\n")
+}
+
+fn set_id(map: &mut Mapping, id: Ulid) {
+    let (key, value) = (string_node("id"), string_node(id.to_string()));
+    match map.get_mut(&key) {
+        Some(old) => *old = value,
+        None => {
+            let rest = std::mem::take(map);
+            map.insert(key, value);
+            map.extend(rest);
+        }
+    }
+}
+
+/// Quotes every unquoted `[[slug]]` in `prereqs`.
+fn quote_prereqs(map: &mut Mapping) {
+    let Some(Yaml::Sequence(items)) = map.get_mut(&string_node("prereqs")) else { return };
+    for item in items {
+        let Yaml::Sequence(outer) = item else { continue };
+        let [Yaml::Sequence(inner)] = outer.as_slice() else { continue };
+        let [Yaml::Value(Scalar::String(slug))] = inner.as_slice() else { continue };
+        if slug.parse::<crate::id::Slug>().is_ok() {
+            *item = prereq_item(&slug.clone());
+        }
+    }
+}
+
+/// Renames or removes the `prereqs` items named in `renames` (slug -> new slug, or
+/// `None`); a list left empty loses its key.
+fn rename_prereqs(map: &mut Mapping, renames: &BTreeMap<&str, Option<&str>>) {
+    let key = string_node("prereqs");
+    let Some(Yaml::Sequence(items)) = map.get_mut(&key) else { return };
     items.retain_mut(|item| {
         let Yaml::Value(Scalar::String(s)) = item else { return true };
         match prereq_slug(s).and_then(|slug| renames.get(slug.as_str()).copied()) {
@@ -141,43 +228,13 @@ pub fn rename_prereqs(map: &mut Mapping, renames: &BTreeMap<&str, Option<&str>>)
     }
 }
 
-/// A YAML string, for a key or value of a [`rewrite_frontmatter`].
-pub fn yaml_string<'a>(s: impl Into<String>) -> Yaml<'a> {
-    Yaml::Value(Scalar::String(s.into().into()))
+/// The `prereqs` item naming `slug`.
+fn prereq_item<'a>(slug: &str) -> Yaml<'a> {
+    string_node(format!("[[{slug}]]"))
 }
 
-/// The edit that rewrites `note`'s frontmatter (§6.1) after `change` edits its YAML
-/// mapping: the whole block in saphyr's canonical form, comments not kept. A note
-/// without frontmatter gets a block at the start of its body; a mapping left empty
-/// loses its block.
-///
-/// # Panics
-/// When the frontmatter is broken (unterminated or not a mapping): it is not edited.
-pub fn rewrite_frontmatter<'t>(note: &'t Note, change: impl FnOnce(&mut Mapping<'t>)) -> Edit {
-    let (span, block) = match &note.frontmatter {
-        None => (note.body_start()..note.body_start(), ""),
-        Some(Frontmatter::Fields { span, .. }) => (span.clone(), &note.text[span.clone()]),
-        Some(_) => panic!("{}: broken frontmatter is not rewritten", note.path),
-    };
-
-    // The block is a YAML document between `---` lines; the closing line opens an
-    // empty second one.
-    let docs = Yaml::load_from_str(block).expect("a parsed frontmatter loads");
-    let mut map = match docs.into_iter().next() {
-        Some(Yaml::Mapping(map)) => map,
-        None | Some(Yaml::Value(Scalar::Null)) => Mapping::new(),
-        Some(other) => panic!("{}: frontmatter is not a mapping: {other:?}", note.path),
-    };
-
-    change(&mut map);
-    if map.is_empty() {
-        return Edit::replace(span, "");
-    }
-
-    // `---` and the mapping, without a final line break.
-    let mut out = String::new();
-    YamlEmitter::new(&mut out).dump(&Yaml::Mapping(map)).expect("writing to a string cannot fail");
-    Edit::replace(span, out + "\n---\n")
+fn string_node<'a>(s: impl Into<String>) -> Yaml<'a> {
+    Yaml::Value(Scalar::String(s.into().into()))
 }
 
 /// Parses frontmatter YAML into top-level entries with byte spans relative to the file
@@ -278,33 +335,43 @@ mod tests {
         assert_eq!(names, ["a", "b"]);
     }
 
-    fn rewritten(text: &str, change: impl FnOnce(&mut Mapping)) -> String {
+    fn rewritten(text: &str, changes: &[FmChange]) -> String {
         let n = p(text);
-        crate::splice::apply(text, vec![rewrite_frontmatter(&n, change)]).unwrap()
+        crate::splice::apply(text, vec![rewrite_frontmatter(&n, changes)]).unwrap()
+    }
+
+    const ID: &str = "01JB9XQ7Z3K4M5N6P7Q8R9S0TV";
+
+    fn set_id() -> FmChange {
+        FmChange::SetId(ID.parse().unwrap())
     }
 
     #[test]
-    fn rewrite_is_canonical() {
-        let t = "---\nid: X # the id\nprereqs: [\"[[a]]\", '[[b]]']\n---\n# T\n";
-        let out = rewritten(t, |m| {
-            m.insert(yaml_string("tags"), yaml_string("t"));
-        });
-        assert_eq!(out, "---\nid: X\nprereqs:\n  - \"[[a]]\"\n  - \"[[b]]\"\ntags: t\n---\n# T\n");
-        let p2 = p(&out);
-        assert_eq!(p2.links.len(), 2, "the rewrite parses back: {out}");
+    fn rewrite_is_canonical_and_composes() {
+        let t = "---\nnote: x # why\nprereqs: [\"[[a]]\", [[b]], '[[c]]']\n---\n# T\n";
+        let rename =
+            |from: &str, to: Option<&str>| FmChange::RenamePrereq { from: from.into(), to: to.map(Into::into) };
+        let changes = [
+            set_id(),
+            FmChange::QuotePrereqs,
+            rename("a", Some("c")),
+            rename("c", None),
+            FmChange::RemoveField("note".into()),
+        ];
+        let out = rewritten(t, &changes);
+        assert_eq!(out, format!("---\nid: {ID}\nprereqs:\n  - \"[[c]]\"\n  - \"[[b]]\"\n---\n# T\n"));
+        assert_eq!(p(&out).links.len(), 2, "the rewrite parses back: {out}");
     }
 
     #[test]
     fn rewrite_adds_and_drops_the_block() {
-        let added = rewritten("# T\n", |m| {
-            m.insert(yaml_string("id"), yaml_string("X"));
-        });
-        assert_eq!(added, "---\nid: X\n---\n# T\n");
-        assert_eq!(rewritten(&added, |m| m.clear()), "# T\n");
-        assert_eq!(
-            rewritten("\u{feff}# T\n", |m| _ = m.insert(yaml_string("id"), yaml_string("X"))),
-            "\u{feff}---\nid: X\n---\n# T\n"
-        );
+        let added = rewritten("# T\n", &[set_id()]);
+        assert_eq!(added, format!("---\nid: {ID}\n---\n# T\n"));
+        assert_eq!(rewritten(&added, &[FmChange::RemoveField("id".into())]), "# T\n");
+        assert_eq!(rewritten("\u{feff}# T\n", &[set_id()]), format!("\u{feff}---\nid: {ID}\n---\n# T\n"));
+        let one = format!("---\nid: {ID}\nprereqs:\n  - \"[[a]]\"\n---\n# T\n");
+        let gone = [FmChange::RenamePrereq { from: "a".into(), to: None }];
+        assert_eq!(rewritten(&one, &gone), format!("---\nid: {ID}\n---\n# T\n"), "an emptied list loses its key");
     }
 
     #[test]

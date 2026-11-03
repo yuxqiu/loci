@@ -31,6 +31,12 @@ them under its version.
 
 ### Changed
 
+- `lint --json` shows a frontmatter fix as the change it makes (`{"path",
+  "frontmatter": {"rename-prereq": {"from": "queu", "to": "queue"}}}`), not as a
+  rewritten block, and `lint --fix` applies all of a note's frontmatter fixes at once.
+- `loci lint --fix` says when fixes are left after its ten passes (`"unapplied"` in
+  `--json`, and advice to run it again), and lists every diagnostic one shared fix
+  resolved (such as each unquoted prereq of a note), not only the first.
 - When `loci mv`, `loci merge` or `loci lint --fix` changes a concept's frontmatter,
   the whole block is rewritten in a canonical form: block lists
   (`prereqs:\n  - "[[bfs]]"`), comments and layout not kept. A `prereqs` item may be

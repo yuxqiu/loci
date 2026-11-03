@@ -1,4 +1,4 @@
-//! Block ids (m0 §4.6): a `^id` ending a top-level list item's lead or a paragraph.
+//! Block ids (m0 §4.6): a `^id` ending a list item's lead (nested items too) or a paragraph.
 
 use std::ops::Range;
 use std::sync::LazyLock;
@@ -22,39 +22,35 @@ pub struct BlockId {
     pub kind: BlockKind,
 }
 
-static BLOCK_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:^|\s)\^(\w+)\s*$").unwrap());
+/// A `^id` ending a text: the marker (`^id`) and the id.
+static BLOCK_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:^|\s)(\^(\w+))\s*$").unwrap());
 
-/// Block ids (§4.6), in file order. A paragraph that is an item's lead carries the
-/// item's id.
+/// Block ids (§4.6), in file order: an item's ends its lead; a paragraph's ends a
+/// paragraph that is no item's lead.
 pub(super) fn block_ids(text: &str, items: &[ListItem], paragraphs: &[Range<usize>]) -> Vec<BlockId> {
     let mut out = vec![];
     for item in items {
-        if let Some(b) = block_id(text, item.lead.clone()) {
-            out.push(BlockId { block: item.span.clone(), kind: BlockKind::Item, ..b });
+        if let Some((id, span)) = trailing_id(text, &item.lead) {
+            out.push(BlockId { id, span, block: item.span.clone(), kind: BlockKind::Item });
         }
     }
+
     let leads: std::collections::HashSet<&Range<usize>> = items.iter().map(|i| &i.lead).collect();
     for p in paragraphs.iter().filter(|p| !leads.contains(p)) {
-        if let Some(b) = block_id(text, p.clone()) {
-            out.push(BlockId { kind: BlockKind::Paragraph, ..b });
+        if let Some((id, span)) = trailing_id(text, p) {
+            out.push(BlockId { id, span, block: p.clone(), kind: BlockKind::Paragraph });
         }
     }
+
     out.sort_by_key(|b| b.span.start);
     out
 }
 
-fn block_id(text: &str, range: Range<usize>) -> Option<BlockId> {
-    let slice = &text[range.clone()];
-    let trimmed = slice.trim_end();
-    let caps = BLOCK_ID.captures(trimmed)?;
-    let m = caps.get(1).unwrap();
-    let start = range.start + m.start() - 1; // include the `^`
-    Some(BlockId {
-        id: m.as_str().to_string(),
-        span: start..range.start + m.end(),
-        block: range,
-        kind: BlockKind::Paragraph,
-    })
+/// The `^id` ending the text at `range`: the id, and the bytes of `^id`.
+fn trailing_id(text: &str, range: &Range<usize>) -> Option<(String, Range<usize>)> {
+    let caps = BLOCK_ID.captures(&text[range.clone()])?;
+    let (marker, id) = (caps.get(1)?, caps.get(2)?);
+    Some((id.as_str().to_string(), range.start + marker.start()..range.start + marker.end()))
 }
 
 #[cfg(test)]

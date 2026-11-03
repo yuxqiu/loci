@@ -173,7 +173,7 @@ proptest! {
         let path = VaultPath::new("concepts/a/x.md".into()).unwrap();
         let n = parse(&path, Kind::Concept, text.clone());
         prop_assume!(matches!(n.frontmatter, Some(Frontmatter::Fields { .. })));
-        let edit = rewrite_frontmatter(&n, |_| {});
+        let edit = rewrite_frontmatter(&n, &[]);
         let out = loci_core::splice::apply(&text, vec![edit]).unwrap();
         let after = parse(&path, Kind::Concept, out.clone());
         prop_assert_eq!(meaning(&n), meaning(&after), "rewritten:\n{}", out);

@@ -3,8 +3,7 @@
 use super::{Ctx, managed};
 use crate::envelope::{Applicability, Diagnostic, Fix};
 use crate::index::{Index, LinkError};
-use crate::parse::{Link, LinkForm, MarkdownLink, Note, rename_prereqs, rewrite_frontmatter};
-use crate::splice::Edit;
+use crate::parse::{FmChange, Link, LinkForm, MarkdownLink, Note};
 
 pub(super) fn links(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     for note in managed(ctx) {
@@ -54,17 +53,16 @@ fn unresolved(index: &Index, note: &Note, link: &Link) -> Option<Diagnostic> {
             diag.hint = hint;
             if let Some(slug) = closest {
                 let fix = Fix::new(Applicability::Unsafe, format!("link [[{slug}]]"));
-                // A prereq is renamed with its frontmatter (m0 §6.1).
-                let edit = match link.form {
-                    LinkForm::Prereq => {
-                        rewrite_frontmatter(note, |m| rename_prereqs(m, &[(target, Some(slug.as_str()))].into()))
-                    }
+                let path = note.path.as_str();
+                diag = diag.with_fix(match link.form {
+                    // A prereq is renamed with its frontmatter (m0 §6.1).
+                    LinkForm::Prereq => fix
+                        .frontmatter(path, FmChange::RenamePrereq { from: target.into(), to: Some(slug.to_string()) }),
                     _ => {
                         let fragment = link.target.fragment.as_ref().map_or(String::new(), |f| format!("#{f}"));
-                        Edit::replace(link.target.span.clone(), format!("{slug}{fragment}"))
+                        fix.edit(path, link.target.span.clone(), format!("{slug}{fragment}"))
                     }
-                };
-                diag = diag.with_fix(fix.edit(note.path.as_str(), edit.range, edit.new));
+                });
             }
             diag
         }

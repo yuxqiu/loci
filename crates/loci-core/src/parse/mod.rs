@@ -18,9 +18,7 @@ use body::{Walker, walk_body};
 use frontmatter::{frontmatter, frontmatter_links};
 
 pub use blocks::{BlockId, BlockKind};
-pub use frontmatter::{
-    FmEntry, FmValue, Frontmatter, prereq_item, prereq_slug, rename_prereqs, rewrite_frontmatter, yaml_string,
-};
+pub use frontmatter::{FmChange, FmEntry, FmValue, Frontmatter, prereq_slug, rewrite_frontmatter};
 pub use links::{Fragment, Link, LinkForm, MarkdownLink, Names, Target};
 
 pub const BOM: &str = "\u{feff}";

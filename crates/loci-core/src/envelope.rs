@@ -6,6 +6,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::parse::FmChange;
+
 pub const SCHEMA: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -30,12 +32,21 @@ pub struct Diagnostic {
     pub fixes: Vec<Fix>,
 }
 
-/// A mechanical fix for a diagnostic: edits to files' text.
+/// A mechanical fix for a diagnostic: edits to files.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fix {
     pub message: String,
     pub applicability: Applicability,
-    pub edits: Vec<TextEdit>,
+    pub edits: Vec<FixEdit>,
+}
+
+/// One edit of a fix: to a file's bytes, or to a concept's frontmatter by key or slug,
+/// so a note's frontmatter changes compose (`fix` rewrites the block once per pass).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FixEdit {
+    Text(TextEdit),
+    Frontmatter { path: String, frontmatter: FmChange },
 }
 
 /// How a fix may be applied (after Ruff's safe and unsafe fixes, and rustc's
@@ -67,7 +78,14 @@ impl Fix {
 
     /// Adds an edit replacing bytes `range` of file `path` with `new`.
     pub fn edit(mut self, path: impl Into<String>, range: std::ops::Range<usize>, new: impl Into<String>) -> Self {
-        self.edits.push(TextEdit { path: path.into(), byte_start: range.start, byte_end: range.end, new: new.into() });
+        let edit = TextEdit { path: path.into(), byte_start: range.start, byte_end: range.end, new: new.into() };
+        self.edits.push(FixEdit::Text(edit));
+        self
+    }
+
+    /// Adds `change` to the frontmatter of concept `path`.
+    pub fn frontmatter(mut self, path: impl Into<String>, change: FmChange) -> Self {
+        self.edits.push(FixEdit::Frontmatter { path: path.into(), frontmatter: change });
         self
     }
 }
@@ -344,6 +362,18 @@ impl From<Refusal> for Report {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn fix_edits_round_trip() {
+        let fix =
+            Fix::new(Applicability::Safe, "m").edit("a.md", 1..2, "x").frontmatter("b.md", FmChange::QuotePrereqs);
+        let j = serde_json::to_value(&fix).unwrap();
+        assert_eq!(
+            j["edits"],
+            json!([{"path": "a.md", "byte_start": 1, "byte_end": 2, "new": "x"}, {"path": "b.md", "frontmatter": "quote-prereqs"}])
+        );
+        assert_eq!(serde_json::from_value::<Fix>(j).unwrap(), fix);
+    }
 
     #[test]
     fn line_col_counts_chars() {

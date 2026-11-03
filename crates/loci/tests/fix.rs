@@ -144,9 +144,58 @@ fn a_misspelt_prereq_is_named_by_its_slug_and_fixed_in_the_frontmatter() {
     let (_, env) = v.run(&["lint"]);
     let d = with_code(&env, "link.dangling");
     assert_eq!(d[0]["message"], "`queu` does not resolve", "{env:#}");
+    let edit = serde_json::json!({"path": "concepts/a/x.md", "frontmatter": {"rename-prereq": {"from": "queu", "to": "queue"}}});
+    assert_eq!(d[0]["fixes"][0]["edits"], serde_json::json!([edit]), "a frontmatter change, not bytes");
     let (_, env) = v.run(&["lint", "--fix", "--unsafe-fixes", "--only", "link.dangling"]);
     assert_eq!(fixed_codes(&env), ["link.dangling"], "{env:#}");
     assert_eq!(v.read("concepts/a/x.md"), concept(IDS[1], "prereqs:\n  - \"[[queue]]\"\n", "# X\n"));
+}
+
+#[test]
+fn copies_of_one_fix_count_for_every_diagnostic() {
+    // One fix quotes every unquoted prereq of the note; each item's diagnostic has it.
+    let v = TestVault::with_files(
+        BIN,
+        &[
+            ("concepts/a/x.md", concept(IDS[0], "prereqs:\n  - [[y]]\n  - [[z]]\n", "# X\n")),
+            ("concepts/a/y.md", concept(IDS[1], "", "# Y\n")),
+            ("concepts/a/z.md", concept(IDS[2], "", "# Z\n")),
+        ],
+    );
+    let (_, env) = v.run(&["lint", "--fix", "--only", "fm.field-type"]);
+    assert_eq!(fixed_codes(&env), ["fm.field-type", "fm.field-type"], "{env:#}");
+    assert_eq!(v.read("concepts/a/x.md"), concept(IDS[0], "prereqs:\n  - \"[[y]]\"\n  - \"[[z]]\"\n", "# X\n"));
+}
+
+#[test]
+fn a_notes_frontmatter_fixes_apply_together() {
+    // Twelve misspelt prereqs: more than the passes, were each fix a pass.
+    let names = [
+        "queue", "stack", "graph", "array", "string", "matrix", "vector", "bitset", "deque", "tuple", "hashmap",
+        "bloom",
+    ];
+    let misspelt: String = names.iter().map(|n| format!("  - \"[[{}]]\"\n", &n[..n.len() - 1])).collect();
+    let mut files = vec![("concepts/a/x.md".to_string(), concept(IDS[0], &format!("prereqs:\n{misspelt}"), "# X\n"))];
+    files.extend(names.iter().map(|n| (format!("concepts/a/{n}.md"), format!("# {n}\n"))));
+    let files: Vec<(&str, String)> = files.iter().map(|(p, t)| (p.as_str(), t.clone())).collect();
+    let v = TestVault::with_files(BIN, &files);
+    let (_, env) = v.run(&["lint", "--fix", "--unsafe-fixes", "--only", "link.dangling"]);
+    assert_eq!((fixed_codes(&env).len(), &env["data"]["unapplied"]), (12, &serde_json::json!(0)), "{env:#}");
+    let fixed: String = names.iter().map(|n| format!("  - \"[[{n}]]\"\n")).collect();
+    assert_eq!(v.read("concepts/a/x.md"), concept(IDS[0], &format!("prereqs:\n{fixed}"), "# X\n"));
+}
+
+#[test]
+fn touching_fixes_apply_in_later_passes() {
+    // Twelve adjacent markdown links: each fix touches its neighbours'.
+    let links = "[x](concepts/a/x.md)".repeat(12);
+    let v = TestVault::with_files(
+        BIN,
+        &[("concepts/a/x.md", concept(IDS[0], "", "# X\n")), ("views/v.md", format!("# V\n\n{links}\n"))],
+    );
+    let (_, env) = v.run(&["lint", "--fix", "--only", "link.markdown"]);
+    assert_eq!((fixed_codes(&env).len(), &env["data"]["unapplied"]), (12, &serde_json::json!(0)), "{env:#}");
+    assert_eq!(v.read("views/v.md"), format!("# V\n\n{}\n", "[[concepts/a/x|x]]".repeat(12)));
 }
 
 /// A concept with u0001's removed `digest` field and another unknown field.

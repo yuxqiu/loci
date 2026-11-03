@@ -105,7 +105,15 @@ pub fn run(ctx: &Ctx, fix: Option<FixArgs>) -> Result<Report, Refusal> {
     let mut data = linted.data();
     data["fixed"] = json!(plan.applied);
     data["dry_run"] = json!(args.dry_run);
+    data["unapplied"] = json!(plan.unapplied);
     let verb = if args.dry_run { "would apply" } else { "applied" };
     human.push_str(&format!("{verb} {} fix(es); {}", plan.applied.len(), linted.summary()));
+    if plan.unapplied > 0 {
+        human.push_str(&format!(
+            "\n{} fix(es) left after {} passes; run `loci lint --fix` again",
+            plan.unapplied,
+            fix::PASSES
+        ));
+    }
     Ok(Report::ok(data, human).with_diagnostics(linted.diagnostics))
 }
