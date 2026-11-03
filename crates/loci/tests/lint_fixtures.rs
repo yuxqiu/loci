@@ -172,22 +172,22 @@ fn block_id_of_parent_item_spans_its_children() {
     let text = std::fs::read_to_string(fixtures_dir().join("block-ids/concepts/a/lists.md")).unwrap();
     let note =
         parse(&loci_core::path::VaultPath::new("concepts/a/lists.md".into()).unwrap(), Kind::Concept, text.clone());
-    let get = |id: &str| note.block_ids.iter().find(|b| b.id == id).unwrap_or_else(|| panic!("no ^{id}"));
+    let get = |id: &str| note.blocks.iter().find(|b| *b.id == id).unwrap_or_else(|| panic!("no ^{id}"));
     for id in ["tight1", "loose1", "multi1", "parent1", "child1", "para1", "shared"] {
         get(id);
     }
     let parent = get("parent1");
     let child = get("child1");
     // The parent's id sits before the nested list and its block covers the children.
-    assert!(parent.span.end <= text.find("  - child item").unwrap());
-    assert!(text[parent.block.clone()].contains("- child item ^child1"));
-    assert!(text[parent.block.clone()].contains("- other child"));
-    assert!(text[child.block.clone()].starts_with("child item") || text[child.block.clone()].contains("child item"));
-    assert!(!text[child.block.clone()].contains("other child"));
+    assert!(parent.id.span.end <= text.find("  - child item").unwrap());
+    assert!(text[parent.span.clone()].contains("- child item ^child1"));
+    assert!(text[parent.span.clone()].contains("- other child"));
+    assert!(text[child.span.clone()].starts_with("child item") || text[child.span.clone()].contains("child item"));
+    assert!(!text[child.span.clone()].contains("other child"));
     assert_eq!(parent.kind, child.kind);
     assert!(matches!(get("para1").kind, BlockKind::Paragraph));
     // The multi-line item's id identifies the whole item.
-    assert!(text[get("multi1").block.clone()].contains("first line"));
+    assert!(text[get("multi1").span.clone()].contains("first line"));
 }
 
 // ---------------------------------------------------------------- no-h1

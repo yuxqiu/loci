@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::envelope::Refusal;
 use crate::index::{self, Index};
-use crate::parse::{FmChange, Link, LinkForm, Names, Note, rewrite_frontmatter};
+use crate::parse::{FmChange, Link, LinkForm, Names, Note, Spanned, rewrite_frontmatter};
 use crate::path::VaultPath;
 use crate::splice::{self, Edit};
 use crate::vault::{self, Kind, Vault};
@@ -83,7 +83,7 @@ pub fn link_edits(
 /// way (a slug stays a slug, a path a path) with its fragment kept. A link into its own
 /// note follows the note. The fragment is not checked: one that no longer resolves
 /// still follows its note (lint reports it).
-fn rewrite(note: &Note, link: &Link, new: &VaultPath) -> Option<String> {
+fn rewrite(note: &Note, link: &Spanned<Link>, new: &VaultPath) -> Option<String> {
     let mut written = match &link.target.names {
         Names::ThisNote => return None,
         Names::Slug(_) => new.stem().to_string(),
@@ -93,7 +93,7 @@ fn rewrite(note: &Note, link: &Link, new: &VaultPath) -> Option<String> {
     if let Some(f) = &link.target.fragment {
         written.push_str(&format!("#{f}"));
     }
-    (written != link.written(&note.text)).then_some(written)
+    (written != link.target.text(&note.text)).then_some(written)
 }
 
 /// Completes `change` (its moves, deletions and removed links set) with per-file
@@ -171,7 +171,7 @@ fn verify(
                     code,
                     format!(
                         "`{}` in {new_path} would no longer resolve to {expected}",
-                        new_link.written(&new_note.text)
+                        new_link.target.text(&new_note.text)
                     ),
                 ));
             }

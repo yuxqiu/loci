@@ -6,6 +6,7 @@ use std::io::{BufRead, Read, Write};
 use jiff::Timestamp;
 use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::index::Index;
+use loci_core::parse::Spanned;
 use loci_core::plugin::Skill;
 use loci_core::vault::Vault;
 use serde_json::json;
@@ -36,14 +37,14 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
                 "card is not `- question :: answer`, optionally followed by a block id",
             )
             .at_path(i.path.as_str())
-            .at(text_of(&i.path), i.range.clone()),
+            .at(text_of(&i.path), i.span.clone()),
         );
     }
 
-    let mut by_id: BTreeMap<loci_core::id::Ulid, Vec<&Card>> = BTreeMap::new();
+    let mut by_id: BTreeMap<loci_core::id::Ulid, Vec<&Spanned<Card>>> = BTreeMap::new();
     for c in &all {
         let at = |code: &str, msg: String| {
-            Diagnostic::error(code, msg).at_path(c.path.as_str()).at(text_of(&c.path), c.range.clone())
+            Diagnostic::error(code, msg).at_path(c.path.as_str()).at(text_of(&c.path), c.span.clone())
         };
         match &c.id {
             CardId::Missing => diags.push(
@@ -63,7 +64,7 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
         diags.push(
             Diagnostic::error("learn.id-duplicate", format!("card id `^{id}` is used by {}", others.join(", ")))
                 .at_path(cs[0].path.as_str())
-                .at(text_of(&cs[0].path), cs[0].range.clone()),
+                .at(text_of(&cs[0].path), cs[0].span.clone()),
         );
     }
 
@@ -72,7 +73,7 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
 }
 
 /// Validates a line against the working tree: its card or concept must exist.
-fn check_exists(line: &Line, all: &[Card], index: &Index) -> Result<(), Refusal> {
+fn check_exists(line: &Line, all: &[Spanned<Card>], index: &Index) -> Result<(), Refusal> {
     match &line.subject {
         Subject::Card(card) if !all.iter().any(|c| c.id.valid() == Some(*card)) => {
             Err(Refusal::refused("learn.unknown-card", format!("no card has id `{card}`")))
@@ -150,7 +151,7 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
 
 /// Asks for a grade on each card of `session` and appends it to the log, counting in
 /// `appended`. Stops at the end, on `q` or end of input (`Ok`), or on an I/O error.
-fn grade_cards(session: &[&Card], root: &std::path::Path, appended: &mut usize) -> std::io::Result<()> {
+fn grade_cards(session: &[&Spanned<Card>], root: &std::path::Path, appended: &mut usize) -> std::io::Result<()> {
     let (mut input, mut err) = (std::io::stdin().lock(), std::io::stderr());
     for (i, card) in session.iter().enumerate() {
         let progress = format!("{}/{}", i + 1, session.len());
@@ -165,7 +166,12 @@ fn grade_cards(session: &[&Card], root: &std::path::Path, appended: &mut usize) 
 
 /// Shows one card and reads the user's grade. `None` when the user stops (`q` or end
 /// of input).
-fn ask(card: &Card, progress: &str, input: &mut impl BufRead, err: &mut impl Write) -> std::io::Result<Option<Grade>> {
+fn ask(
+    card: &Spanned<Card>,
+    progress: &str,
+    input: &mut impl BufRead,
+    err: &mut impl Write,
+) -> std::io::Result<Option<Grade>> {
     writeln!(err, "\n[{progress}] {}\n\n{}\n\n(press Enter to show the answer)", card.path, card.question)?;
     let mut buf = String::new();
     if input.read_line(&mut buf)? == 0 {

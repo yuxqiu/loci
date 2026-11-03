@@ -13,99 +13,81 @@ use super::*;
 use crate::id::Ulid;
 use crate::splice::Edit;
 
+/// A frontmatter value, spanned in its entry; a string's span includes its quotes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FmValue {
-    Str {
-        value: String,
-        span: Range<usize>,
-    },
-    List {
-        items: Vec<FmValue>,
-        span: Range<usize>,
-        flow: bool,
-    },
+    Str(String),
+    List(Vec<Spanned<FmValue>>),
     /// Any other YAML value (number, bool, null, mapping).
-    Other {
-        span: Range<usize>,
-    },
-}
-
-impl FmValue {
-    pub fn span(&self) -> Range<usize> {
-        match self {
-            FmValue::Str { span, .. } | FmValue::List { span, .. } | FmValue::Other { span } => span.clone(),
-        }
-    }
+    Other,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FmEntry {
-    pub key: String,
-    pub key_span: Range<usize>,
-    pub value: FmValue,
+    pub key: Spanned<String>,
+    pub value: Spanned<FmValue>,
 }
 
-/// A note's frontmatter (§4.3): what the YAML block at its start is.
+/// A note's frontmatter (§4.3): what the YAML block at its start is. Spans the block,
+/// `---` lines and their breaks included; an unterminated one, its opening line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Frontmatter {
     /// Opened with a `---` line that is never closed.
     Unterminated,
-    /// A closed block (`span`, `---` lines and their breaks included) that is not a YAML
-    /// mapping.
-    Invalid { span: Range<usize>, reason: String },
-    /// A YAML mapping: the block (as for `Invalid`) and its fields.
-    Fields { span: Range<usize>, entries: Vec<FmEntry> },
+    /// A closed block that is not a YAML mapping, and why.
+    Invalid(String),
+    /// A YAML mapping: its fields.
+    Fields(Vec<FmEntry>),
 }
 
 impl Frontmatter {
-    /// The bytes of the block, when it is closed.
-    pub fn span(&self) -> Option<Range<usize>> {
-        match self {
-            Frontmatter::Unterminated => None,
-            Frontmatter::Invalid { span, .. } | Frontmatter::Fields { span, .. } => Some(span.clone()),
-        }
+    /// Whether the block is closed (its span is the whole block).
+    pub fn closed(&self) -> bool {
+        !matches!(self, Frontmatter::Unterminated)
     }
 
     /// The fields: none unless the block is a YAML mapping.
     pub fn entries(&self) -> &[FmEntry] {
         match self {
-            Frontmatter::Fields { entries, .. } => entries,
-            Frontmatter::Unterminated | Frontmatter::Invalid { .. } => &[],
+            Frontmatter::Fields(entries) => entries,
+            Frontmatter::Unterminated | Frontmatter::Invalid(_) => &[],
         }
     }
 
     pub fn get(&self, key: &str) -> Option<&FmEntry> {
-        self.entries().iter().find(|e| e.key == key)
+        self.entries().iter().find(|e| *e.key == key)
     }
 }
 
 /// The frontmatter (§4.3): a YAML metadata block at the start of the file.
-pub(super) fn frontmatter(text: &str, base: usize, body: &Walker) -> Option<Frontmatter> {
+pub(super) fn frontmatter(text: &str, base: usize, body: &Walker) -> Option<Spanned<Frontmatter>> {
     let Some(span) = body.meta_block.clone().filter(|r| r.start == base) else {
         let rest = &text[base..];
-        let unterminated = rest.starts_with("---\n") || rest.starts_with("---\r\n") || rest == "---";
-        return unterminated.then_some(Frontmatter::Unterminated);
+        let opening =
+            ["---\n", "---\r\n"].into_iter().find(|o| rest.starts_with(o)).or((rest == "---").then_some("---"));
+        return opening.map(|o| Spanned::new(Frontmatter::Unterminated, base..base + o.len()));
     };
     // The closing `---` line's break too, so the body starts after it.
     let rest = &text[span.end..];
     let line_break = ["\r\n", "\n"].into_iter().find(|b| rest.starts_with(b)).map_or(0, str::len);
     let span = span.start..span.end + line_break;
     let yaml = body.meta_text.clone().unwrap_or(span.start..span.start);
-    Some(match parse_yaml(&text[yaml.clone()], yaml.start) {
-        Ok(entries) => Frontmatter::Fields { span, entries },
-        Err(reason) => Frontmatter::Invalid { span, reason },
-    })
+    let frontmatter = match parse_yaml(&text[yaml.clone()], yaml.start) {
+        Ok(entries) => Frontmatter::Fields(entries),
+        Err(reason) => Frontmatter::Invalid(reason),
+    };
+    Some(Spanned::new(frontmatter, span))
 }
 
 /// The `prereqs` links (§6.1): each string item `[[<slug>]]`. Any other item is no link,
 /// and lint reports it (`fm.field-type`).
-pub(super) fn frontmatter_links(fm: &Frontmatter) -> Vec<Link> {
-    let items = match fm.get("prereqs") {
-        Some(FmEntry { value: FmValue::List { items, .. }, .. }) => items.as_slice(),
+pub(super) fn frontmatter_links(fm: &Frontmatter) -> Vec<Spanned<Link>> {
+    let items = match fm.get("prereqs").map(|e| &e.value.node) {
+        Some(FmValue::List(items)) => items.as_slice(),
         _ => &[],
     };
-    let slug = |item: &FmValue| match item {
-        FmValue::Str { value, span } => Some(prereq(span.clone(), prereq_slug(value)?)),
+    let slug = |item: &Spanned<FmValue>| match &item.node {
+        FmValue::Str(value) => Some(prereq(item.span.clone(), prereq_slug(value)?)),
         _ => None,
     };
     items.iter().filter_map(slug).collect()
@@ -146,7 +128,7 @@ pub enum FmChange {
 pub fn rewrite_frontmatter(note: &Note, changes: &[FmChange]) -> Edit {
     let (span, block) = match &note.frontmatter {
         None => (note.body_start()..note.body_start(), ""),
-        Some(Frontmatter::Fields { span, .. }) => (span.clone(), &note.text[span.clone()]),
+        Some(f) if matches!(f.node, Frontmatter::Fields(_)) => (f.span.clone(), f.text(&note.text)),
         Some(_) => panic!("{}: broken frontmatter is not rewritten", note.path),
     };
 
@@ -253,7 +235,7 @@ fn parse_yaml(yaml: &str, offset: usize) -> Result<Vec<FmEntry>, String> {
     let mut entries = vec![];
     for (k, v) in map.iter() {
         let Some(key) = string(k) else { return Err("a key is not a string".into()) };
-        entries.push(FmEntry { key: key.to_string(), key_span: yaml.span(k), value: yaml.value(v) });
+        entries.push(FmEntry { key: Spanned::new(key.to_string(), yaml.span(k)), value: yaml.value(v) });
     }
     Ok(entries)
 }
@@ -268,18 +250,17 @@ fn string<'a>(n: &'a MarkedYaml) -> Option<&'a str> {
 
 /// YAML text at byte `offset` in the file, for converting saphyr's character
 /// positions to file byte offsets (§4.4).
-struct Source<'a> {
-    text: &'a str,
+struct Source {
     offset: usize,
     /// Character index -> byte index in `text`.
     bytes: Vec<usize>,
 }
 
-impl<'a> Source<'a> {
-    fn new(text: &'a str, offset: usize) -> Self {
+impl Source {
+    fn new(text: &str, offset: usize) -> Self {
         let mut bytes: Vec<usize> = text.char_indices().map(|(b, _)| b).collect();
         bytes.push(text.len());
-        Source { text, offset, bytes }
+        Source { offset, bytes }
     }
 
     fn span(&self, n: &MarkedYaml) -> Range<usize> {
@@ -287,20 +268,13 @@ impl<'a> Source<'a> {
         byte(n.span.start.index())..byte(n.span.end.index())
     }
 
-    fn value(&self, n: &MarkedYaml) -> FmValue {
-        let span = self.span(n);
-        let source = &self.text[span.start - self.offset..];
-        if let Some(s) = string(n) {
-            return FmValue::Str { value: s.to_string(), span };
-        }
-
-        match &n.data {
-            YamlData::Sequence(items) => {
-                let flow = source.starts_with('[');
-                FmValue::List { items: items.iter().map(|i| self.value(i)).collect(), span, flow }
-            }
-            _ => FmValue::Other { span },
-        }
+    fn value(&self, n: &MarkedYaml) -> Spanned<FmValue> {
+        let value = match (string(n), &n.data) {
+            (Some(s), _) => FmValue::Str(s.to_string()),
+            (None, YamlData::Sequence(items)) => FmValue::List(items.iter().map(|i| self.value(i)).collect()),
+            (None, _) => FmValue::Other,
+        };
+        Spanned::new(value, self.span(n))
     }
 }
 
@@ -320,8 +294,8 @@ mod tests {
         let t = "---\nid: 01ABC\nprereqs: [\"[[a]]\", \"[[二分]]\"]\ndigest: \"é x\"\n---\n# T\n";
         let n = p(t);
         let fm = n.frontmatter.as_ref().unwrap();
-        let FmValue::Str { span, .. } = &fm.get("digest").unwrap().value else { panic!() };
-        assert_eq!(&t[span.clone()], "\"é x\"");
+        let digest = &fm.get("digest").unwrap().value;
+        assert_eq!((&digest.node, digest.text(t)), (&FmValue::Str("é x".into()), "\"é x\""));
         let prereqs: Vec<_> = n.links.iter().filter(|l| l.form == LinkForm::Prereq).collect();
         assert_eq!(prereqs.len(), 2);
         assert_eq!(&t[prereqs[1].target.span.clone()], "\"[[二分]]\"");
@@ -378,19 +352,19 @@ mod tests {
     fn unquoted_prereq_is_nested_list() {
         let n = p("---\nprereqs: [[a]]\n---\n# T\n");
         let fm = n.frontmatter.unwrap();
-        let FmValue::List { items, .. } = &fm.get("prereqs").unwrap().value else { panic!() };
-        assert!(matches!(items[0], FmValue::List { .. }));
+        let FmValue::List(items) = &fm.get("prereqs").unwrap().value.node else { panic!() };
+        assert!(matches!(items[0].node, FmValue::List(_)));
     }
 
     #[test]
     fn duplicate_keys_rejected() {
         let n = p("---\nid: a\nid: b\n---\n# T\n");
-        assert!(matches!(n.frontmatter, Some(Frontmatter::Invalid { .. })));
+        assert!(matches!(n.frontmatter.unwrap().node, Frontmatter::Invalid(_)));
     }
 
     #[test]
     fn unterminated() {
         let n = p("---\nid: a\n# T\n");
-        assert_eq!(n.frontmatter, Some(Frontmatter::Unterminated));
+        assert_eq!(n.frontmatter, Some(Spanned::new(Frontmatter::Unterminated, 0..4)));
     }
 }

@@ -8,7 +8,7 @@ use super::{Ctx, update_code};
 use crate::config::{Editions, UpdateId};
 use crate::envelope::{Applicability, Diagnostic, Fix};
 use crate::id::Ulid;
-use crate::parse::{FmChange, FmValue, LinkForm, Note};
+use crate::parse::{FmChange, FmValue, LinkForm, Note, Spanned};
 use crate::path::VaultPath;
 
 /// A concept frontmatter field (m0 §6.1) and the editions it belongs to.
@@ -36,9 +36,9 @@ fn concepts_with_fields<'a>(ctx: &'a Ctx) -> impl Iterator<Item = &'a Note> {
 pub(super) fn concept_fields(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     for note in concepts_with_fields(ctx) {
         for e in note.frontmatter.iter().flat_map(|f| f.entries()) {
-            if !CONCEPT_FIELDS.iter().any(|f| f.name == e.key && f.editions.contains(ctx.mark)) {
-                let msg = format!("field `{}` is not allowed in a concept", e.key);
-                out.push(error(note, "fm.unknown-field", msg).at(&note.text, e.key_span.clone()));
+            if !CONCEPT_FIELDS.iter().any(|f| f.name == *e.key && f.editions.contains(ctx.mark)) {
+                let msg = format!("field `{}` is not allowed in a concept", *e.key);
+                out.push(error(note, "fm.unknown-field", msg).at(&note.text, e.key.span.clone()));
             }
         }
         out.extend(id_field(note));
@@ -62,12 +62,12 @@ fn frontmatter_fix(note: &Note, applicability: Applicability, message: &str, cha
 
 /// `id`: present, a string, a ULID. A missing one gets a fix adding a new id, first.
 fn id_field(note: &Note) -> Option<Diagnostic> {
-    match note.fm("id") {
-        Some(FmValue::Str { value, span }) => {
+    match note.fm("id").map(|v| (&v.node, &v.span)) {
+        Some((FmValue::Str(value), span)) => {
             let e = value.parse::<Ulid>().err()?;
             Some(error(note, "fm.id-format", format!("`id` {e}")).at(&note.text, span.clone()))
         }
-        Some(v) => Some(wrong_type(note, "id", "a string", v.span())),
+        Some((_, span)) => Some(wrong_type(note, "id", "a string", span.clone())),
         None => {
             // Only concepts whose frontmatter is a mapping, or absent, get here.
             let message = if note.frontmatter.is_some() { "add a new id" } else { "add frontmatter with a new id" };
@@ -82,26 +82,26 @@ fn id_field(note: &Note) -> Option<Diagnostic> {
 fn prereqs_field(note: &Note) -> Vec<Diagnostic> {
     let wrong = |span| wrong_type(note, "prereqs", "a list of `\"[[slug]]\"`", span).with_hint("write \"[[slug]]\"");
     let quote = || frontmatter_fix(note, Applicability::Safe, "quote it", FmChange::QuotePrereqs);
-    match note.fm("prereqs") {
+    match note.fm("prereqs").map(|v| (&v.node, &v.span)) {
         None => vec![],
-        Some(FmValue::List { items, .. }) => items
+        Some((FmValue::List(items), _)) => items
             .iter()
-            .filter(|i| !note.links.iter().any(|l| l.form == LinkForm::Prereq && l.span == i.span()))
+            .filter(|i| !note.links.iter().any(|l| l.form == LinkForm::Prereq && l.span == i.span))
             .map(|i| match unquoted_prereq(i) {
-                true => wrong(i.span()).with_fix(quote()),
-                false => wrong(i.span()),
+                true => wrong(i.span.clone()).with_fix(quote()),
+                false => wrong(i.span.clone()),
             })
             .collect(),
-        Some(v) => vec![wrong(v.span())],
+        Some((_, span)) => vec![wrong(span.clone())],
     }
 }
 
 /// Whether a `prereqs` item is an unquoted `[[slug]]`, which YAML reads as a list
 /// holding a list holding the slug.
 fn unquoted_prereq(item: &FmValue) -> bool {
-    let FmValue::List { items, .. } = item else { return false };
-    let [FmValue::List { items, .. }] = items.as_slice() else { return false };
-    matches!(items.as_slice(), [FmValue::Str { value, .. }] if value.parse::<crate::id::Slug>().is_ok())
+    let FmValue::List(items) = item else { return false };
+    let [Spanned { node: FmValue::List(items), .. }] = items.as_slice() else { return false };
+    matches!(items.as_slice(), [Spanned { node: FmValue::Str(value), .. }] if value.parse::<crate::id::Slug>().is_ok())
 }
 
 /// Concept fields a pending vault update removes (a row with `Editions::until` an
@@ -110,18 +110,18 @@ fn unquoted_prereq(item: &FmValue) -> bool {
 pub(super) fn outdated_fields(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     for note in concepts_with_fields(ctx) {
         for e in note.frontmatter.iter().flat_map(|f| f.entries()) {
-            let Some(field) = CONCEPT_FIELDS.iter().find(|f| f.name == e.key && f.editions.contains(ctx.mark)) else {
+            let Some(field) = CONCEPT_FIELDS.iter().find(|f| f.name == *e.key && f.editions.contains(ctx.mark)) else {
                 continue;
             };
             let Some(update) = field.editions.until else { continue };
             let path = note.path.as_str();
-            let change = FmChange::RemoveField(e.key.clone());
-            let fix = frontmatter_fix(note, Applicability::Unsafe, &format!("delete `{}`", e.key), change);
+            let change = FmChange::RemoveField(e.key.node.clone());
+            let fix = frontmatter_fix(note, Applicability::Unsafe, &format!("delete `{}`", *e.key), change);
             let code = update_code(update);
             out.push(
-                Diagnostic::warning(&code, format!("vault update {update} removes the concept field `{}`", e.key))
+                Diagnostic::warning(&code, format!("vault update {update} removes the concept field `{}`", *e.key))
                     .at_path(path)
-                    .at(&note.text, e.key_span.clone())
+                    .at(&note.text, e.key.span.clone())
                     .with_hint(format!(
                         "offer {update} with `loci updates` if it is waiting; it applies with `loci lint --fix --only {code}`"
                     ))

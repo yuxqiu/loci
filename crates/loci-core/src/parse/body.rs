@@ -37,7 +37,7 @@ pub(super) fn walk_body(text: &str, base: usize) -> Walker<'_> {
             }
             Event::InlineMath(_) | Event::DisplayMath(_) => w.counts.math += 1,
             Event::Rule | Event::Html(_) if w.stack.is_empty() => {
-                w.top_blocks.push(TopBlock { kind: BlockType::Other, span: range })
+                w.top_blocks.push(Spanned::new(BlockType::Other, range))
             }
             _ => {}
         }
@@ -56,11 +56,11 @@ enum Open {
 /// A walk over the markdown events: what it collects, and its state between events.
 #[derive(Default)]
 pub(super) struct Walker<'a> {
-    pub(super) headings: Vec<Heading>,
-    pub(super) top_blocks: Vec<TopBlock>,
-    pub(super) items: Vec<ListItem>,
-    pub(super) links: Vec<Link>,
-    pub(super) markdown_links: Vec<MarkdownLink>,
+    pub(super) headings: Vec<Spanned<Heading>>,
+    pub(super) top_blocks: Vec<Spanned<BlockType>>,
+    pub(super) items: Vec<Spanned<ListItem>>,
+    pub(super) links: Vec<Spanned<Link>>,
+    pub(super) markdown_links: Vec<Spanned<MarkdownLink>>,
     pub(super) counts: Counts,
     /// The top-level paragraphs, where block ids may end (§4.6).
     pub(super) paragraphs: Vec<Range<usize>>,
@@ -71,8 +71,9 @@ pub(super) struct Walker<'a> {
     text: &'a str,
     stack: Vec<Open>,
     in_metadata: bool,
-    /// The heading being read, and the extent of the events inside it so far.
-    heading: Option<Option<Range<usize>>>,
+    /// The heading being read: its level, its bytes, and the extent of the events
+    /// inside it so far.
+    heading: Option<(u8, Range<usize>, Option<Range<usize>>)>,
     /// An item was just opened: its next event, unless it ends the item, starts its
     /// content (after the list marker).
     item_open: bool,
@@ -84,7 +85,8 @@ pub(super) struct Walker<'a> {
 impl Walker<'_> {
     fn item_content(&mut self, event: &Event, range: &Range<usize>) {
         if std::mem::take(&mut self.item_open) && !matches!(event, Event::End(_)) {
-            self.items.last_mut().expect("an item is open").content_start = range.start;
+            let item = self.items.last_mut().expect("an item is open");
+            item.node.marker.span.end = range.start;
         }
     }
 
@@ -93,7 +95,7 @@ impl Walker<'_> {
         if let Event::End(TagEnd::Link | TagEnd::Image) = event {
             let (markdown, label) = self.links_open.pop().expect("a link is open");
             if let (Some(i), Some(label)) = (markdown, label) {
-                self.markdown_links[i].label = label;
+                self.markdown_links[i].node.label.span = label;
             }
             return;
         }
@@ -107,17 +109,18 @@ impl Walker<'_> {
     /// A heading's content is the extent of the events inside it; at its end, its text
     /// and form follow from that.
     fn heading_content(&mut self, event: &Event, range: &Range<usize>) {
-        let Some(content) = &mut self.heading else { return };
-        let h = self.headings.last_mut().expect("a heading is open");
+        let Some((level, span, content)) = &mut self.heading else { return };
         if let Event::End(TagEnd::Heading(_)) = event {
             let text = self.text;
             // No content (`#`): an empty range where the content would end.
-            let end = h.span.start + text[h.span.clone()].trim_end().len();
-            h.content = content.take().unwrap_or(end..end);
-            h.text = text[h.content.clone()].lines().collect::<Vec<_>>().join("\n");
-            h.setext = !text[h.span.start..h.content.start].trim_start_matches(' ').starts_with('#');
+            let end = span.start + text[span.clone()].trim_end().len();
+            let content = content.take().unwrap_or(end..end);
+            let setext = !text[span.start..content.start].trim_start_matches(' ').starts_with('#');
+            let joined = text[content.clone()].lines().collect::<Vec<_>>().join("\n");
+            let heading = Heading { level: *level, setext, content: Spanned::new(joined, content) };
+            self.headings.push(Spanned::new(heading, span.clone()));
             self.heading = None;
-        } else if h.span.start <= range.start {
+        } else if span.start <= range.start {
             // pulldown-cmark reports a task-list marker inside the heading that follows it,
             // with the marker's own range, before the heading: only events within count.
             *content = Some(content.as_ref().map_or(range.clone(), |c| c.start..range.end));
@@ -131,7 +134,7 @@ impl Walker<'_> {
         let top_blocks = &mut self.top_blocks;
         let mut top = |block: BlockType| {
             if top_level {
-                top_blocks.push(TopBlock { kind: block, span: range.clone() });
+                top_blocks.push(Spanned::new(block, range.clone()));
             }
         };
 
@@ -145,10 +148,7 @@ impl Walker<'_> {
             Tag::Heading { level, .. } => {
                 let level = level as u8;
                 top(BlockType::Heading(level));
-                let heading =
-                    Heading { level, text: String::new(), span: range.clone(), content: range, setext: false };
-                self.headings.push(heading);
-                self.heading = Some(None);
+                self.heading = Some((level, range, None));
                 Open::Other
             }
             Tag::Paragraph => {
@@ -162,9 +162,10 @@ impl Walker<'_> {
             }
             Tag::Item => {
                 let depth = self.stack.iter().filter(|o| matches!(o, Open::List)).count();
-                // The marker's end is found from the item's first event ([`Walker::item_content`]).
-                let item = ListItem { span: range.clone(), depth, lead: range.clone(), content_start: range.end };
-                self.items.push(item);
+                // The marker's end is found from the item's first event ([`Walker::item_content`]),
+                // the lead from its first block ([`Walker::end_item_lead`]).
+                let (marker, lead) = (Spanned::new(Marker, range.clone()), Spanned::new(Lead, range.clone()));
+                self.items.push(Spanned::new(ListItem { depth, marker, lead }, range));
                 self.item_open = true;
                 Open::Item { idx: self.items.len() - 1, saw_child: false }
             }
@@ -215,15 +216,15 @@ impl Walker<'_> {
             return;
         }
         let item = &mut self.items[*idx];
-        item.lead = if matches!(tag, Tag::Paragraph) { range.clone() } else { item.span.start..range.start };
+        item.node.lead.span = if matches!(tag, Tag::Paragraph) { range.clone() } else { item.span.start..range.start };
     }
 }
 
 /// Records the link at `range`: a wikilink in `links`, a markdown link to a vault file
 /// in `markdown_links`. Returns the index of a new markdown link.
 fn handle_link(
-    links: &mut Vec<Link>,
-    markdown_links: &mut Vec<MarkdownLink>,
+    links: &mut Vec<Spanned<Link>>,
+    markdown_links: &mut Vec<Spanned<MarkdownLink>>,
     text: &str,
     link_type: LinkType,
     dest: &str,
@@ -239,12 +240,8 @@ fn handle_link(
         LinkType::Autolink | LinkType::Email => None,
         _ if URL_SCHEME.is_match(dest) => None,
         _ => {
-            markdown_links.push(MarkdownLink {
-                label: range.end..range.end,
-                span: range,
-                url: dest.to_string(),
-                image,
-            });
+            let label = Spanned::new(Label, range.end..range.end);
+            markdown_links.push(Spanned::new(MarkdownLink { url: dest.to_string(), image, label }, range));
             Some(markdown_links.len() - 1)
         }
     }

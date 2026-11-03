@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::envelope::Refusal;
 use crate::id::Slug;
-use crate::parse::{self, Fragment, Link, LinkForm, Names, Note};
+use crate::parse::{self, Fragment, Link, LinkForm, Names, Note, Spanned};
 use crate::path::VaultPath;
 use crate::vault::{self, Kind};
 
@@ -140,7 +140,7 @@ impl Index {
 
     /// Where `link` in note `from` points, ignoring its fragment: a note or file path,
     /// or `None` when it does not resolve.
-    pub fn link_target(&self, from: &Note, link: &Link) -> Option<VaultPath> {
+    pub fn link_target(&self, from: &Note, link: &Spanned<Link>) -> Option<VaultPath> {
         self.resolve_target(from, link).ok().map(|r| r.path().clone())
     }
 
@@ -179,7 +179,7 @@ impl Index {
     }
 
     /// Every link that points at `path`, as (linking note, link), in note path order.
-    pub fn incoming(&self, path: &VaultPath) -> Vec<(&Note, &Link)> {
+    pub fn incoming(&self, path: &VaultPath) -> Vec<(&Note, &Spanned<Link>)> {
         let mut out = vec![];
         for note in self.markdown.values() {
             for link in &note.links {
@@ -251,7 +251,7 @@ impl Index {
 
     /// Resolves a body or `prereqs` link from note `from` (§5.3), then checks its
     /// fragment (§5.4).
-    pub fn resolve(&self, from: &Note, link: &Link) -> Result<Resolved, LinkError> {
+    pub fn resolve(&self, from: &Note, link: &Spanned<Link>) -> Result<Resolved, LinkError> {
         let resolved = self.resolve_target(from, link)?;
         if let (Some(frag), Resolved::Note(path)) = (&link.target.fragment, &resolved) {
             self.check_fragment(path, frag)?;
@@ -260,7 +260,7 @@ impl Index {
     }
 
     /// The note or file `link` points at (§5.3), ignoring its fragment.
-    fn resolve_target(&self, from: &Note, link: &Link) -> Result<Resolved, LinkError> {
+    fn resolve_target(&self, from: &Note, link: &Spanned<Link>) -> Result<Resolved, LinkError> {
         match &link.target.names {
             Names::ThisNote => Ok(Resolved::Note(from.path.clone())),
             Names::Slug(slug) => self.resolve_slug(slug),
@@ -309,9 +309,9 @@ impl Index {
     fn check_fragment(&self, path: &VaultPath, frag: &Fragment) -> Result<(), LinkError> {
         let note = &self.markdown[path];
         match frag {
-            Fragment::Block(id) if note.block_ids.iter().any(|b| &b.id == id) => Ok(()),
+            Fragment::Block(id) if note.blocks.iter().any(|b| *b.id == *id) => Ok(()),
             Fragment::Block(_) => Err(LinkError::Block),
-            Fragment::Heading(h) if note.headings.iter().any(|n| heading_key(&n.text) == heading_key(h)) => Ok(()),
+            Fragment::Heading(h) if note.headings.iter().any(|n| heading_key(&n.content) == heading_key(h)) => Ok(()),
             Fragment::Heading(_) => Err(LinkError::Heading),
         }
     }
@@ -379,7 +379,7 @@ mod tests {
     use super::*;
     use crate::envelope::line_col;
 
-    fn first_link(i: &Index, path: &str) -> (Note, Link) {
+    fn first_link(i: &Index, path: &str) -> (Note, Spanned<Link>) {
         let n = i.markdown[path].clone();
         let l = n.links[0].clone();
         (n, l)

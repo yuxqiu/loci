@@ -4,17 +4,16 @@ use std::ops::Range;
 
 use loci_core::id::Ulid;
 use loci_core::index::Index;
-use loci_core::parse::{BlockKind, BlockType, Note};
+use loci_core::parse::{BlockKind, BlockType, Note, Spanned};
 use loci_core::path::VaultPath;
 
 pub const SECTION: &str = "Cards";
 
+/// A card, spanning its list item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Card {
     /// Concept note path.
     pub path: VaultPath,
-    /// Byte range of the list item.
-    pub range: Range<usize>,
     pub id: CardId,
     pub question: String,
     pub answer: String,
@@ -47,15 +46,15 @@ impl CardId {
     }
 }
 
-/// A problem with a `## Cards` section, reported by `loci learn lint`.
+/// A problem with a `## Cards` section, reported by `loci learn lint`, spanning what
+/// does not belong.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormatIssue {
     pub path: VaultPath,
-    pub range: Range<usize>,
 }
 
 /// Every card in the vault, by note path, then in note order, plus format issues.
-pub fn all(index: &Index) -> (Vec<Card>, Vec<FormatIssue>) {
+pub fn all(index: &Index) -> (Vec<Spanned<Card>>, Vec<Spanned<FormatIssue>>) {
     let mut cards = vec![];
     let mut issues = vec![];
     for note in index.concepts() {
@@ -66,40 +65,39 @@ pub fn all(index: &Index) -> (Vec<Card>, Vec<FormatIssue>) {
     (cards, issues)
 }
 
-pub fn of_note(note: &Note) -> (Vec<Card>, Vec<FormatIssue>) {
+pub fn of_note(note: &Note) -> (Vec<Spanned<Card>>, Vec<Spanned<FormatIssue>>) {
     let found = note.h2_sections(SECTION);
     let mut issues = vec![];
+    let issue = |span: &Range<usize>| Spanned::new(FormatIssue { path: note.path.clone() }, span.clone());
     if let Some((second, _)) = found.get(1) {
-        issues.push(FormatIssue { path: note.path.clone(), range: second.span.clone() });
+        issues.push(issue(&second.span));
     }
 
     let (items, blocks) = note.section_top_level(SECTION);
 
     // Anything at the top level of the section other than a list is a format issue.
-    for range in blocks.into_iter().filter(|b| b.kind != BlockType::List).map(|b| &b.span) {
-        issues.push(FormatIssue { path: note.path.clone(), range: range.clone() });
+    for range in blocks.into_iter().filter(|b| b.node != BlockType::List).map(|b| &b.span) {
+        issues.push(issue(range));
     }
 
     let mut cards = vec![];
     for item in items {
-        let id = note.block_ids.iter().find(|b| b.kind == BlockKind::Item && b.block == item.span);
+        let id = note.blocks.iter().find(|b| b.kind == BlockKind::Item && b.span == item.span);
         // The item's content, after its list marker, without its block id (cut by its
         // byte range).
-        let content = item.content_start..item.span.end;
+        let content = item.marker.span.end..item.span.end;
         let mut raw = note.text[content.clone()].to_string();
         if let Some(b) = id {
-            let (start, end) = (b.span.start - content.start, b.span.end - content.start);
+            let (start, end) = (b.id.span.start - content.start, b.id.span.end - content.start);
             raw = format!("{}{}", raw[..start].trim_end(), &raw[end..]);
         }
         match split(&raw) {
-            Some((question, answer)) => cards.push(Card {
-                path: note.path.clone(),
-                range: item.span.clone(),
-                id: CardId::of(id.map(|b| b.id.as_str())),
-                question,
-                answer,
-            }),
-            None => issues.push(FormatIssue { path: note.path.clone(), range: item.span.clone() }),
+            Some((question, answer)) => {
+                let card =
+                    Card { path: note.path.clone(), id: CardId::of(id.map(|b| b.id.as_str())), question, answer };
+                cards.push(Spanned::new(card, item.span.clone()));
+            }
+            None => issues.push(issue(&item.span)),
         }
     }
 
@@ -128,7 +126,7 @@ mod tests {
     use loci_core::parse::parse;
     use loci_core::vault::Kind;
 
-    fn cards(body: &str) -> (Vec<Card>, Vec<FormatIssue>) {
+    fn cards(body: &str) -> (Vec<Spanned<Card>>, Vec<Spanned<FormatIssue>>) {
         let text = format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# T\n\n{body}");
         of_note(&parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), Kind::Concept, text))
     }

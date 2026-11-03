@@ -6,7 +6,7 @@
 
 use std::ops::Range;
 
-use loci_core::parse::{FmValue, Frontmatter, Note, parse, rewrite_frontmatter};
+use loci_core::parse::{FmValue, Frontmatter, Note, Spanned, parse, rewrite_frontmatter};
 use loci_core::path::VaultPath;
 use loci_core::vault::Kind;
 use proptest::prelude::*;
@@ -99,12 +99,13 @@ fn markdown() -> impl Strategy<Value = String> {
 fn meaning(n: &Note) -> (Vec<(String, String)>, Vec<String>, &str) {
     fn value(v: &FmValue) -> String {
         match v {
-            FmValue::Str { value, .. } => format!("{value:?}"),
-            FmValue::List { items, .. } => format!("[{}]", items.iter().map(value).collect::<Vec<_>>().join(",")),
-            FmValue::Other { .. } => "other".into(),
+            FmValue::Str(value) => format!("{value:?}"),
+            FmValue::List(items) => format!("[{}]", items.iter().map(|i| value(i)).collect::<Vec<_>>().join(",")),
+            FmValue::Other => "other".into(),
         }
     }
-    let fields = n.frontmatter.iter().flat_map(|f| f.entries()).map(|e| (e.key.clone(), value(&e.value))).collect();
+    let fields =
+        n.frontmatter.iter().flat_map(|f| f.entries()).map(|e| (e.key.node.clone(), value(&e.value))).collect();
     let links = n.links.iter().map(|l| format!("{:?} {:?}", l.form, l.target.names)).collect();
     (fields, links, &n.text[n.body_start()..])
 }
@@ -115,11 +116,11 @@ fn check(text: &str, r: &Range<usize>, within: &Range<usize>, what: &str) -> Res
     Ok(())
 }
 
-fn check_value(text: &str, v: &FmValue, within: &Range<usize>) -> Result<(), TestCaseError> {
-    check(text, &v.span(), within, "frontmatter value")?;
-    if let FmValue::List { items, span, .. } = v {
+fn check_value(text: &str, v: &Spanned<FmValue>, within: &Range<usize>) -> Result<(), TestCaseError> {
+    check(text, &v.span, within, "frontmatter value")?;
+    if let FmValue::List(items) = &v.node {
         for item in items {
-            check_value(text, item, span)?;
+            check_value(text, item, &v.span)?;
         }
     }
     Ok(())
@@ -137,33 +138,34 @@ proptest! {
             check(&text, &l.span, &all, "link")?;
             check(&text, &l.target.span, &l.span, "link target")?;
             if let Some(label) = &l.label {
-                check(&text, label, &l.span, "link label")?;
+                check(&text, &label.span, &l.span, "link label")?;
             }
         }
         for h in &n.headings {
             check(&text, &h.span, &all, "heading")?;
-            check(&text, &h.content, &h.span, "heading content")?;
+            check(&text, &h.content.span, &h.span, "heading content")?;
         }
         for i in &n.items {
             check(&text, &i.span, &all, "item")?;
-            check(&text, &i.lead, &i.span, "item lead")?;
-            prop_assert!(i.span.start <= i.content_start && i.content_start <= i.span.end, "item content start");
+            check(&text, &i.lead.span, &i.span, "item lead")?;
+            check(&text, &i.marker.span, &i.span, "item marker")?;
         }
-        for b in &n.block_ids {
-            check(&text, &b.block, &all, "block")?;
-            check(&text, &b.span, &b.block, "block id")?;
+        for b in &n.blocks {
+            check(&text, &b.span, &all, "block")?;
+            check(&text, &b.id.span, &b.span, "block id")?;
         }
         for b in &n.top_blocks {
             check(&text, &b.span, &all, "top-level block")?;
         }
         for m in &n.markdown_links {
             check(&text, &m.span, &all, "markdown link")?;
+            check(&text, &m.label.span, &m.span, "markdown link label")?;
         }
-        if let Some(span) = n.frontmatter.as_ref().and_then(|f| f.span()) {
-            check(&text, &span, &all, "frontmatter")?;
-            for e in n.frontmatter.iter().flat_map(|f| f.entries()) {
-                check(&text, &e.key_span, &span, "frontmatter key")?;
-                check_value(&text, &e.value, &span)?;
+        if let Some(fm) = &n.frontmatter {
+            check(&text, &fm.span, &all, "frontmatter")?;
+            for e in fm.entries() {
+                check(&text, &e.key.span, &fm.span, "frontmatter key")?;
+                check_value(&text, &e.value, &fm.span)?;
             }
         }
     }
@@ -172,7 +174,7 @@ proptest! {
     fn a_rewrite_keeps_the_meaning(text in with_frontmatter()) {
         let path = VaultPath::new("concepts/a/x.md".into()).unwrap();
         let n = parse(&path, Kind::Concept, text.clone());
-        prop_assume!(matches!(n.frontmatter, Some(Frontmatter::Fields { .. })));
+        prop_assume!(n.frontmatter.as_ref().is_some_and(|f| matches!(f.node, Frontmatter::Fields(_))));
         let edit = rewrite_frontmatter(&n, &[]);
         let out = loci_core::splice::apply(&text, vec![edit]).unwrap();
         let after = parse(&path, Kind::Concept, out.clone());

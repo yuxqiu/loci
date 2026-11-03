@@ -44,7 +44,7 @@ fn parse(list: &str) -> Vec<Update> {
     (0..note.headings.len())
         .filter(|&i| note.headings[i].level == 2)
         .map(|i| {
-            let mut parts = note.headings[i].text.splitn(3, " · ");
+            let mut parts = note.headings[i].content.splitn(3, " · ");
             let id = parts.next().expect("an id").parse().expect("ids are `u` and four digits");
             let title = parts.nth(1).expect("a date and a title").to_string();
             Update { id, title, text: format!("{}\n", list[note.section(i)].trim_end()) }

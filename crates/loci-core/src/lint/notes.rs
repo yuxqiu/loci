@@ -19,18 +19,23 @@ pub(super) fn note_format(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
             let fix = Fix::new(Applicability::Safe, "delete the byte-order mark").edit(path, 0..BOM.len(), "");
             out.push(d("file.bom", "file starts with a byte-order mark".into()).with_fix(fix));
         }
-        match &note.frontmatter {
-            Some(Frontmatter::Unterminated) => {
+        let Some(fm) = &note.frontmatter else { continue };
+        match &fm.node {
+            Frontmatter::Unterminated => {
                 out.push(d("fm.unterminated", "frontmatter opened with `---` is not a closed block".into()))
             }
-            Some(Frontmatter::Invalid { span, reason }) => {
-                out.push(d("fm.yaml", format!("frontmatter is not a YAML mapping: {reason}")).at(text, span.clone()));
+            Frontmatter::Invalid(reason) => {
+                out.push(
+                    d("fm.yaml", format!("frontmatter is not a YAML mapping: {reason}")).at(text, fm.span.clone()),
+                );
             }
-            Some(Frontmatter::Fields { .. }) | None => {}
+            Frontmatter::Fields(_) => {}
         }
-        if let Some(span) = note.frontmatter.as_ref().and_then(Frontmatter::span).filter(|_| note.kind != Kind::Concept)
-        {
-            out.push(d("fm.not-allowed", format!("{} files have no frontmatter", note.kind.name())).at(text, span));
+        if fm.closed() && note.kind != Kind::Concept {
+            out.push(
+                d("fm.not-allowed", format!("{} files have no frontmatter", note.kind.name()))
+                    .at(text, fm.span.clone()),
+            );
         }
     }
 }
@@ -54,21 +59,21 @@ pub(super) fn note_size(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
 pub(super) fn block_ids(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     for note in managed(ctx) {
         let mut seen: BTreeSet<&str> = BTreeSet::new();
-        for b in &note.block_ids {
+        for b in &note.blocks {
             if !seen.insert(b.id.as_str()) {
                 // Unsafe: a link may mean this occurrence.
                 let fix = Fix::new(Applicability::Unsafe, "give this block a new id").edit(
                     note.path.as_str(),
-                    b.span.clone(),
+                    b.id.span.clone(),
                     format!("^{}", Ulid::generate()),
                 );
                 out.push(
                     Diagnostic::error(
                         "block.id-duplicate",
-                        format!("block id `^{}` appears more than once in this note", b.id),
+                        format!("block id `^{}` appears more than once in this note", *b.id),
                     )
                     .at_path(note.path.as_str())
-                    .at(&note.text, b.span.clone())
+                    .at(&note.text, b.id.span.clone())
                     .with_fix(fix),
                 );
             }
@@ -95,7 +100,7 @@ pub(super) fn h1(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
                 Diagnostic::error("h1.multiple", "more than one H1").at_path(path).at(&note.text, h1s[1].span.clone()),
             );
         }
-        if !note.top_blocks.first().is_some_and(|b| b.kind == BlockType::Heading(1)) {
+        if !note.top_blocks.first().is_some_and(|b| b.node == BlockType::Heading(1)) {
             out.push(
                 Diagnostic::error("h1.not-first", "the H1 is not the first block after the frontmatter")
                     .at_path(path)

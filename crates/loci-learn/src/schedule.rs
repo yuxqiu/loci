@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use fsrs::{FSRS, FSRS6_DEFAULT_DECAY, FSRSItem, FSRSReview, MemoryState, current_retrievability};
 use jiff::{Timestamp, ToSpan, tz::TimeZone};
 use loci_core::id::Ulid;
+use loci_core::parse::Spanned;
 
 use crate::cards::Card;
 use crate::reviewlog::{Grade, Line, Subject};
@@ -94,7 +95,7 @@ pub enum Estimate {
 
 /// A concept's estimate and the lines it was computed from (§4.2).
 pub fn estimate<'a>(
-    note_cards: &[Card],
+    note_cards: &[Spanned<Card>],
     concept: Ulid,
     lines: &'a [Line],
     scheduler: &Scheduler,
@@ -127,15 +128,15 @@ pub fn estimate<'a>(
 /// Cards for a session (§2.6 step 3): due cards by due time, then new cards in the
 /// order of `all` ([`crate::cards::all`]'s order: by note path, then in note order).
 pub fn select<'a>(
-    all: &'a [Card],
+    all: &'a [Spanned<Card>],
     lines: &[Line],
     scheduler: &Scheduler,
     new_per_day: u32,
     now: Timestamp,
-) -> (Vec<&'a Card>, usize) {
+) -> (Vec<&'a Spanned<Card>>, usize) {
     let by_card = lines_by_card(lines);
-    let mut due: Vec<(Timestamp, &Card)> = vec![];
-    let mut fresh: Vec<&Card> = vec![];
+    let mut due: Vec<(Timestamp, &Spanned<Card>)> = vec![];
+    let mut fresh: Vec<&Spanned<Card>> = vec![];
     for c in all {
         let Some(id) = c.id.valid() else { continue };
         match by_card.get(&id).and_then(|ls| scheduler.state(ls)) {
@@ -151,7 +152,7 @@ pub fn select<'a>(
         by_card.values().filter(|ls| ls.first().is_some_and(|l| l.t.to_zoned(TimeZone::UTC).date() == today)).count();
     let allowance = (new_per_day as usize).saturating_sub(introduced_today);
     let new_count = fresh.len().min(allowance);
-    let mut out: Vec<&Card> = due.into_iter().map(|(_, c)| c).collect();
+    let mut out: Vec<&Spanned<Card>> = due.into_iter().map(|(_, c)| c).collect();
     out.extend(fresh.into_iter().take(new_count));
     (out, new_count)
 }
@@ -200,14 +201,9 @@ mod tests {
         assert!(a.due < e.due);
     }
 
-    fn card(path: &str, n: u8) -> Card {
-        Card {
-            path: loci_core::path::VaultPath::new(path.to_string()).unwrap(),
-            range: 0..0,
-            id: CardId::Valid(id(n)),
-            question: "q".into(),
-            answer: "a".into(),
-        }
+    fn card(path: &str, n: u8) -> Spanned<Card> {
+        let path = loci_core::path::VaultPath::new(path.to_string()).unwrap();
+        Spanned::new(Card { path, id: CardId::Valid(id(n)), question: "q".into(), answer: "a".into() }, 0..0)
     }
 
     fn card_line(card: u8, t: &str, grade: Grade) -> Line {

@@ -3,7 +3,7 @@
 use super::{Ctx, managed};
 use crate::envelope::{Applicability, Diagnostic, Fix};
 use crate::index::{Index, LinkError};
-use crate::parse::{FmChange, Link, LinkForm, MarkdownLink, Note};
+use crate::parse::{FmChange, Link, LinkForm, MarkdownLink, Note, Spanned};
 
 pub(super) fn links(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     for note in managed(ctx) {
@@ -14,7 +14,7 @@ pub(super) fn links(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
 
 /// `link.markdown` for a markdown link to a vault file, with the wikilink that replaces
 /// it as the fix.
-fn markdown_link(note: &Note, m: &MarkdownLink) -> Diagnostic {
+fn markdown_link(note: &Note, m: &Spanned<MarkdownLink>) -> Diagnostic {
     let (path, text) = (note.path.as_str(), note.text.as_str());
     // Notes are linked without `.md`; other files keep their extension.
     let url = m.url.strip_prefix("./").unwrap_or(&m.url);
@@ -23,7 +23,7 @@ fn markdown_link(note: &Note, m: &MarkdownLink) -> Diagnostic {
     let wiki = format!("{bang}[[{target}]]");
 
     // The link text becomes the label, unless it only repeats the target.
-    let label = text[m.label.clone()].trim();
+    let label = m.label.text(text).trim();
     let fixed = if label.is_empty() || label == target { wiki.clone() } else { format!("{bang}[[{target}|{label}]]") };
     // A percent-encoded URL (`a%20b.md`) names a file only once decoded: a guess.
     let applicability = if url.contains('%') { Applicability::Unsafe } else { Applicability::Safe };
@@ -37,7 +37,7 @@ fn markdown_link(note: &Note, m: &MarkdownLink) -> Diagnostic {
 }
 
 /// The diagnostic for a link that does not resolve (§5.3, §5.4), if it does not.
-fn unresolved(index: &Index, note: &Note, link: &Link) -> Option<Diagnostic> {
+fn unresolved(index: &Index, note: &Note, link: &Spanned<Link>) -> Option<Diagnostic> {
     let at = |code: &str, msg: String| {
         Diagnostic::error(code, msg).at_path(note.path.as_str()).at(&note.text, link.target.span.clone())
     };
@@ -48,7 +48,7 @@ fn unresolved(index: &Index, note: &Note, link: &Link) -> Option<Diagnostic> {
 
         LinkError::Dangling { hint, closest } => {
             // A prereq is named by its slug, not its YAML string.
-            let shown = if link.form == LinkForm::Prereq { target } else { link.written(&note.text) };
+            let shown = if link.form == LinkForm::Prereq { target } else { link.target.text(&note.text) };
             let mut diag = at("link.dangling", format!("`{shown}` does not resolve"));
             diag.hint = hint;
             if let Some(slug) = closest {
@@ -75,7 +75,7 @@ fn unresolved(index: &Index, note: &Note, link: &Link) -> Option<Diagnostic> {
                 .and_then(|p| index.parsed(&p))
                 .iter()
                 .flat_map(|t| &t.headings)
-                .map(|h| h.text.as_str())
+                .map(|h| h.content.as_str())
                 .collect();
             let hint = if headings.is_empty() {
                 "it has no headings".to_string()
@@ -95,11 +95,11 @@ fn unresolved(index: &Index, note: &Note, link: &Link) -> Option<Diagnostic> {
 }
 
 /// A link's fragment as written after the `#`.
-fn fragment(link: &Link) -> String {
+fn fragment(link: &Spanned<Link>) -> String {
     link.target.fragment.as_ref().map(ToString::to_string).unwrap_or_default()
 }
 
 /// What `link` names, for messages: its slug or path, or the linking note's own name.
-fn target_name<'a>(from: &'a Note, link: &'a Link) -> &'a str {
+fn target_name<'a>(from: &'a Note, link: &'a Spanned<Link>) -> &'a str {
     link.target.names.name().unwrap_or_else(|| from.path.stem())
 }

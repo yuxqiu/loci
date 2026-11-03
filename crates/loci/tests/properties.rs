@@ -181,7 +181,7 @@ proptest! {
                 prop_assert_eq!(
                     r2.as_ref().map(|x| x.path().to_string()),
                     Ok(mapped(r.path().as_str())),
-                    "mv {} {}: `{}` in {} -> `{}`\n{}", from, to, old.written(&note.text), note.path, new.written(&new_note.text), new_note.text
+                    "mv {} {}: `{}` in {} -> `{}`\n{}", from, to, old.target.text(&note.text), note.path, new.target.text(&new_note.text), new_note.text
                 );
             }
         }
@@ -219,7 +219,7 @@ proptest! {
             for (old, new) in note.links.iter().zip(&new_note.links) {
                 let Some(target) = before.link_target(note, old) else { continue };
                 let expected = if target == from { into.clone() } else { target };
-                prop_assert_eq!(after.link_target(new_note, new), Some(expected), "`{}` in {}", old.written(&note.text), note.path);
+                prop_assert_eq!(after.link_target(new_note, new), Some(expected), "`{}` in {}", old.target.text(&note.text), note.path);
             }
         }
         // The concept kept names no absorbed note, and no prerequisite of itself.

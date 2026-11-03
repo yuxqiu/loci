@@ -2,6 +2,8 @@
 
 use std::ops::Range;
 
+use super::Spanned;
+
 /// Serialized in lowercase (`wiki`, `embed`, `prereq`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -14,24 +16,27 @@ pub enum LinkForm {
 /// A link in the vault's sense (§5.1): a wikilink, an embed or a `prereqs` item, written
 /// `[[target#fragment|label]]` (`![[…]]` for an embed; a prereq is a YAML string
 /// `[[slug]]`). The index resolves it (§5.3), `mv` and `merge` rewrite its target,
-/// export follows it. Made by [`wikilink`] or [`prereq`].
+/// export follows it. Made by [`wikilink`] or [`prereq`], spanning the whole `[[…]]`;
+/// a prereq spans its YAML string, quotes included.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Link {
     pub form: LinkForm,
-    /// The whole `[[…]]`; for a prereq, its YAML string, quotes included.
-    pub span: Range<usize>,
-    pub target: Target,
-    pub label: Option<Range<usize>>,
+    /// Spanning the target as written, fragment included; renames replace it.
+    pub target: Spanned<Target>,
+    pub label: Option<Spanned<Label>>,
 }
 
-/// What a link points at, and where that is written.
+/// What a link points at.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
-    /// The target as written, fragment included; renames replace it.
-    pub span: Range<usize>,
     pub names: Names,
     pub fragment: Option<Fragment>,
 }
+
+/// A link's label, `[[target|label]]`, or a markdown link's text: its value is its
+/// bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Label;
 
 /// How a target names a note or file (§5.2, §5.3): normalised (`.md` dropped, NFC).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,13 +56,6 @@ impl Names {
             Names::ThisNote => None,
             Names::Slug(name) | Names::Path(name) => Some(name),
         }
-    }
-}
-
-impl Link {
-    /// The target as written: the text at `target.span` of `text`, the note's text.
-    pub fn written<'t>(&self, text: &'t str) -> &'t str {
-        &text[self.target.span.clone()]
     }
 }
 
@@ -91,43 +89,43 @@ impl std::fmt::Display for Fragment {
 /// A markdown-syntax link to a vault file (`[text](path)`, `![alt](path)`): not a link
 /// loci follows, since a vault target must be a wikilink (§5.1); recorded so lint can
 /// report it (`link.markdown`) and fix it into one. Links to URLs are not recorded.
+/// Spans the whole link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkdownLink {
-    pub span: Range<usize>,
     pub url: String,
     pub image: bool,
-    /// The bytes of the link text (an image's alt text); empty when there is none.
-    pub label: Range<usize>,
+    /// The link text (an image's alt text); empty when there is none.
+    pub label: Spanned<Label>,
 }
 
 /// The wikilink (`[[target|label]]`) or embed (`![[…]]`) written at `range` of `text`
 /// (§5.1), as a link of `form`: its target (a table's escaping `\` before the `|` left
 /// out), fragment and label. `None` when the bytes are not exactly one wikilink, or it
 /// has no target (`[[]]`). This is the one place that knows a wikilink's brackets.
-pub(super) fn wikilink(text: &str, range: Range<usize>, form: LinkForm) -> Option<Link> {
+pub(super) fn wikilink(text: &str, range: Range<usize>, form: LinkForm) -> Option<Spanned<Link>> {
     let open = if form == LinkForm::Embed { "![[" } else { "[[" };
     let start = range.start + open.len();
     let inner = text[range.clone()].strip_prefix(open)?.strip_suffix("]]")?;
     let close = inner.len();
     let pipe = inner.find('|');
-    let label = pipe.map(|p| start + p + 1..start + close);
+    let label = pipe.map(|p| Spanned::new(Label, start + p + 1..start + close));
     // In a table the `|` is escaped (`\|`); the `\` is table syntax, not target.
     let target = &inner[..pipe.unwrap_or(close)];
     let target = target.strip_suffix('\\').filter(|_| pipe.is_some()).unwrap_or(target);
-    Some(Link { form, span: range, target: read_target(target, start)?, label })
+    Some(Spanned::new(Link { form, target: read_target(target, start)?, label }, range))
 }
 
 /// The prereq naming `slug`, the YAML string at `span` (§6.1). Its bytes need not spell
 /// the slug (YAML has escapes), so the whole string is the link and its target; loci
 /// rewrites it with the frontmatter, never in place.
-pub(super) fn prereq(span: Range<usize>, slug: String) -> Link {
-    let target = Target { span: span.clone(), names: Names::Slug(slug), fragment: None };
-    Link { form: LinkForm::Prereq, span, target, label: None }
+pub(super) fn prereq(span: Range<usize>, slug: String) -> Spanned<Link> {
+    let target = Spanned::new(Target { names: Names::Slug(slug), fragment: None }, span.clone());
+    Spanned::new(Link { form: LinkForm::Prereq, target, label: None }, span)
 }
 
 /// The target `written` at byte `start` (§5.2): what it names and its fragment. `None`
 /// for an empty one (`[[]]`).
-fn read_target(written: &str, start: usize) -> Option<Target> {
+fn read_target(written: &str, start: usize) -> Option<Spanned<Target>> {
     let s = written.trim_matches(|c: char| c.is_ascii_whitespace());
     let (name, fragment) = match s.split_once('#') {
         Some((name, frag)) => (name, Some(Fragment::parse(frag))),
@@ -140,7 +138,7 @@ fn read_target(written: &str, start: usize) -> Option<Target> {
         _ if name.contains('/') => Names::Path(name),
         _ => Names::Slug(name),
     };
-    Some(Target { span: start..start + written.len(), names, fragment })
+    Some(Spanned::new(Target { names, fragment }, start..start + written.len()))
 }
 
 #[cfg(test)]
@@ -158,7 +156,7 @@ mod tests {
     fn targets() {
         let slug = |n: &str| Names::Slug(n.into());
         let t = read_target(" a.md#H ", 0).unwrap();
-        assert_eq!((t.names, t.fragment), (slug("a"), Some(Fragment::Heading("H".into()))));
+        assert_eq!((t.node.names, t.node.fragment), (slug("a"), Some(Fragment::Heading("H".into()))));
         assert_eq!(read_target("a#^b1", 0).unwrap().fragment, Some(Fragment::Block("b1".into())));
         assert_eq!(read_target("#h", 0).unwrap().names, Names::ThisNote);
         assert_eq!(read_target("x/y.png", 0).unwrap().names, Names::Path("x/y.png".into()));
@@ -170,12 +168,12 @@ mod tests {
         let t = "# T\n\nSee [[b#H|label]] and ![[x/y.png|300]] and [m](a/b.md) and [w](https://x).\n";
         let n = p(t);
         assert_eq!(n.links.len(), 2);
-        assert_eq!(n.links[0].written(t), "b#H");
+        assert_eq!(n.links[0].target.text(t), "b#H");
         assert_eq!(n.links[0].target.names, Names::Slug("b".into()));
         assert_eq!(n.links[0].target.fragment, Some(Fragment::Heading("H".into())));
         assert_eq!(n.links[1].form, LinkForm::Embed);
         assert_eq!(n.links[1].target.names, Names::Path("x/y.png".into()));
-        let labels: Vec<Option<&str>> = n.links.iter().map(|l| l.label.clone().map(|r| &t[r])).collect();
+        let labels: Vec<Option<&str>> = n.links.iter().map(|l| l.label.as_ref().map(|l| l.text(t))).collect();
         assert_eq!(labels, [Some("label"), Some("300")]);
         assert_eq!(n.markdown_links.len(), 1);
     }
@@ -185,8 +183,8 @@ mod tests {
         let t = "# T\n\n| a | [[b\\|label]] |\n|---|---|\n";
         let n = p(t);
         let l = &n.links[0];
-        assert_eq!((l.written(t), &l.target.names), ("b", &Names::Slug("b".into())));
-        assert_eq!(l.label.clone().map(|r| &t[r]), Some("label"));
+        assert_eq!((l.target.text(t), &l.target.names), ("b", &Names::Slug("b".into())));
+        assert_eq!(l.label.as_ref().map(|l| l.text(t)), Some("label"));
     }
 
     #[test]

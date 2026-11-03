@@ -13,38 +13,73 @@ mod body;
 mod frontmatter;
 mod links;
 
-use blocks::block_ids;
+use blocks::blocks;
 use body::{Walker, walk_body};
 use frontmatter::{frontmatter, frontmatter_links};
 
-pub use blocks::{BlockId, BlockKind};
+pub use blocks::{Block, BlockKind};
 pub use frontmatter::{FmChange, FmEntry, FmValue, Frontmatter, prereq_slug, rewrite_frontmatter};
-pub use links::{Fragment, Link, LinkForm, MarkdownLink, Names, Target};
+pub use links::{Fragment, Label, Link, LinkForm, MarkdownLink, Names, Target};
 
 pub const BOM: &str = "\u{feff}";
 
+/// A value and the bytes of the note's text it was read from (after rustc's
+/// `Spanned`). A part whose value is just its bytes is spanned with a marker type
+/// naming it (a link's [`Label`]); [`Spanned::text`] reads the bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Spanned<T> {
+    pub node: T,
+    pub span: Range<usize>,
+}
+
+impl<T> Spanned<T> {
+    pub fn new(node: T, span: Range<usize>) -> Self {
+        Self { node, span }
+    }
+
+    /// The bytes of `src`, the note's text, as written.
+    pub fn text<'t>(&self, src: &'t str) -> &'t str {
+        &src[self.span.clone()]
+    }
+}
+
+impl<T> std::ops::Deref for Spanned<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.node
+    }
+}
+
+/// A heading, spanning its bytes, `#` markers or setext underline included.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Heading {
     pub level: u8,
-    /// Raw heading content (§4.6): the bytes at `content`, lines joined with `\n`.
-    pub text: String,
-    pub span: Range<usize>,
-    /// The content's byte range: without the ATX `#` markers or a setext underline.
-    pub content: Range<usize>,
+    /// Raw heading content (§4.6): without the ATX `#` markers or a setext underline,
+    /// lines joined with `\n`.
+    pub content: Spanned<String>,
     /// A setext heading (text over a `===` or `---` underline), not an ATX one.
     pub setext: bool,
 }
 
+/// A list item, spanning its bytes, nested items included.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListItem {
-    pub span: Range<usize>,
     /// 1 for a top-level item.
     pub depth: usize,
+    /// The list marker; the item's content starts after it.
+    pub marker: Spanned<Marker>,
     /// The item's leading text (§4.6).
-    pub lead: Range<usize>,
-    /// Where the item's content starts, after its list marker.
-    pub content_start: usize,
+    pub lead: Spanned<Lead>,
 }
+
+/// A list item's marker (`-`, `1.`) and the spaces after it: its value is its bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Marker;
+
+/// A list item's leading text (§4.6), where its block id ends: its value is its bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lead;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Counts {
@@ -62,13 +97,7 @@ impl Counts {
     }
 }
 
-/// A block at the top level of the body (§4.6), after the frontmatter.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TopBlock {
-    pub kind: BlockType,
-    pub span: Range<usize>,
-}
-
+/// What a block at the top level of the body is (§4.6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockType {
     /// A heading of this level.
@@ -83,29 +112,30 @@ pub struct Note {
     pub path: VaultPath,
     pub kind: Kind,
     pub text: String,
-    pub frontmatter: Option<Frontmatter>,
-    pub headings: Vec<Heading>,
+    pub frontmatter: Option<Spanned<Frontmatter>>,
+    pub headings: Vec<Spanned<Heading>>,
     /// The top-level blocks after the frontmatter, in order.
-    pub top_blocks: Vec<TopBlock>,
-    pub items: Vec<ListItem>,
-    pub block_ids: Vec<BlockId>,
+    pub top_blocks: Vec<Spanned<BlockType>>,
+    pub items: Vec<Spanned<ListItem>>,
+    /// The blocks with a block id (§4.6), in order.
+    pub blocks: Vec<Spanned<Block>>,
     /// The vault's links: wikilinks, embeds and `prereqs` items, in text order.
-    pub links: Vec<Link>,
+    pub links: Vec<Spanned<Link>>,
     /// Markdown-syntax links to vault files, which lint reports (`link.markdown`).
-    pub markdown_links: Vec<MarkdownLink>,
+    pub markdown_links: Vec<Spanned<MarkdownLink>>,
     pub counts: Counts,
 }
 
 impl Note {
     /// The value of frontmatter field `key`.
-    pub fn fm(&self, key: &str) -> Option<&FmValue> {
+    pub fn fm(&self, key: &str) -> Option<&Spanned<FmValue>> {
         Some(&self.frontmatter.as_ref()?.get(key)?.value)
     }
 
     /// Frontmatter field `key`, if it is a string.
     pub fn fm_str(&self, key: &str) -> Option<&str> {
-        match self.fm(key)? {
-            FmValue::Str { value, .. } => Some(value),
+        match &self.fm(key)?.node {
+            FmValue::Str(value) => Some(value),
             _ => None,
         }
     }
@@ -117,7 +147,7 @@ impl Note {
 
     /// The note's title (§9.3): the first H1's raw text, else the file stem.
     pub fn title(&self) -> &str {
-        self.headings.iter().find(|h| h.level == 1).map_or_else(|| self.path.stem(), |h| h.text.as_str())
+        self.headings.iter().find(|h| h.level == 1).map_or_else(|| self.path.stem(), |h| h.content.as_str())
     }
 
     /// The section under `self.headings[i]`: the heading through the next heading of the
@@ -130,16 +160,16 @@ impl Note {
 
     /// Every H2 whose text is `text`, with the content of its section (after the
     /// heading, up to the next H1 or H2).
-    pub fn h2_sections(&self, text: &str) -> Vec<(&Heading, Range<usize>)> {
+    pub fn h2_sections(&self, text: &str) -> Vec<(&Spanned<Heading>, Range<usize>)> {
         (0..self.headings.len())
-            .filter(|&i| self.headings[i].level == 2 && self.headings[i].text == text)
+            .filter(|&i| self.headings[i].level == 2 && *self.headings[i].content == text)
             .map(|i| (&self.headings[i], self.headings[i].span.end..self.section(i).end))
             .collect()
     }
 
     /// The top level of every H2 section whose text is `text`: its depth-1 list items,
     /// and its other top-level blocks.
-    pub fn section_top_level(&self, text: &str) -> (Vec<&ListItem>, Vec<&TopBlock>) {
+    pub fn section_top_level(&self, text: &str) -> (Vec<&Spanned<ListItem>>, Vec<&Spanned<BlockType>>) {
         let sections: Vec<Range<usize>> = self.h2_sections(text).into_iter().map(|(_, r)| r).collect();
         let inside = |r: &Range<usize>| sections.iter().any(|s| s.start <= r.start && r.end <= s.end);
         let items = self.items.iter().filter(|i| i.depth == 1 && inside(&i.span)).collect();
@@ -154,17 +184,17 @@ impl Note {
 
     /// Byte offset where the body starts: after the frontmatter block, or after a BOM.
     pub fn body_start(&self) -> usize {
-        match self.frontmatter.as_ref().and_then(Frontmatter::span) {
-            Some(span) => span.end,
-            None if self.has_bom() => BOM.len(),
-            None => 0,
+        match &self.frontmatter {
+            Some(f) if f.closed() => f.span.end,
+            _ if self.has_bom() => BOM.len(),
+            _ => 0,
         }
     }
 
     /// Whether the frontmatter is broken (unterminated or not a mapping), so its fields
     /// cannot be read; lint reports it (`fm.unterminated`, `fm.yaml`).
     pub fn frontmatter_broken(&self) -> bool {
-        matches!(self.frontmatter, Some(Frontmatter::Unterminated | Frontmatter::Invalid { .. }))
+        self.frontmatter.as_ref().is_some_and(|f| !matches!(f.node, Frontmatter::Fields(_)))
     }
 }
 
@@ -186,8 +216,8 @@ pub fn parse(path: &VaultPath, kind: Kind, text: String) -> Note {
     let base = if text.starts_with(BOM) { BOM.len() } else { 0 };
     let walk = walk_body(&text, base);
     let frontmatter = frontmatter(&text, base, &walk);
-    let block_ids = block_ids(&text, &walk.items, &walk.paragraphs);
-    let mut links = frontmatter.iter().flat_map(frontmatter_links).collect::<Vec<_>>();
+    let blocks = blocks(&text, &walk.items, &walk.paragraphs);
+    let mut links = frontmatter.iter().flat_map(|f| frontmatter_links(f)).collect::<Vec<_>>();
     let Walker { headings, top_blocks, items, links: body_links, markdown_links, counts, .. } = walk;
     links.extend(body_links);
     links.sort_by_key(|l| l.span.start);
@@ -199,7 +229,7 @@ pub fn parse(path: &VaultPath, kind: Kind, text: String) -> Note {
         headings,
         top_blocks,
         items,
-        block_ids,
+        blocks,
         links,
         markdown_links,
         counts,
@@ -218,12 +248,12 @@ mod tests {
     fn heading_texts() {
         let t = "# T\n\n## Hello world ##\n\n# C#\n\nTitle\nmore\n=====\n\n##\n";
         let n = p(t);
-        let found: Vec<(&str, bool)> = n.headings.iter().map(|h| (h.text.as_str(), h.setext)).collect();
+        let found: Vec<(&str, bool)> = n.headings.iter().map(|h| (h.content.as_str(), h.setext)).collect();
         assert_eq!(found, [("T", false), ("Hello world", false), ("C#", false), ("Title\nmore", true), ("", false)]);
-        assert_eq!(&t[n.headings[1].content.clone()], "Hello world");
+        assert_eq!(n.headings[1].content.text(t), "Hello world");
         // Found by the parse-span property: a task marker is reported inside the heading.
         let n = p("- [ ] ---\n  - \n");
-        assert_eq!(n.headings[0].text, "---");
+        assert_eq!(*n.headings[0].content, "---");
     }
 
     #[test]

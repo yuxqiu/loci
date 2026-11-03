@@ -2,7 +2,7 @@
 
 use super::Ctx;
 use crate::envelope::Diagnostic;
-use crate::parse::{BlockType, Note, TopBlock};
+use crate::parse::{BlockType, Note, Spanned};
 use crate::path::VaultPath;
 use crate::vault::Kind;
 
@@ -40,7 +40,7 @@ fn area_paragraph(note: &Note) -> Option<&str> {
         return None;
     }
     match note.top_blocks.as_slice() {
-        [TopBlock { kind: BlockType::Heading(1), .. }, TopBlock { kind: BlockType::Paragraph, span }] => {
+        [Spanned { node: BlockType::Heading(1), .. }, Spanned { node: BlockType::Paragraph, span }] => {
             Some(note.text[span.clone()].trim())
         }
         _ => None,

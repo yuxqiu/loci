@@ -27,8 +27,9 @@ pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
             let line = line_col(&note.text, link.span.start).0;
             let target = index.link_target(note, link);
             let to = target.as_ref().map_or("(unresolved)", VaultPath::as_str);
-            human.push_str(&format!("  {line}: {} -> {to}{}\n", link.written(&note.text), form_note(link.form)));
-            outgoing.push(json!({"line": line, "form": link.form, "raw": link.written(&note.text), "target": target}));
+            human.push_str(&format!("  {line}: {} -> {to}{}\n", link.target.text(&note.text), form_note(link.form)));
+            outgoing
+                .push(json!({"line": line, "form": link.form, "raw": link.target.text(&note.text), "target": target}));
         }
     }
 
@@ -36,8 +37,8 @@ pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
     let mut incoming = vec![];
     for (note, link) in index.incoming(&path) {
         let line = line_col(&note.text, link.span.start).0;
-        human.push_str(&format!("  {}:{line}: {}{}\n", note.path, link.written(&note.text), form_note(link.form)));
-        incoming.push(json!({"path": note.path, "line": line, "form": link.form, "raw": link.written(&note.text)}));
+        human.push_str(&format!("  {}:{line}: {}{}\n", note.path, link.target.text(&note.text), form_note(link.form)));
+        incoming.push(json!({"path": note.path, "line": line, "form": link.form, "raw": link.target.text(&note.text)}));
     }
 
     // Missing links, both ways: notes that name this one, and concepts this one names.

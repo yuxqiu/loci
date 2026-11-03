@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ops::Range;
 
 use crate::index::{Index, Resolved, heading_key};
-use crate::parse::{Fragment, Heading, Link, LinkForm, Note};
+use crate::parse::{Fragment, Heading, Link, LinkForm, Note, Spanned};
 use crate::path::VaultPath;
 use crate::splice::{self, Edit};
 
@@ -34,10 +34,10 @@ impl<'a> Unit<'a> {
             None => note.body_start()..note.text.len(),
             Some(Fragment::Heading(f)) => section_range(note, f).expect("resolve checked the heading"),
             Some(Fragment::Block(id)) => {
-                note.block_ids.iter().find(|b| &b.id == id).expect("resolve checked the block id").block.clone()
+                note.blocks.iter().find(|b| *b.id == *id).expect("resolve checked the block id").span.clone()
             }
         };
-        let headings: Vec<&Heading> = headings_in(note, &range).collect();
+        let headings: Vec<&Spanned<Heading>> = headings_in(note, &range).collect();
         match headings.first() {
             Some(h) if h.span.start == content_start(note, &range) => {
                 Unit { note, range, shift: level as i32 - h.level as i32, title: None }
@@ -50,7 +50,7 @@ impl<'a> Unit<'a> {
         }
     }
 
-    fn level(&self, h: &Heading) -> u8 {
+    fn level(&self, h: &Spanned<Heading>) -> u8 {
         (h.level as i32 + self.shift).clamp(1, 6) as u8
     }
 
@@ -64,7 +64,7 @@ impl<'a> Unit<'a> {
 }
 
 /// The headings of `note` inside `range`.
-fn headings_in<'n>(note: &'n Note, range: &Range<usize>) -> impl DoubleEndedIterator<Item = &'n Heading> {
+fn headings_in<'n>(note: &'n Note, range: &Range<usize>) -> impl DoubleEndedIterator<Item = &'n Spanned<Heading>> {
     let range = range.clone();
     note.headings.iter().filter(move |h| range.start <= h.span.start && h.span.end <= range.end)
 }
@@ -107,11 +107,11 @@ fn anchors(units: &[Unit]) -> (Vec<Anchors>, Vec<String>) {
         }
         let start = content_start(u.note, &u.range);
         for h in headings_in(u.note, &u.range) {
-            let id = unique(&h.text);
+            let id = unique(&h.content);
             if a.top.is_none() && h.span.start == start {
                 a.top = Some(id.clone());
             }
-            a.headings.entry(heading_key(&h.text)).or_insert(id);
+            a.headings.entry(heading_key(&h.content)).or_insert(id);
         }
         out.push(a);
     }
@@ -155,12 +155,12 @@ fn is_image(path: &VaultPath) -> bool {
 /// The section under the heading `frag` names in `note` ([`Note::section`]).
 fn section_range(note: &Note, frag: &str) -> Option<Range<usize>> {
     let key = heading_key(frag);
-    let i = note.headings.iter().position(|h| heading_key(&h.text) == key)?;
+    let i = note.headings.iter().position(|h| heading_key(&h.content) == key)?;
     Some(note.section(i))
 }
 
 /// The note links of `note` within `range`, resolved, in order.
-fn note_links<'a>(index: &Index, note: &'a Note, range: &Range<usize>) -> Vec<(&'a Link, Resolved)> {
+fn note_links<'a>(index: &Index, note: &'a Note, range: &Range<usize>) -> Vec<(&'a Spanned<Link>, Resolved)> {
     note.links
         .iter()
         .filter(|l| matches!(l.form, LinkForm::Wiki | LinkForm::Embed))
@@ -185,9 +185,11 @@ pub fn export(index: &Index, root: &VaultPath, depth: usize) -> Export {
             edits.extend(heading_edits(&note.text, h, u.level(h)));
         }
         // Block ids are vault plumbing: dropped, with the spaces before them.
-        for b in note.block_ids.iter().filter(|b| u.range.start <= b.span.start && b.span.end <= u.range.end) {
-            let start = note.text[..b.span.start].trim_end_matches([' ', '\t']).len();
-            edits.push(Edit::replace(start..b.span.end, ""));
+        for id in
+            note.blocks.iter().map(|b| &b.id).filter(|id| u.range.start <= id.span.start && id.span.end <= u.range.end)
+        {
+            let start = note.text[..id.span.start].trim_end_matches([' ', '\t']).len();
+            edits.push(Edit::replace(start..id.span.end, ""));
         }
         for (link, resolved) in note_links(index, note, &u.range) {
             let new = link_replacement(index, note, link, resolved, &unit_of, &anchors, &mut assets);
@@ -248,13 +250,13 @@ fn collect<'a>(index: &'a Index, root: &'a VaultPath, depth: usize) -> (Vec<Unit
 fn link_replacement(
     index: &Index,
     note: &Note,
-    link: &Link,
+    link: &Spanned<Link>,
     resolved: Resolved,
     unit_of: &BTreeMap<&VaultPath, usize>,
     anchors: &[Anchors],
     assets: &mut Assets,
 ) -> String {
-    let label = link.label.clone().map(|r| note.text[r].to_string());
+    let label = link.label.as_ref().map(|l| l.text(&note.text).to_string());
     let p = match resolved {
         Resolved::File(p) if link.form == LinkForm::Embed && is_image(&p) => {
             let name = assets.name(&p);
@@ -315,18 +317,18 @@ impl Assets {
 /// that links inside the heading text are rewritten separately: everything before the
 /// text (an ATX heading's `#` run) becomes the new `#` run; a setext heading's text
 /// lines are also joined and its underline dropped.
-fn heading_edits(text: &str, h: &Heading, level: u8) -> Vec<Edit> {
+fn heading_edits(text: &str, h: &Spanned<Heading>, level: u8) -> Vec<Edit> {
     let marks = "#".repeat(level as usize);
     let prefix = if h.content.is_empty() { marks } else { format!("{marks} ") };
-    let mut edits = vec![Edit::replace(h.span.start..h.content.start, prefix)];
+    let mut edits = vec![Edit::replace(h.span.start..h.content.span.start, prefix)];
     if h.setext {
-        let content = &text[h.content.clone()];
+        let content = h.content.text(text);
         for (i, _) in content.match_indices('\n') {
             let cr = usize::from(content[..i].ends_with('\r'));
-            edits.push(Edit::replace(h.content.start + i - cr..h.content.start + i + 1, " "));
+            edits.push(Edit::replace(h.content.span.start + i - cr..h.content.span.start + i + 1, " "));
         }
         let end = h.span.start + text[h.span.clone()].trim_end_matches(['\n', '\r']).len();
-        edits.push(Edit::replace(h.content.end..end, ""));
+        edits.push(Edit::replace(h.content.span.end..end, ""));
     }
     edits
 }

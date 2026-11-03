@@ -20,20 +20,22 @@ pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> Ulid) -> O
     }
 
     let (items, blocks) = note.section_top_level(heading);
-    let has_id = |block: &Range<usize>| note.block_ids.iter().any(|b| &b.block == block);
+    let has_id = |block: &Range<usize>| note.blocks.iter().any(|b| &b.span == block);
 
     // Targets: top-level list items (their leading text) and top-level paragraphs. An
     // item that starts with a nested block (a quote, a fence) has no leading text to
     // carry an id.
     let mut targets: Vec<(Range<usize>, Range<usize>)> = vec![]; // (block, id slice)
-    for item in items.into_iter().filter(|i| !note.text[i.content_start.min(i.lead.end)..i.lead.end].trim().is_empty())
+    for item in items
+        .into_iter()
+        .filter(|i| !note.text[i.marker.span.end.min(i.lead.span.end)..i.lead.span.end].trim().is_empty())
     {
         if !has_id(&item.span) {
-            targets.push((item.span.clone(), item.lead.clone()));
+            targets.push((item.span.clone(), item.lead.span.clone()));
         }
     }
 
-    for r in blocks.into_iter().filter(|b| b.kind == BlockType::Paragraph).map(|b| &b.span) {
+    for r in blocks.into_iter().filter(|b| b.node == BlockType::Paragraph).map(|b| &b.span) {
         if !has_id(r) {
             targets.push((r.clone(), r.clone()));
         }

@@ -10,7 +10,7 @@ use crate::config::Config;
 use crate::envelope::{Applicability, Diagnostic, Fix, FixEdit, Refusal};
 use crate::index::{self, Index};
 use crate::lint;
-use crate::parse::{FmChange, Frontmatter, rewrite_frontmatter};
+use crate::parse::{FmChange, rewrite_frontmatter};
 use crate::path::VaultPath;
 use crate::relink::{Change, Written};
 use crate::splice::{self, Edit};
@@ -214,7 +214,8 @@ fn planned(index: &Index, fix: &Fix) -> Result<Vec<(VaultPath, Planned)>, Refusa
 /// The bytes a rewrite of `path`'s frontmatter replaces: the block, or where one goes.
 fn block(index: &Index, path: &VaultPath) -> Range<usize> {
     let note = index.parsed(path).expect("`planned` checked the note");
-    note.frontmatter.as_ref().and_then(Frontmatter::span).unwrap_or(note.body_start()..note.body_start())
+    // `planned` refused broken frontmatter, so a block here is closed.
+    note.frontmatter.as_ref().map_or(note.body_start()..note.body_start(), |f| f.span.clone())
 }
 
 /// Refuses (`lint.fix-verify`) when an error code has more diagnostics after the fixes
