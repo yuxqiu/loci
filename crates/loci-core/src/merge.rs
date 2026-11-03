@@ -26,6 +26,7 @@ impl Merge {
 }
 
 /// A planned merge: the two concepts' paths and the change.
+#[derive(Debug)]
 pub struct Merge {
     /// The absorbed concept, deleted by the change.
     pub from: VaultPath,
@@ -36,7 +37,6 @@ pub struct Merge {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::Index;
 
     fn vp(s: &str) -> VaultPath {
         VaultPath::new(s.to_string()).unwrap()
@@ -46,7 +46,7 @@ mod tests {
     fn merge_rewrites_links_and_self_prereq() {
         let from = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TA\n---\n# A\n";
         let into = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TB\nprereqs: [\"[[old]]\", \"[[heap]]\"]\n---\n# B\n";
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("concepts/a/old.md", from),
             ("concepts/a/dijkstra.md", into),
             ("concepts/a/heap.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TC\n---\n# H\n"),
@@ -66,7 +66,7 @@ mod tests {
     fn adjacent_self_prereqs_are_removed_together() {
         let id = |n: &str| format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T{n}\n---\n# {n}\n");
         let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TC\nprereqs: [\"[[w]]\", \"[[y]]\", \"[[y]]\"]\n---\n# C\n";
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("concepts/a/w.md", id("W")),
             ("concepts/a/y.md", id("Y")),
             ("concepts/a/c.md", c.into()),
@@ -78,7 +78,7 @@ mod tests {
     #[test]
     fn emptied_block_prereqs_are_dropped() {
         let into = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T2\nprereqs:\n  - \"[[old]]\"\n---\n# Into\n";
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("concepts/a/old.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T1\n---\n# Old\n"),
             ("concepts/a/into.md", into),
         ]);

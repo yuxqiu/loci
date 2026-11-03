@@ -1,10 +1,11 @@
-//! The walk over the markdown events: headings, top-level blocks, list items, links,
-//! counts and the metadata block, each with its byte range.
+//! The walk over the markdown events: the body's blocks, links, counts and the metadata
+//! block, each with its byte range.
 //!
 //! pulldown-cmark gives an element's whole range when it opens, but parts of it (a
 //! heading's content, a link's label, where an item's marker ends) are known only from
-//! the events inside it. So the walk keeps a stack of open elements, each with the
-//! extent of the events inside it so far, and builds an element when it closes.
+//! the events inside it, and the blocks inside it only as they close. So the walk keeps
+//! a stack of open elements, each with the extent of the events inside it so far and
+//! the blocks closed inside it, and builds an element when it closes, into its parent.
 
 use std::ops::Range;
 use std::sync::LazyLock;
@@ -19,8 +20,8 @@ use super::*;
 static URL_SCHEME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z][A-Za-z0-9+.\-]*:").unwrap());
 
 /// Walks the markdown after a BOM of `base` bytes. Ranges refer to the whole file.
-pub(super) fn walk_body(text: &str, base: usize) -> Walker<'_> {
-    let mut w = Walker { text, ..Walker::default() };
+pub(super) fn walk_body(text: &str, base: usize) -> Walked {
+    let mut w = Walker { text, stack: vec![], out: Walked::default() };
     for (event, range) in Parser::new_ext(&text[base..], options()).into_offset_iter() {
         let range = range.start + base..range.end + base;
         match event {
@@ -32,26 +33,40 @@ pub(super) fn walk_body(text: &str, base: usize) -> Walker<'_> {
             event => {
                 w.extend_open(&range);
                 match event {
-                    Event::InlineMath(_) | Event::DisplayMath(_) => w.counts.math += 1,
-                    Event::Rule | Event::Html(_) if w.stack.is_empty() => {
-                        w.top_blocks.push(Spanned::new(BlockType::Other, range));
-                    }
+                    Event::InlineMath(_) | Event::DisplayMath(_) => w.out.counts.math += 1,
+                    Event::Rule => w.add(Spanned::new(Block::Other(vec![]), range)),
                     _ => {}
                 }
             }
         }
     }
 
-    // Elements are built as they close, so a nested one comes before its parent.
-    w.items.sort_by_key(|i| i.span.start);
-    w.markdown_links.sort_by_key(|m| m.span.start);
-    w
+    // Markdown links are built as they close, so one in another's label comes first.
+    w.out.markdown_links.sort_by_key(|m| m.span.start);
+    w.out
+}
+
+/// What the walk collects.
+#[derive(Default)]
+pub(super) struct Walked {
+    pub(super) body: Vec<Spanned<Block>>,
+    pub(super) links: Vec<Spanned<Link>>,
+    pub(super) markdown_links: Vec<Spanned<MarkdownLink>>,
+    pub(super) counts: Counts,
+    pub(super) meta: Option<Meta>,
 }
 
 /// A YAML metadata block: its bytes, `---` lines included, and the YAML text inside.
 pub(super) struct Meta {
     pub(super) block: Range<usize>,
     pub(super) yaml: Range<usize>,
+}
+
+/// The walk's state between events.
+struct Walker<'a> {
+    text: &'a str,
+    stack: Vec<Open<'a>>,
+    out: Walked,
 }
 
 /// An element that has opened and not yet closed.
@@ -65,36 +80,26 @@ struct Open<'a> {
 enum OpenKind<'a> {
     Metadata,
     Heading(u8),
-    List,
-    /// The item's leading text (§4.6), once its first nested block shows where it ends.
+    /// `lead`: the leading paragraph of the item holding it, which is the item's lead.
+    Paragraph {
+        lead: bool,
+    },
+    List(Vec<Spanned<ListItem>>),
+    /// The item's leading text (§4.6), once its first nested block shows where it ends,
+    /// and the blocks after it.
     Item {
         lead: Option<Range<usize>>,
+        children: Vec<Spanned<Block>>,
     },
+    /// Any other block, with the blocks closed inside it.
+    Other(Vec<Spanned<Block>>),
     Link {
         link_type: LinkType,
         dest: CowStr<'a>,
         image: bool,
     },
-    Other,
-}
-
-/// A walk over the markdown events: what it collects, and its state between events.
-#[derive(Default)]
-pub(super) struct Walker<'a> {
-    pub(super) headings: Vec<Spanned<Heading>>,
-    pub(super) top_blocks: Vec<Spanned<BlockType>>,
-    pub(super) items: Vec<Spanned<ListItem>>,
-    pub(super) links: Vec<Spanned<Link>>,
-    pub(super) markdown_links: Vec<Spanned<MarkdownLink>>,
-    pub(super) counts: Counts,
-    /// The paragraphs, where block ids may end (§4.6), but for an item's leading
-    /// paragraph, whose id is the item's.
-    pub(super) paragraphs: Vec<Range<usize>>,
-    /// The YAML metadata block.
-    pub(super) meta: Option<Meta>,
-
-    text: &'a str,
-    stack: Vec<Open<'a>>,
+    /// Inline markup (emphasis, a table cell), which builds nothing.
+    Inline,
 }
 
 impl<'a> Walker<'a> {
@@ -109,35 +114,26 @@ impl<'a> Walker<'a> {
         }
     }
 
-    /// A tag opens: a top-level block is recorded, an item's lead may end, and the
-    /// element goes on the stack.
+    /// A tag opens: an item's lead may end, and the element goes on the stack.
     fn open(&mut self, tag: Tag<'a>, range: Range<usize>) {
-        if let Some(block) = block_type(&tag).filter(|_| self.stack.is_empty()) {
-            self.top_blocks.push(Spanned::new(block, range.clone()));
-        }
         let lead = self.end_item_lead(&tag, &range);
-
         let kind = match tag {
             Tag::MetadataBlock(MetadataBlockKind::YamlStyle) => OpenKind::Metadata,
             Tag::Heading { level, .. } => OpenKind::Heading(level as u8),
-            Tag::Paragraph => {
-                if !lead {
-                    self.paragraphs.push(range.clone());
-                }
-                OpenKind::Other
-            }
-            Tag::List(_) => OpenKind::List,
-            Tag::Item => OpenKind::Item { lead: None },
+            Tag::Paragraph => OpenKind::Paragraph { lead },
+            Tag::List(_) => OpenKind::List(vec![]),
+            Tag::Item => OpenKind::Item { lead: None, children: vec![] },
             Tag::CodeBlock(kind) => {
-                self.counts.code += usize::from(matches!(kind, CodeBlockKind::Fenced(_)));
-                OpenKind::Other
+                self.out.counts.code += usize::from(matches!(kind, CodeBlockKind::Fenced(_)));
+                OpenKind::Other(vec![])
             }
+            Tag::BlockQuote(_) | Tag::HtmlBlock | Tag::Table(_) | Tag::FootnoteDefinition(_) => OpenKind::Other(vec![]),
             Tag::Link { link_type, dest_url, .. } => OpenKind::Link { link_type, dest: dest_url, image: false },
             Tag::Image { link_type, dest_url, .. } => {
-                self.counts.images += 1;
+                self.out.counts.images += 1;
                 OpenKind::Link { link_type, dest: dest_url, image: true }
             }
-            _ => OpenKind::Other,
+            _ => OpenKind::Inline,
         };
         self.stack.push(Open { kind, span: range, inner: None });
     }
@@ -146,7 +142,7 @@ impl<'a> Walker<'a> {
     /// item's lead is that paragraph; a tight item's, its text after the marker up to
     /// the block. Returns whether the block is the lead.
     fn end_item_lead(&mut self, tag: &Tag, range: &Range<usize>) -> bool {
-        let Some(Open { kind: OpenKind::Item { lead: lead @ None }, inner, .. }) = self.stack.last_mut() else {
+        let Some(Open { kind: OpenKind::Item { lead: lead @ None, .. }, inner, .. }) = self.stack.last_mut() else {
             return false;
         };
         if !is_nested_block(tag) {
@@ -159,21 +155,27 @@ impl<'a> Walker<'a> {
         is_paragraph
     }
 
-    /// The innermost element closes: it is built from its span and the events inside.
+    /// The innermost element closes: it is built from its span and the events inside,
+    /// into its parent.
     fn close(&mut self) {
         let Open { kind, span, inner } = self.stack.pop().expect("an element is open");
         match kind {
             OpenKind::Metadata => {
                 // An empty block (`---` then `---`) holds an empty YAML text.
                 let yaml = inner.unwrap_or(span.start..span.start);
-                self.meta = Some(Meta { block: span, yaml });
+                self.out.meta = Some(Meta { block: span, yaml });
             }
             OpenKind::Heading(level) => {
                 let heading = heading(self.text, level, &span, inner);
-                self.headings.push(Spanned::new(heading, span));
+                self.add(Spanned::new(Block::Heading(heading), span));
             }
-            OpenKind::Item { lead } => {
-                let depth = self.stack.iter().filter(|o| matches!(o.kind, OpenKind::List)).count();
+            OpenKind::Paragraph { lead: true } => {}
+            OpenKind::Paragraph { lead: false } => {
+                let id = trailing_id(self.text, &span);
+                self.add(Spanned::new(Block::Paragraph { id }, span));
+            }
+            OpenKind::List(items) => self.add(Spanned::new(Block::List(items), span)),
+            OpenKind::Item { lead, children } => {
                 // The marker ends where the item's first event starts.
                 let marker = Spanned::new(Marker, span.start..inner.map_or(span.end, |i| i.start));
                 // No nested block: the lead is the rest of the item. Its trailing
@@ -181,13 +183,27 @@ impl<'a> Walker<'a> {
                 let lead = lead.unwrap_or(marker.span.end..span.end);
                 let lead = Spanned::new(Lead, lead.start..lead.start + self.text[lead].trim_end().len());
                 let id = trailing_id(self.text, &lead.span);
-                self.items.push(Spanned::new(ListItem { depth, marker, lead, id }, span));
+                let item = Spanned::new(ListItem { marker, lead, id, children }, span);
+                match self.stack.last_mut() {
+                    Some(Open { kind: OpenKind::List(items), .. }) => items.push(item),
+                    _ => unreachable!("an item closes inside its list"),
+                }
             }
+            OpenKind::Other(children) => self.add(Spanned::new(Block::Other(children), span)),
             OpenKind::Link { link_type, dest, image } => {
                 let label = inner.unwrap_or(span.end..span.end);
                 self.link(link_type, &dest, span, label, image);
             }
-            OpenKind::List | OpenKind::Other => {}
+            OpenKind::Inline => {}
+        }
+    }
+
+    /// Adds a closed block to the innermost element that holds blocks, or to the body.
+    fn add(&mut self, block: Spanned<Block>) {
+        match self.stack.last_mut().map(|o| &mut o.kind) {
+            None => self.out.body.push(block),
+            Some(OpenKind::Item { children, .. } | OpenKind::Other(children)) => children.push(block),
+            Some(_) => unreachable!("blocks close inside the body, an item or another block"),
         }
     }
 
@@ -197,13 +213,13 @@ impl<'a> Walker<'a> {
         match link_type {
             LinkType::WikiLink { .. } => {
                 let form = if image { LinkForm::Embed } else { LinkForm::Wiki };
-                self.links.extend(wikilink(self.text, span, form));
+                self.out.links.extend(wikilink(self.text, span, form));
             }
             LinkType::Autolink | LinkType::Email => {}
             _ if URL_SCHEME.is_match(dest) => {}
             _ => {
                 let link = MarkdownLink { url: dest.to_string(), image, label: Spanned::new(Label, label) };
-                self.markdown_links.push(Spanned::new(link, span));
+                self.out.markdown_links.push(Spanned::new(link, span));
             }
         }
     }
@@ -215,19 +231,7 @@ fn heading(text: &str, level: u8, span: &Range<usize>, inner: Option<Range<usize
     let end = span.start + text[span.clone()].trim_end().len();
     let content = inner.unwrap_or(end..end);
     let setext = !text[span.start..content.start].trim_start_matches(' ').starts_with('#');
-    let joined = text[content.clone()].lines().collect::<Vec<_>>().join("\n");
-    Heading { level, setext, content: Spanned::new(joined, content) }
-}
-
-/// What a tag is as a top-level block, if it is a block.
-fn block_type(tag: &Tag) -> Option<BlockType> {
-    match tag {
-        Tag::Heading { level, .. } => Some(BlockType::Heading(*level as u8)),
-        Tag::Paragraph => Some(BlockType::Paragraph),
-        Tag::List(_) => Some(BlockType::List),
-        Tag::MetadataBlock(MetadataBlockKind::YamlStyle) | Tag::Item | Tag::Link { .. } | Tag::Image { .. } => None,
-        _ => Some(BlockType::Other),
-    }
+    Heading { level, setext, content: Spanned::new(HeadingText, content) }
 }
 
 /// Whether a tag is a block that ends the leading text of the item holding it.

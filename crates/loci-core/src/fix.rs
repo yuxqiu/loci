@@ -19,6 +19,7 @@ use crate::splice::{self, Edit};
 pub const PASSES: usize = 10;
 
 /// Which fixes to apply.
+#[derive(Debug)]
 pub struct Options {
     /// Unsafe fixes too, not only safe ones. Display-only fixes are never applied.
     pub unsafe_fixes: bool,
@@ -206,7 +207,7 @@ fn planned<'i>(index: &'i Index, fix: &Fix) -> Result<Vec<(&'i Note, Planned)>, 
             }
             FixEdit::Frontmatter { path, frontmatter } => {
                 let n = note(path)?;
-                if n.frontmatter_broken() {
+                if n.has_broken_frontmatter() {
                     return Err(bug(format!("a fix changes the broken frontmatter of `{path}`")));
                 }
                 Ok((n, Planned::Frontmatter(frontmatter.clone())))
@@ -260,7 +261,7 @@ mod tests {
     #[test]
     fn fixes_left_when_the_passes_run_out_are_counted() {
         // Two adjacent markdown links: their fixes touch, so one applies per pass.
-        let index = Index::from_texts(&[
+        let index = crate::testing::index(&[
             ("concepts/a/x.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# X\n"),
             ("views/v.md", "# V\n\n[x](concepts/a/x.md)[x](concepts/a/x.md)\n"),
         ]);

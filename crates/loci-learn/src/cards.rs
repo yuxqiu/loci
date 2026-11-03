@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use loci_core::id::Ulid;
 use loci_core::index::Index;
-use loci_core::parse::{BlockType, Note, Spanned};
+use loci_core::parse::{Block, Note, Spanned};
 use loci_core::path::VaultPath;
 
 const SECTION: &str = "Cards";
@@ -61,10 +61,15 @@ pub fn of_note(note: &Note) -> (Vec<Spanned<Card>>, Vec<Range<usize>>) {
         issues.push(second.span.clone());
     }
 
-    let (items, blocks) = note.section_top_level(SECTION);
-
-    // Anything at the top level of the section other than a list is a format issue.
-    issues.extend(blocks.into_iter().filter(|b| b.node != BlockType::List).map(|b| b.span.clone()));
+    // Each item of a list at the top level of the section is a card; anything else
+    // there is a format issue.
+    let mut items = vec![];
+    for block in note.section_blocks(SECTION) {
+        match &block.node {
+            Block::List(list) => items.extend(list),
+            _ => issues.push(block.span.clone()),
+        }
+    }
 
     let mut cards = vec![];
     for item in items {
@@ -79,7 +84,12 @@ pub fn of_note(note: &Note) -> (Vec<Spanned<Card>>, Vec<Range<usize>>) {
         }
         match split(&raw) {
             Some((question, answer)) => {
-                let card = Card { path: note.path.clone(), id: CardId::of(id.map(|id| id.as_str())), question, answer };
+                let card = Card {
+                    path: note.path.clone(),
+                    id: CardId::of(id.map(|id| id.value(&note.text))),
+                    question,
+                    answer,
+                };
                 cards.push(Spanned::new(card, item.span.clone()));
             }
             None => issues.push(item.span.clone()),
@@ -125,6 +135,13 @@ mod tests {
         assert_eq!(split("a::b"), None);
         // An unmatched backtick is literal text (CommonMark), not an open code span.
         assert_eq!(split("what is ` :: a backtick"), Some(("what is `".into(), "a backtick".into())));
+    }
+
+    #[test]
+    fn only_top_level_items_are_cards() {
+        let (cs, issues) = cards("## Cards\n\n> - q :: a\n");
+        assert!(cs.is_empty(), "an item of a quoted list is not a top-level item");
+        assert_eq!(issues.len(), 1, "the quote is the issue");
     }
 
     #[test]

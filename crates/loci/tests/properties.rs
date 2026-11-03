@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use loci_core::config::Config;
-use loci_core::index::{self, Index};
+use loci_core::index::Index;
 use loci_core::lint;
 use loci_core::path::VaultPath;
 use loci_core::splice::{self, Edit};
@@ -22,8 +22,7 @@ fn vp(s: &str) -> VaultPath {
 }
 
 fn build(files: &Files) -> Index {
-    let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
-    index::Index::from_texts(&files)
+    Index::build(files.keys().map(|p| vp(p)).collect(), |p| files[p.as_str()].clone())
 }
 
 const SLUGS: &[&str] = &["alpha", "beta", "gamma-ray", "delta", "二分查找", "排序", "검색", "かな"];

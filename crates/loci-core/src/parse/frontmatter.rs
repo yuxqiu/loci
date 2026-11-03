@@ -52,7 +52,7 @@ pub enum Frontmatter {
 
 impl Frontmatter {
     /// Whether the block is closed (its span is the whole block).
-    pub fn closed(&self) -> bool {
+    pub fn is_closed(&self) -> bool {
         !matches!(self, Frontmatter::Unterminated)
     }
 
@@ -340,7 +340,7 @@ impl Source {
 mod tests {
     use super::*;
 
-    use crate::parse::concept as p;
+    use crate::testing::concept as p;
 
     #[test]
     fn frontmatter_spans() {

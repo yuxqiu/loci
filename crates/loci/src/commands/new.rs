@@ -14,7 +14,7 @@ use super::Ctx;
 
 pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
-    let path = VaultPath::from_arg(path)?.as_note();
+    let path = VaultPath::from_arg(path)?.to_note();
     let slug = refuse_destination(&vault, &path)?;
 
     let id = Ulid::generate();

@@ -36,7 +36,7 @@ impl<'a> Unit<'a> {
         };
         // Its top heading takes `level`; without one, a title does, above its headings.
         let mut unit = Unit { note, range, shift: 0, title: None };
-        let headings: Vec<&Spanned<Heading>> = unit.headings().collect();
+        let headings = unit.headings();
         match headings.first() {
             Some(h) if h.span.start == unit.content_start() => unit.shift = level as i32 - h.level as i32,
             _ => {
@@ -49,9 +49,9 @@ impl<'a> Unit<'a> {
     }
 
     /// The headings of the unit's bytes; they borrow the note, not the unit.
-    fn headings(&self) -> impl DoubleEndedIterator<Item = &'a Spanned<Heading>> + use<'a> {
-        let range = self.range.clone();
-        self.note.headings.iter().filter(move |h| range.start <= h.span.start && h.span.end <= range.end)
+    fn headings(&self) -> Vec<Spanned<&'a Heading>> {
+        let range = &self.range;
+        self.note.headings().filter(|h| range.start <= h.span.start && h.span.end <= range.end).collect()
     }
 
     /// The first non-whitespace byte of the unit.
@@ -71,13 +71,13 @@ impl<'a> Unit<'a> {
             .collect()
     }
 
-    fn level(&self, h: &Spanned<Heading>) -> u8 {
+    fn level(&self, h: &Spanned<&Heading>) -> u8 {
         (h.level as i32 + self.shift).clamp(1, 6) as u8
     }
 
     /// The output level of the nearest heading before byte `at` (0 if none).
     fn level_at(&self, at: usize) -> u8 {
-        match self.headings().rfind(|h| h.span.start < at) {
+        match self.headings().iter().rfind(|h| h.span.start < at) {
             Some(h) => self.level(h),
             None => self.title.as_ref().map_or(0, |(l, _)| *l),
         }
@@ -131,11 +131,12 @@ fn anchors(units: &[Unit]) -> (Vec<Anchors>, Vec<String>) {
         }
         let start = u.content_start();
         for h in u.headings() {
-            let id = ids.take(&h.content);
+            let text = h.content.value(&u.note.text);
+            let id = ids.take(text);
             if a.top.is_none() && h.span.start == start {
                 a.top = Some(id.clone());
             }
-            a.headings.entry(heading_key(&h.content)).or_insert(id);
+            a.headings.entry(heading_key(text)).or_insert(id);
         }
         out.push(a);
     }
@@ -221,10 +222,10 @@ impl Assembly<'_> {
     fn unit_text(&mut self, u: &Unit) -> String {
         let note = u.note;
         let inside = |span: &Range<usize>| u.range.start <= span.start && span.end <= u.range.end;
-        let mut edits: Vec<Edit> = u.headings().flat_map(|h| heading_edits(&note.text, h, u.level(h))).collect();
+        let mut edits: Vec<Edit> = u.headings().iter().flat_map(|h| heading_edits(&note.text, h, u.level(h))).collect();
 
         // Block ids are vault plumbing: dropped, with the spaces before them.
-        for id in note.blocks.iter().map(|b| &b.id).filter(|id| inside(&id.span)) {
+        for id in note.block_ids().map(|b| b.id).filter(|id| inside(&id.span)) {
             let start = note.text[..id.span.start].trim_end_matches([' ', '\t']).len();
             edits.push(Edit::replace(start..id.span.end, ""));
         }
@@ -243,7 +244,7 @@ impl Assembly<'_> {
     /// to an included note's anchor, or plain text (its label, heading or title; for a
     /// link that does not resolve, its target as written) for anything left out.
     fn link_replacement(&mut self, note: &Note, link: &Spanned<Link>, resolved: Option<Resolved<'_>>) -> String {
-        let label = link.label.as_ref().map(|l| l.text(&note.text).to_string());
+        let label = link.label.as_ref().map(|l| l.value(&note.text).to_string());
         let target = match resolved {
             None => return label.unwrap_or_else(|| link.target.text(&note.text).to_string()),
             Some(Resolved::File(p)) if link.form == LinkForm::Embed && is_image(p) => {
@@ -339,12 +340,12 @@ impl Assets {
 /// that links inside the heading text are rewritten separately: everything before the
 /// text (an ATX heading's `#` run) becomes the new `#` run; a setext heading's text
 /// lines are also joined and its underline dropped.
-fn heading_edits(text: &str, h: &Spanned<Heading>, level: u8) -> Vec<Edit> {
+fn heading_edits(text: &str, h: &Spanned<&Heading>, level: u8) -> Vec<Edit> {
     let marks = "#".repeat(level as usize);
-    let prefix = if h.content.is_empty() { marks } else { format!("{marks} ") };
+    let prefix = if h.content.span.is_empty() { marks } else { format!("{marks} ") };
     let mut edits = vec![Edit::replace(h.span.start..h.content.span.start, prefix)];
     if h.setext {
-        let content = h.content.text(text);
+        let content = h.content.value(text);
         for (i, _) in content.match_indices('\n') {
             let cr = usize::from(content[..i].ends_with('\r'));
             edits.push(Edit::replace(h.content.span.start + i - cr..h.content.span.start + i + 1, " "));
@@ -390,7 +391,7 @@ mod tests {
 
     #[test]
     fn reading_path_export() {
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("views/algo.md", "# Algorithms\n\n## Part 1\n\n[[bfs]] and [[dfs|depth-first]].\n"),
             (
                 "concepts/a/bfs.md",
@@ -422,7 +423,7 @@ mod tests {
 
     #[test]
     fn section_links_and_depth() {
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("views/v.md", "# V\n\n[[bfs#Proof]]\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Intro.\n\n## Proof\n\nBy induction.\n\n## Other\n\nX.\n")),
         ]);
@@ -437,13 +438,13 @@ mod tests {
 
     #[test]
     fn unresolved_links_become_plain_text() {
-        let i = Index::from_texts(&[("views/v.md", "# V\n\nSee [[nope]], [[nope|that]] and [[#Missing]].\n")]);
+        let i = crate::testing::index(&[("views/v.md", "# V\n\nSee [[nope]], [[nope|that]] and [[#Missing]].\n")]);
         assert_eq!(export(&i, "views/v.md", 1).markdown, "# V\n\nSee nope, that and #Missing.\n");
     }
 
     #[test]
     fn each_note_once_at_first_appearance() {
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("views/v.md", "# V\n\n[[bfs]], then [[bfs#Proof]].\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Intro.\n\n## Proof\n\nBy induction.\n")),
         ]);
@@ -456,7 +457,7 @@ mod tests {
     #[test]
     fn block_links_include_only_the_block() {
         let id = "01JB9XQ7Z3K4M5N6P7Q8R9S0B1";
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("views/v.md", &format!("# V\n\nSee [[bfs#^{id}]].\n")),
             ("concepts/a/bfs.md", &concept("BFS", &format!("Intro.\n\nThe key step. ^{id}\n\nOther.\n"))),
         ]);
@@ -469,7 +470,7 @@ mod tests {
 
     #[test]
     fn headings_with_links_and_setext_headings() {
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("views/v.md", "# V\n\n## Read [[bfs]] first ##\n\nSetext [[bfs]]\ntwo lines\n---\n\nText.\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Body.\n")),
         ]);
@@ -480,14 +481,14 @@ mod tests {
 
     #[test]
     fn anchors_are_unique_in_document_order() {
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("views/v.md", "# BFS notes\n\n## BFS\n\n[[bfs]]\n"),
             ("concepts/a/bfs.md", &concept("BFS", "Body.\n")),
             ("concepts/a/untitled.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\n---\nNo heading.\n"),
         ]);
         let e = export(&i, "views/v.md", 1);
         assert!(e.markdown.contains("[BFS](#bfs-1)"), "{}", e.markdown);
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("views/v.md", "# V\n\n[[untitled]]\n"),
             ("concepts/a/untitled.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\n---\nNo heading.\n"),
         ]);

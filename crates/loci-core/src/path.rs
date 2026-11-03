@@ -30,9 +30,9 @@ pub enum Kind {
     Unknown,
 }
 
-impl Kind {
-    pub fn name(self) -> &'static str {
-        match self {
+impl fmt::Display for Kind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
             Kind::Concept => "concept",
             Kind::Area => "area",
             Kind::View => "view",
@@ -42,9 +42,11 @@ impl Kind {
             Kind::Inbox => "inbox",
             Kind::Asset => "asset",
             Kind::Unknown => "unknown",
-        }
+        })
     }
+}
 
+impl Kind {
     /// The formed notes, written to be read (concepts, area files, views, journal
     /// entries), as opposed to sources, inbox drafts and rule files.
     pub fn is_formed(self) -> bool {
@@ -223,7 +225,7 @@ impl VaultPath {
 
     /// This path as a note argument means it (m0 §8): itself if it is a note, else with
     /// `.md` added.
-    pub fn as_note(&self) -> VaultPath {
+    pub fn to_note(&self) -> VaultPath {
         if self.is_note() {
             self.clone()
         } else {
@@ -425,8 +427,8 @@ mod tests {
     #[test]
     fn notes() {
         assert!(vp("views/v.md").is_note() && !vp("views/.md").is_note() && !vp("a/x.png").is_note());
-        assert_eq!(vp("concepts/a/x").as_note(), vp("concepts/a/x.md"));
-        assert_eq!(vp("concepts/a/x.md").as_note(), vp("concepts/a/x.md"));
+        assert_eq!(vp("concepts/a/x").to_note(), vp("concepts/a/x.md"));
+        assert_eq!(vp("concepts/a/x.md").to_note(), vp("concepts/a/x.md"));
     }
 
     #[test]

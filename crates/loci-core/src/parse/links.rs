@@ -2,7 +2,7 @@
 
 use std::ops::Range;
 
-use super::Spanned;
+use super::{Spanned, Written};
 use crate::id::Slug;
 
 /// Serialized in lowercase (`wiki`, `embed`, `prereq`).
@@ -34,10 +34,11 @@ pub struct Target {
     pub fragment: Option<Fragment>,
 }
 
-/// A link's label, `[[target|label]]`, or a markdown link's text: its value is its
-/// bytes.
+/// A link's label, `[[target|label]]`, or a markdown link's text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Label;
+
+impl Written for Label {}
 
 /// How a target names a note or file (§5.2, §5.3): normalised (`.md` dropped, NFC).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,7 +169,7 @@ fn read_target(written: &str, start: usize) -> Option<Spanned<Target>> {
 mod tests {
     use super::*;
 
-    use crate::parse::concept as p;
+    use crate::testing::concept as p;
 
     #[test]
     fn targets() {
@@ -191,7 +192,7 @@ mod tests {
         assert_eq!(n.links[0].target.fragment, Some(Fragment::Heading("H".into())));
         assert_eq!(n.links[1].form, LinkForm::Embed);
         assert_eq!(n.links[1].target.names, Names::Path("x/y.png".into()));
-        let labels: Vec<Option<&str>> = n.links.iter().map(|l| l.label.as_ref().map(|l| l.text(t))).collect();
+        let labels: Vec<Option<&str>> = n.links.iter().map(|l| l.label.as_ref().map(|l| l.value(t))).collect();
         assert_eq!(labels, [Some("label"), Some("300")]);
         assert_eq!(n.markdown_links.len(), 1);
     }
@@ -202,7 +203,7 @@ mod tests {
         let n = p(t);
         let l = &n.links[0];
         assert_eq!((l.target.text(t), &l.target.names), ("b", &Names::Slug("b".parse().unwrap())));
-        assert_eq!(l.label.as_ref().map(|l| l.text(t)), Some("label"));
+        assert_eq!(l.label.as_ref().map(|l| l.value(t)), Some("label"));
     }
 
     #[test]

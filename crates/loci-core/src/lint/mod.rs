@@ -116,7 +116,7 @@ pub fn core_code(code: &str) -> Option<Code> {
 /// Every vault update the tables name, for the check that each has its entry.
 pub fn update_ids() -> Vec<UpdateId> {
     let editions = RULES.iter().map(|r| r.editions).chain(CONCEPT_FIELDS.iter().map(|f| f.editions));
-    let mut ids: Vec<UpdateId> = editions.flat_map(|e| [e.from, e.until]).flatten().collect();
+    let mut ids: Vec<UpdateId> = editions.flat_map(|e| [e.since, e.until]).flatten().collect();
     ids.sort();
     ids.dedup();
     ids
@@ -158,7 +158,7 @@ mod tests {
     use crate::path::VaultPath;
 
     fn lint(files: &[(&str, &str)]) -> Vec<(String, String)> {
-        let index = crate::index::Index::from_texts(files);
+        let index = crate::testing::index(files);
         run(&index, &Config::parse("schema = 1\n").unwrap())
             .into_iter()
             .map(|d| (d.path().map_or_else(String::new, ToString::to_string), d.code))
@@ -172,7 +172,7 @@ mod tests {
             let files = [("concepts/a/y.md", note.as_str()), ("concepts/a/x.md", "")];
             let d = lint(&files);
             assert!(d.contains(&("concepts/a/y.md".into(), "fm.field-type".into())), "{bad}: {d:?}");
-            let index = crate::index::Index::from_texts(&files);
+            let index = crate::testing::index(&files);
             assert!(
                 index.parsed(&VaultPath::new("concepts/a/y.md".into()).unwrap()).unwrap().links.is_empty(),
                 "{bad} is not a link"
@@ -186,7 +186,7 @@ mod tests {
         let files = [("concepts/a/x.md", note), ("concepts/a/AREA.md", "# A\n\nArea.\n"), ("concepts/a/café.md", "")];
         let d = lint(&files);
         assert!(!d.iter().any(|(p, c)| p == "concepts/a/x.md" && c == "fm.field-type"), "{d:?}");
-        let index = crate::index::Index::from_texts(&files);
+        let index = crate::testing::index(&files);
         let x = index.parsed(&VaultPath::new("concepts/a/x.md".into()).unwrap()).unwrap();
         assert_eq!(x.links[0].target.names, crate::parse::Names::Slug("café".parse().unwrap()));
     }

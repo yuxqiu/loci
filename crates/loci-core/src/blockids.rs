@@ -1,9 +1,7 @@
 //! `loci block-ids` (m0 §9.9): assign ULID block ids to the top-level blocks of a section.
 
-use std::ops::Range;
-
 use crate::id::Ulid;
-use crate::parse::{BlockType, Note};
+use crate::parse::{Block, Note};
 use crate::splice::{self, Edit};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,17 +17,20 @@ pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> Ulid) -> O
         return None;
     }
 
-    let (items, blocks) = note.section_top_level(heading);
+    let blocks = note.section_blocks(heading);
     let text = &note.text;
 
     // Where each new id goes: the end of the leading text of an item without one (an
     // item that starts with a nested block, a quote or a fence, has none to carry it),
     // and the end of a paragraph without one.
-    let item_ends = items.into_iter().filter(|i| i.id.is_none() && !i.lead.span.is_empty()).map(|i| i.lead.span.end);
-    let has_id = |block: &Range<usize>| note.blocks.iter().any(|b| &b.span == block);
+    let items = blocks.iter().flat_map(|b| match &b.node {
+        Block::List(items) => &items[..],
+        _ => &[],
+    });
+    let item_ends = items.filter(|i| i.id.is_none() && !i.lead.span.is_empty()).map(|i| i.lead.span.end);
     let paragraph_ends = blocks
-        .into_iter()
-        .filter(|b| b.node == BlockType::Paragraph && !has_id(&b.span))
+        .iter()
+        .filter(|b| matches!(b.node, Block::Paragraph { id: None }))
         .map(|b| b.span.start + b.text(text).trim_end().len());
     let mut ends: Vec<usize> = item_ends.chain(paragraph_ends).collect();
     ends.sort();
@@ -58,14 +59,14 @@ mod tests {
     /// Assigns ids, written as `ID1`, `ID2`, … in the returned text, and checks that
     /// assigning again changes nothing.
     fn run(text: &str) -> (String, Vec<Assigned>) {
-        let n = crate::parse::concept(text);
+        let n = crate::testing::concept(text);
         let mut k = 0;
         let (mut out, assigned) = assign(&n, "Cards", || {
             k += 1;
             id(k)
         })
         .unwrap();
-        let (again, more) = assign(&crate::parse::concept(&out), "Cards", || unreachable!("no new target")).unwrap();
+        let (again, more) = assign(&crate::testing::concept(&out), "Cards", || unreachable!("no new target")).unwrap();
         assert_eq!((again.as_str(), more.len()), (out.as_str(), 0), "assigning is idempotent");
         for i in 1..=assigned.len() {
             out = out.replace(&id(i).to_string(), &format!("ID{i}"));
@@ -117,7 +118,7 @@ mod tests {
 
     #[test]
     fn missing_section() {
-        let n = crate::parse::concept("# T\n");
+        let n = crate::testing::concept("# T\n");
         assert!(assign(&n, "Cards", || unreachable!("no section")).is_none());
     }
 }

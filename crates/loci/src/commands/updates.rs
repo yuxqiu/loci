@@ -39,13 +39,13 @@ pub fn all() -> Vec<Update> {
 /// section, as loci's markdown parser reads them (a `## ` line in a code block is text).
 fn parse(list: &str) -> Vec<Update> {
     let note = loci_core::parse::markdown(list.to_string());
-    (0..note.headings.len())
-        .filter(|&i| note.headings[i].level == 2)
-        .map(|i| {
-            let mut parts = note.headings[i].content.splitn(3, " · ");
+    note.sections()
+        .filter(|(h, _)| h.level == 2)
+        .map(|(h, section)| {
+            let mut parts = h.content.value(list).splitn(3, " · ");
             let id = parts.next().expect("an id").parse().expect("ids are `u` and four digits");
             let title = parts.nth(1).expect("a date and a title").to_string();
-            Update { id, title, text: format!("{}\n", list[note.section(i)].trim_end()) }
+            Update { id, title, text: format!("{}\n", list[section].trim_end()) }
         })
         .collect()
 }

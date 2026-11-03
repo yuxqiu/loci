@@ -19,4 +19,6 @@ pub mod path;
 pub mod plugin;
 pub mod relink;
 pub mod splice;
+#[cfg(test)]
+mod testing;
 pub mod vault;

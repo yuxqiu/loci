@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use super::{Code, Ctx, managed};
 use crate::envelope::{Applicability, Diagnostic, Fix};
 use crate::id::Ulid;
-use crate::parse::{BOM, BlockType, Frontmatter};
+use crate::parse::{BOM, Block, Frontmatter};
 use crate::path::Kind;
 
 /// A byte-order mark, broken frontmatter, and frontmatter outside concepts.
@@ -31,9 +31,9 @@ pub(super) fn note_format(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
             ),
             Frontmatter::Fields { .. } => {}
         }
-        if fm.closed() && note.kind != Kind::Concept {
+        if fm.is_closed() && note.kind != Kind::Concept {
             out.push(
-                Diagnostic::error(Code::FmNotAllowed, format!("{} files have no frontmatter", note.kind.name()))
+                Diagnostic::error(Code::FmNotAllowed, format!("{} files have no frontmatter", note.kind))
                     .in_note(note, fm.span.clone()),
             );
         }
@@ -59,8 +59,8 @@ pub(super) fn note_size(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
 pub(super) fn block_ids(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     for note in managed(ctx) {
         let mut seen: BTreeSet<&str> = BTreeSet::new();
-        for b in &note.blocks {
-            if !seen.insert(b.id.as_str()) {
+        for b in note.block_ids() {
+            if !seen.insert(b.id.value(&note.text)) {
                 // Unsafe: a link may mean this occurrence.
                 let fix = Fix::new(Applicability::Unsafe, "give this block a new id").edit(
                     &note.path,
@@ -70,7 +70,7 @@ pub(super) fn block_ids(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
                 out.push(
                     Diagnostic::error(
                         Code::BlockIdDuplicate,
-                        format!("block id `^{}` appears more than once in this note", *b.id),
+                        format!("block id `^{}` appears more than once in this note", b.id.value(&note.text)),
                     )
                     .in_note(note, b.id.span.clone())
                     .with_fix(fix),
@@ -83,7 +83,7 @@ pub(super) fn block_ids(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
 pub(super) fn h1(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     for note in managed(ctx) {
         let path = &note.path;
-        let h1s: Vec<_> = note.headings.iter().filter(|h| h.level == 1).collect();
+        let h1s: Vec<_> = note.headings().filter(|h| h.level == 1).collect();
         if h1s.is_empty() {
             let at = note.body_start();
             let fix = Fix::new(Applicability::DisplayOnly, "add a title").edit(
@@ -97,7 +97,7 @@ pub(super) fn h1(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
         if h1s.len() > 1 {
             out.push(Diagnostic::error(Code::H1Multiple, "more than one H1").in_note(note, h1s[1].span.clone()));
         }
-        if !note.top_blocks.first().is_some_and(|b| b.node == BlockType::Heading(1)) {
+        if !note.body.first().is_some_and(|b| matches!(&b.node, Block::Heading(h) if h.level == 1)) {
             out.push(
                 Diagnostic::error(Code::H1NotFirst, "the H1 is not the first block after the frontmatter")
                     .in_note(note, h1s[0].span.clone()),

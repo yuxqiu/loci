@@ -71,18 +71,6 @@ pub struct Prereqs<'n> {
 }
 
 impl Index {
-    /// An index of in-memory files: `.md` texts are parsed, other contents are unused.
-    pub fn from_texts(files: &[(impl AsRef<str>, impl AsRef<str>)]) -> Index {
-        let map: BTreeMap<VaultPath, &str> = files
-            .iter()
-            .map(|(p, t)| {
-                let p = VaultPath::new(p.as_ref().to_string()).expect("`from_texts` is given vault paths");
-                (p, t.as_ref())
-            })
-            .collect();
-        Self::build(map.keys().cloned().collect(), |p| map[p].to_string())
-    }
-
     /// Indexes `files` (sorted vault paths, each once), taking each `.md` file's text
     /// from `text`.
     pub fn build(files: Vec<VaultPath>, text: impl Fn(&VaultPath) -> String) -> Index {
@@ -112,7 +100,7 @@ impl Index {
     /// optional), else a concept slug, written exactly. Refused with `unknown_code`
     /// when none matches, and `concept.ambiguous` when a slug names several concepts.
     pub fn note(&self, arg: &VaultPath, unknown_code: &str) -> Result<&Note, Refusal> {
-        if let Some(note) = self.notes.get(&arg.as_note()) {
+        if let Some(note) = self.notes.get(&arg.to_note()) {
             return Ok(note);
         }
         // No markdown file at that path: the argument may be a concept slug.
@@ -213,17 +201,11 @@ impl Index {
     }
 
     /// Every link that points at `path`, as (linking note, link), in note path order.
-    pub fn incoming(&self, path: &VaultPath) -> Vec<(&Note, &Spanned<Link>)> {
-        let mut out = vec![];
-        for note in self.notes.values() {
-            for link in &note.links {
-                let Some(target) = self.link_target(note, link) else { continue };
-                if target == *path {
-                    out.push((note, link));
-                }
-            }
-        }
-        out
+    pub fn incoming(&self, path: &VaultPath) -> impl Iterator<Item = (&Note, &Spanned<Link>)> {
+        self.notes.values().flat_map(move |note| {
+            let to_path = move |link: &&Spanned<Link>| self.link_target(note, link).as_ref() == Some(path);
+            note.links.iter().filter(to_path).map(move |link| (note, link))
+        })
     }
 
     /// The existing concept slug most like `name`, if one is close (Jaro-Winkler
@@ -250,7 +232,7 @@ impl Index {
     /// into `target` (`mention_names` says what a mention is).
     pub fn unlinked_mentions_of(&self, target: &Note) -> Vec<(&Note, std::ops::Range<usize>)> {
         let names = mention_names(target);
-        let linking: BTreeSet<&VaultPath> = self.incoming(&target.path).iter().map(|(n, _)| &n.path).collect();
+        let linking: BTreeSet<&VaultPath> = self.incoming(&target.path).map(|(n, _)| &n.path).collect();
         self.notes()
             .filter(|n| n.kind.is_formed() && n.path != target.path && !linking.contains(&n.path))
             .filter_map(|n| first_mention(n, &names).map(|at| (n, at)))
@@ -406,7 +388,7 @@ mod tests {
     #[test]
     fn path_links_name_notes_and_files_with_their_extension() {
         // `.md` is optional for a note; a target still ending in `.md` names no file.
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("concepts/a/x.md", "# X\n"),
             ("sources/papers/p.pdf", ""),
             (
@@ -422,7 +404,7 @@ mod tests {
 
     #[test]
     fn a_concept_whose_stem_is_no_slug_has_none() {
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("concepts/a/dfs.md", "# DFS\n"),
             ("concepts/a/BFS.md", "# BFS\n"),
             ("concepts/a/a_b.md", "# A B\n"),
@@ -438,7 +420,7 @@ mod tests {
 
     #[test]
     fn a_dangling_slug_suggests_the_closest_concept() {
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("concepts/a/breadth-first-search.md", "# BFS\n"),
             ("concepts/a/dijkstras-algorithm.md", "# D\n"),
             ("views/v.md", "# V\n\n[[bread-first-search]] [[dijkstra-algo]] [[zebra]]\n"),
@@ -455,7 +437,7 @@ mod tests {
 
     #[test]
     fn unlinked_mentions_in_a_note_are_the_concepts_it_names() {
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("concepts/a/queue.md", "# Queue\n"),
             ("concepts/a/priority-queue.md", "# Priority queue\n"),
             ("concepts/a/graph.md", "# Graph\n"),
@@ -476,7 +458,7 @@ mod tests {
 
     #[test]
     fn unlinked_mentions_are_whole_names_outside_links() {
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("concepts/a/breadth-first-search.md", "# Breadth-first search (BFS)\n"),
             ("concepts/a/graph.md", "# Graph\n\nA paragraph. Breadth first search walks it.\n"),
             ("concepts/a/queue.md", "# Queue\n\nUsed by [[breadth-first-search]]; BFS again.\n"),
@@ -512,7 +494,7 @@ mod tests {
 
     #[test]
     fn bare_names_resolve_to_concepts_only() {
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("concepts/a/bfs.md", "# BFS\n"),
             ("views/learn/bfs.md", "# Plan\n\n[[bfs]] [[plan]]\n"),
             ("views/plan.md", "# P\n"),
@@ -524,7 +506,7 @@ mod tests {
 
     #[test]
     fn a_shared_slug_resolves_to_no_concept() {
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("concepts/a/bfs.md", "# A\n"),
             ("concepts/b/bfs.md", "# B\n"),
             ("views/v.md", "# V\n\n[[bfs]] [[concepts/b/bfs]]\n"),
@@ -536,7 +518,7 @@ mod tests {
 
     #[test]
     fn paths_and_fragments() {
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("views/v.md", "# V\n\n## Steps\n\n- one ^abc\n"),
             (
                 "journal/r/2025/03/25-03-14.md",
@@ -554,7 +536,7 @@ mod tests {
 
     #[test]
     fn embeds_of_files() {
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("concepts/a/x.md", "---\nid: X\n---\n# X\n\n![[concepts/a/attachments/p.png|300]]\n"),
             ("concepts/a/attachments/p.png", ""),
         ]);

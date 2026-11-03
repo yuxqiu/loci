@@ -199,7 +199,6 @@ pub fn stored_name(index: &Index, from: &VaultPath) -> Result<VaultPath, Refusal
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::index::Index;
 
     fn vp(s: &str) -> VaultPath {
         VaultPath::new(s.to_string()).unwrap()
@@ -209,7 +208,7 @@ mod tests {
 
     #[test]
     fn a_link_with_a_dangling_fragment_still_follows_its_note() {
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("concepts/a/dfs.md", C),
             ("views/w.md", "[[dfs#Typo]] [[concepts/a/dfs#^nope]] [[dfs]]\n"),
         ]);
@@ -222,14 +221,14 @@ mod tests {
 
     #[test]
     fn rename_back_is_allowed() {
-        let i = Index::from_texts(&[("concepts/a/new.md", C), ("views/v.md", "[[new]]\n")]);
+        let i = crate::testing::index(&[("concepts/a/new.md", C), ("views/v.md", "[[new]]\n")]);
         let p = plan(&i, &vp("concepts/a/new.md"), &vp("concepts/a/old.md"), |_| Ok(false), |_| false).unwrap();
         assert_eq!(p.writes["views/v.md"].text, "[[old]]\n");
     }
 
     #[test]
     fn every_moved_file_must_stay_in_the_vault() {
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("views/d/fig.png", ""),
             ("views/d/x.md", "# X\n"),
             ("views/p.md", "[[views/d/fig.png]]\n"),
@@ -242,21 +241,21 @@ mod tests {
     #[test]
     fn from_is_found_by_its_nfc_form() {
         let nfd = "views/cafe\u{301}.md";
-        let i = Index::from_texts(&[(nfd, "# NFD\n"), ("views/de\u{301}/x.md", "# X\n")]);
+        let i = crate::testing::index(&[(nfd, "# NFD\n"), ("views/de\u{301}/x.md", "# X\n")]);
         assert_eq!(stored_name(&i, &vp("views/caf\u{e9}.md")).unwrap(), nfd);
         // A folder too.
         assert_eq!(stored_name(&i, &vp("views/d\u{e9}")).unwrap(), "views/de\u{301}");
         // An exact name wins over another spelling.
-        let both = Index::from_texts(&[(nfd, "# NFD\n"), ("views/caf\u{e9}.md", "# NFC\n")]);
+        let both = crate::testing::index(&[(nfd, "# NFD\n"), ("views/caf\u{e9}.md", "# NFC\n")]);
         assert_eq!(stored_name(&both, &vp("views/caf\u{e9}.md")).unwrap(), "views/caf\u{e9}.md");
         // Two stored spellings of one NFC name are ambiguous.
-        let two = Index::from_texts(&[("views/a\u{323}\u{302}.md", ""), ("views/a\u{302}\u{323}.md", "")]);
+        let two = crate::testing::index(&[("views/a\u{323}\u{302}.md", ""), ("views/a\u{302}\u{323}.md", "")]);
         assert_eq!(stored_name(&two, &vp("views/\u{1ead}.md")).unwrap_err().code(), "mv.from");
     }
 
     #[test]
     fn collisions_and_refusals() {
-        let i = Index::from_texts(&[
+        let i = crate::testing::index(&[
             ("concepts/a/x.md", C),
             ("concepts/a/y.md", C),
             ("concepts/b/AREA.md", "# B\n"),
@@ -273,14 +272,14 @@ mod tests {
         assert_eq!(e("concepts/a/x.md", "concepts/a/X.md"), "slug.format");
 
         // Every path rule lint checks applies to a destination, the journal one included.
-        let j = Index::from_texts(&[("journal/research/e.md", "# E\n")]);
+        let j = crate::testing::index(&[("journal/research/e.md", "# E\n")]);
         let je = |f: &str, t: &str| plan(&j, &vp(f), &vp(t), |_| Ok(false), |_| false).unwrap_err().code().to_string();
         assert_eq!(je("journal/research", "journal/Research"), "journal.path");
         assert_eq!(je("journal/research/e.md", "notes.md"), "kind.unknown");
         assert_eq!(je("journal/research/e.md", "journal/My Stuff/e.md"), "journal.path");
 
         // A name that exists exactly is `mv.exists`, never twin advice.
-        let twins = Index::from_texts(&[("views/a.md", "# a\n"), ("views/A.md", "# A\n")]);
+        let twins = crate::testing::index(&[("views/a.md", "# a\n"), ("views/A.md", "# A\n")]);
         let e2 = plan(&twins, &vp("views/a.md"), &vp("views/A.md"), |_| Ok(false), |_| false).unwrap_err();
         assert_eq!(e2.code(), "mv.exists");
         let message = |f: &str, t: &str| plan(&i, &vp(f), &vp(t), |_| Ok(false), |_| false).unwrap_err().error.message;
@@ -303,7 +302,7 @@ mod tests {
         // Messages say what is wrong with the destination.
         assert!(message("concepts/a/x.md", "concepts/a/AREA.md").ends_with("would be the area file, not a concept"));
         assert_eq!(e("views/v.md", "views/w"), "mv.to");
-        let pic = Index::from_texts(&[("views/fig.png", ""), ("views/v.md", "[[views/fig.png]]\n")]);
+        let pic = crate::testing::index(&[("views/fig.png", ""), ("views/v.md", "[[views/fig.png]]\n")]);
         let pe = plan(&pic, &vp("views/fig.png"), &vp("views/fig.md"), |_| Ok(false), |_| false).unwrap_err();
         assert_eq!(
             (pe.code(), pe.error.message.as_str()),
@@ -311,7 +310,7 @@ mod tests {
         );
 
         assert!(message("views/v.md", "views/w").ends_with("a note keeps the `.md` extension"));
-        let folder = Index::from_texts(&[("views/D/x.md", "# X\n"), ("views/D/y.md", "# Y\n")]);
+        let folder = crate::testing::index(&[("views/D/x.md", "# X\n"), ("views/D/y.md", "# Y\n")]);
         let m = plan(&folder, &vp("views/D/x.md"), &vp("views/d/x.md"), |_| Ok(false), |_| false)
             .unwrap_err()
             .error
@@ -333,7 +332,7 @@ mod tests {
         assert_eq!(e("views/v.md", "concepts/b/Bad.md"), "slug.format");
 
         // Two moved files may not end with the same concept slug.
-        let drafts = Index::from_texts(&[
+        let drafts = crate::testing::index(&[
             ("concepts/a/AREA.md", "# A\n"),
             ("inbox/drafts/x.md", "# X\n"),
             ("inbox/drafts/sub/x.md", "# X2\n"),

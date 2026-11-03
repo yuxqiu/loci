@@ -280,6 +280,8 @@ impl fmt::Display for Refusal {
     }
 }
 
+impl std::error::Error for Refusal {}
+
 /// The `--json` document every command prints (m0 §8); plugins print it too.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Envelope {

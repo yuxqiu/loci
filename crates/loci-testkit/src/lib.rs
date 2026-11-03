@@ -280,7 +280,7 @@ fn check_envelope(env: &Value, code: i32) {
     }
 }
 
-pub fn diags(env: &Value) -> &Vec<Value> {
+pub fn diags(env: &Value) -> &[Value] {
     env["diagnostics"].as_array().unwrap()
 }
 

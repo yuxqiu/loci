@@ -2,7 +2,7 @@
 
 use super::{Code, Ctx};
 use crate::envelope::Diagnostic;
-use crate::parse::{BlockType, Note, Spanned};
+use crate::parse::{Block, Note, Spanned};
 use crate::path::{AREA, Kind, VaultPath};
 
 /// The AREA.md rules: every area has one, an H1 and one paragraph within budget.
@@ -38,8 +38,8 @@ fn area_paragraph(note: &Note) -> Option<&str> {
     if note.frontmatter.is_some() {
         return None;
     }
-    match note.top_blocks.as_slice() {
-        [Spanned { node: BlockType::Heading(1), .. }, Spanned { node: BlockType::Paragraph, span }] => {
+    match note.body.as_slice() {
+        [Spanned { node: Block::Heading(h), .. }, Spanned { node: Block::Paragraph { .. }, span }] if h.level == 1 => {
             Some(note.text[span.clone()].trim())
         }
         _ => None,

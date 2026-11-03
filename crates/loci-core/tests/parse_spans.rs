@@ -6,7 +6,7 @@
 
 use std::ops::Range;
 
-use loci_core::parse::{FmValue, Frontmatter, Note, Spanned, parse};
+use loci_core::parse::{Block, FmValue, Frontmatter, Node, Note, Spanned, parse};
 use loci_core::path::VaultPath;
 use proptest::prelude::*;
 
@@ -144,21 +144,37 @@ proptest! {
                 check(&text, &label.span, &l.span, "link label")?;
             }
         }
-        for h in &n.headings {
-            check(&text, &h.span, &all, "heading")?;
-            check(&text, &h.content.span, &h.span, "heading content")?;
-        }
-        for i in &n.items {
-            check(&text, &i.span, &all, "item")?;
-            check(&text, &i.lead.span, &i.span, "item lead")?;
-            check(&text, &i.marker.span, &i.span, "item marker")?;
-        }
-        for b in &n.blocks {
-            check(&text, &b.span, &all, "block")?;
-            check(&text, &b.id.span, &b.span, "block id")?;
-        }
-        for b in &n.top_blocks {
-            check(&text, &b.span, &all, "top-level block")?;
+        for node in n.descendants() {
+            match node {
+                Node::Block(b) => {
+                    check(&text, &b.span, &all, "block")?;
+                    match &b.node {
+                        Block::Heading(h) => check(&text, &h.content.span, &b.span, "heading content")?,
+                        Block::Paragraph { id: Some(id) } => check(&text, &id.span, &b.span, "paragraph id")?,
+                        Block::List(items) => {
+                            for i in items {
+                                check(&text, &i.span, &b.span, "item")?;
+                            }
+                        }
+                        Block::Other(children) => {
+                            for c in children {
+                                check(&text, &c.span, &b.span, "nested block")?;
+                            }
+                        }
+                        Block::Paragraph { id: None } => {}
+                    }
+                }
+                Node::Item(i) => {
+                    check(&text, &i.lead.span, &i.span, "item lead")?;
+                    check(&text, &i.marker.span, &i.span, "item marker")?;
+                    if let Some(id) = &i.id {
+                        check(&text, &id.span, &i.span, "item id")?;
+                    }
+                    for c in &i.children {
+                        check(&text, &c.span, &i.span, "item block")?;
+                    }
+                }
+            }
         }
         for m in &n.markdown_links {
             check(&text, &m.span, &all, "markdown link")?;

@@ -17,7 +17,7 @@ pub(super) fn links(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
 /// The headings of `note`, the real choices for a heading link that misses, so it can
 /// be relinked without opening the note; picking one is judgement, so there is no fix.
 fn headings_hint(note: &Note) -> String {
-    let headings: Vec<&str> = note.headings.iter().map(|h| h.content.as_str()).collect();
+    let headings: Vec<&str> = note.headings().map(|h| h.content.value(&note.text)).collect();
     if headings.is_empty() {
         "it has no headings".to_string()
     } else {
@@ -50,7 +50,7 @@ fn markdown_link(note: &Note, m: &Spanned<MarkdownLink>) -> Diagnostic {
     let wiki = format!("{bang}[[{target}]]");
 
     // The link text becomes the label, unless it only repeats the target.
-    let label = m.label.text(&note.text).trim();
+    let label = m.label.value(&note.text).trim();
     let fixed = if label.is_empty() || label == target { wiki.clone() } else { format!("{bang}[[{target}|{label}]]") };
     // A percent-encoded URL (`a%20b.md`) names a file only once decoded: a guess.
     let applicability = if url.contains('%') { Applicability::Unsafe } else { Applicability::Safe };

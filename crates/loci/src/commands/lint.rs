@@ -19,6 +19,22 @@ pub struct Linted {
 }
 
 impl Linted {
+    /// Lints the vault: core rules, disk rules and every installed plugin's.
+    pub fn of(vault: &Vault) -> Self {
+        let index = Index::open(vault);
+        let mut diagnostics = lint::run(&index, &vault.config);
+        diagnostics.extend(lint::disk_rules(&index, vault.repo()));
+        let installed = plugins();
+        for p in &installed {
+            match p.lint(vault.root(), VERSION) {
+                Ok(d) => diagnostics.extend(d),
+                Err(failed) => diagnostics.push(*failed),
+            }
+        }
+        sort_diagnostics(&mut diagnostics);
+        Linted { files: index.files().len(), plugins: installed.into_iter().map(|p| p.name).collect(), diagnostics }
+    }
+
     /// The `data` of `loci lint` (m0 §9.2).
     pub fn data(&self) -> Value {
         json!({
@@ -38,21 +54,6 @@ impl Linted {
     fn errors(&self) -> usize {
         self.diagnostics.iter().filter(|d| d.is_error()).count()
     }
-}
-
-pub fn lint_vault(vault: &Vault) -> Linted {
-    let index = Index::open(vault);
-    let mut diagnostics = lint::run(&index, &vault.config);
-    diagnostics.extend(lint::disk_rules(&index, vault.repo()));
-    let installed = plugins();
-    for p in &installed {
-        match p.lint(vault.root(), VERSION) {
-            Ok(d) => diagnostics.extend(d),
-            Err(failed) => diagnostics.push(*failed),
-        }
-    }
-    sort_diagnostics(&mut diagnostics);
-    Linted { files: index.files().len(), plugins: installed.into_iter().map(|p| p.name).collect(), diagnostics }
 }
 
 /// `loci lint`'s fix options.
@@ -79,7 +80,7 @@ pub struct FixArgs {
 pub fn run(ctx: &Ctx, args: &FixArgs) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     if !args.fix {
-        let linted = lint_vault(&vault);
+        let linted = Linted::of(&vault);
         let (data, human) = (linted.data(), linted.summary());
         return Ok(Report::ok(data, human).with_diagnostics(linted.diagnostics));
     };
@@ -120,7 +121,7 @@ fn fix_vault(ctx: &Ctx, vault: &Vault, args: &FixArgs, only: Option<lint::Code>)
         Linted { files: index.files().len(), plugins: vec![], diagnostics: plan.remaining }
     } else {
         plan.change.apply(vault).map_err(Refusal::io)?;
-        lint_vault(&ctx.vault()?)
+        Linted::of(&ctx.vault()?)
     };
 
     let mut data = linted.data();

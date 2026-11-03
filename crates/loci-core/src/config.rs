@@ -47,27 +47,27 @@ impl UpdateId {
 /// A vault's edition moves when it handles an update, accepted or declined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Editions {
-    pub from: Option<UpdateId>,
+    pub since: Option<UpdateId>,
     pub until: Option<UpdateId>,
 }
 
 impl Editions {
     /// Every vault.
-    pub const ALWAYS: Self = Self { from: None, until: None };
+    pub const ALWAYS: Self = Self { since: None, until: None };
 
     /// Vaults that have handled update `u`.
-    pub const fn from(u: UpdateId) -> Self {
-        Self { from: Some(u), until: None }
+    pub const fn since(u: UpdateId) -> Self {
+        Self { since: Some(u), until: None }
     }
 
     /// Vaults that have not handled update `u`: it removes what the row describes.
     pub const fn until(u: UpdateId) -> Self {
-        Self { from: None, until: Some(u) }
+        Self { since: None, until: Some(u) }
     }
 
     /// Whether a vault with mark `mark` is in these editions.
     pub fn contains(&self, mark: Option<UpdateId>) -> bool {
-        self.from.is_none_or(|f| mark >= Some(f)) && self.until.is_none_or(|u| mark < Some(u))
+        self.since.is_none_or(|s| mark >= Some(s)) && self.until.is_none_or(|u| mark < Some(u))
     }
 }
 
@@ -179,7 +179,7 @@ mod tests {
         assert!(Editions::ALWAYS.contains(None) && Editions::ALWAYS.contains(u(5)));
         assert!(Editions::until(UpdateId::new(2)).contains(None) && Editions::until(UpdateId::new(2)).contains(u(1)));
         assert!(!Editions::until(UpdateId::new(2)).contains(u(2)));
-        assert!(!Editions::from(UpdateId::new(2)).contains(u(1)) && Editions::from(UpdateId::new(2)).contains(u(2)));
+        assert!(!Editions::since(UpdateId::new(2)).contains(u(1)) && Editions::since(UpdateId::new(2)).contains(u(2)));
     }
 
     #[test]

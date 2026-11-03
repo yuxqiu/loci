@@ -86,8 +86,8 @@ fn check_material(
         let counts = head(p)?;
         for m in Material::ALL {
             let t = tally.entry(m).or_default();
-            t.deleted += counts.of(m);
-            if counts.of(m) > 0 && t.first.is_none() {
+            t.deleted += counts[m];
+            if counts[m] > 0 && t.first.is_none() {
                 t.first = Some(p);
             }
         }
@@ -100,12 +100,12 @@ fn check_material(
         let now = index.parsed(p).expect("a listed `.md` file is parsed").counts;
         let before = if in_head { head(p)? } else { Counts::default() };
         for m in Material::ALL {
-            tally.entry(m).or_default().added += now.of(m).saturating_sub(before.of(m));
+            tally.entry(m).or_default().added += now[m].saturating_sub(before[m]);
         }
     }
 
     for (m, t) in tally.iter().filter(|(_, t)| t.deleted > t.added) {
-        let msg = format!("deleted files held {} {} but only {} were added elsewhere", t.deleted, m.name(), t.added);
+        let msg = format!("deleted files held {} {} but only {} were added elsewhere", t.deleted, m, t.added);
         let path = t.first.expect("a material deleted files held has a first such file");
         out.push(Diagnostic::warning(Code::MaterialDropped, msg).at_path(path));
     }

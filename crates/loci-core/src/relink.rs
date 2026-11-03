@@ -211,7 +211,7 @@ fn verify_note(
     let Some(new_note) = after.parsed(&new_path) else {
         return Err(format!("{new_path} would no longer parse as a note"));
     };
-    if !note.frontmatter_broken() && new_note.frontmatter_broken() {
+    if !note.has_broken_frontmatter() && new_note.has_broken_frontmatter() {
         return Err(format!("{new_path} would get invalid frontmatter"));
     }
 

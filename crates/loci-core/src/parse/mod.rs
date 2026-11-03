@@ -13,19 +13,19 @@ mod body;
 mod frontmatter;
 mod links;
 
-use blocks::blocks;
-use body::{Walker, walk_body};
+use body::walk_body;
 use frontmatter::{frontmatter, frontmatter_links};
 
-pub use blocks::Block;
+pub use blocks::{Block, BlockId, IdBlock, Lead, ListItem, Marker, Node};
 pub use frontmatter::{ConceptField, FmChange, FmEntry, FmValue, Frontmatter, new_concept_frontmatter, prereq_slug};
 pub use links::{Fragment, Label, Link, LinkForm, MarkdownLink, Names, Target, heading_key};
 
 pub const BOM: &str = "\u{feff}";
 
 /// A value and the bytes of the note's text it was read from (after rustc's
-/// `Spanned`). A part whose value is just its bytes is spanned with a marker type
-/// naming it (a link's [`Label`]); [`Spanned::text`] reads the bytes.
+/// `Spanned`). A part whose value is its bytes is spanned with a marker type naming it
+/// (a link's [`Label`]), which implements [`Written`]; [`Spanned::text`] reads the
+/// bytes of any part.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Spanned<T> {
     pub node: T,
@@ -43,6 +43,22 @@ impl<T> Spanned<T> {
     }
 }
 
+/// A part whose value is its bytes as written (§4.7): a marker type. A value that
+/// differs from its bytes (decoded YAML, a normalized link name) is stored instead.
+pub trait Written {
+    /// The value of a part written as `bytes`.
+    fn value(bytes: &str) -> &str {
+        bytes
+    }
+}
+
+impl<T: Written> Spanned<T> {
+    /// The part's value, read from `src`, the note's text.
+    pub fn value<'t>(&self, src: &'t str) -> &'t str {
+        T::value(self.text(src))
+    }
+}
+
 impl<T> std::ops::Deref for Spanned<T> {
     type Target = T;
 
@@ -55,35 +71,18 @@ impl<T> std::ops::Deref for Spanned<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Heading {
     pub level: u8,
-    /// Raw heading content (§4.6): without the ATX `#` markers or a setext underline,
-    /// lines joined with `\n`.
-    pub content: Spanned<String>,
+    /// The heading text (§4.6).
+    pub content: Spanned<HeadingText>,
     /// A setext heading (text over a `===` or `---` underline), not an ATX one.
     pub setext: bool,
 }
 
-/// A list item, spanning its bytes, nested items included.
+/// A heading's text (§4.6): its content as written, without the ATX `#` markers and
+/// closing `#`s or a setext underline.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ListItem {
-    /// 1 for a top-level item.
-    pub depth: usize,
-    /// The list marker; the item's content starts after it.
-    pub marker: Spanned<Marker>,
-    /// The item's leading text (§4.6): after the marker, up to its first nested block,
-    /// without trailing whitespace.
-    pub lead: Spanned<Lead>,
-    /// The item's block id, ending its lead, without its `^`; spanning `^id`.
-    pub id: Option<Spanned<String>>,
-}
+pub struct HeadingText;
 
-/// A list item's marker (`-`, `1.`, with a task box `[ ]`) and the spaces after it: its
-/// value is its bytes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Marker;
-
-/// A list item's leading text (§4.6), where its block id ends: its value is its bytes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Lead;
+impl Written for HeadingText {}
 
 /// How much of each [`Material`] a note holds.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -93,12 +92,14 @@ pub struct Counts {
     pub code: usize,
 }
 
-impl Counts {
-    pub fn of(&self, material: Material) -> usize {
+impl std::ops::Index<Material> for Counts {
+    type Output = usize;
+
+    fn index(&self, material: Material) -> &usize {
         match material {
-            Material::Math => self.math,
-            Material::Images => self.images,
-            Material::FencedCode => self.code,
+            Material::Math => &self.math,
+            Material::Images => &self.images,
+            Material::FencedCode => &self.code,
         }
     }
 }
@@ -113,25 +114,17 @@ pub enum Material {
 
 impl Material {
     pub const ALL: [Material; 3] = [Material::Math, Material::Images, Material::FencedCode];
+}
 
-    /// Named for reports.
-    pub fn name(self) -> &'static str {
-        match self {
+/// Named for reports.
+impl std::fmt::Display for Material {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
             Material::Math => "math spans",
             Material::Images => "images",
             Material::FencedCode => "fenced code blocks",
-        }
+        })
     }
-}
-
-/// What a block at the top level of the body is (§4.6).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlockType {
-    /// A heading of this level.
-    Heading(u8),
-    Paragraph,
-    List,
-    Other,
 }
 
 /// A vault note: its place in the vault, and what its text holds.
@@ -153,7 +146,7 @@ impl std::ops::Deref for Note {
 impl Note {
     /// The note's title (§9.3): the first H1's raw text, else the file stem.
     pub fn title(&self) -> &str {
-        self.headings.iter().find(|h| h.level == 1).map_or_else(|| self.path.stem(), |h| h.content.as_str())
+        self.headings().find(|h| h.level == 1).map_or_else(|| self.path.stem(), |h| h.content.value(&self.text))
     }
 }
 
@@ -162,12 +155,8 @@ impl Note {
 pub struct Markdown {
     pub text: String,
     pub frontmatter: Option<Spanned<Frontmatter>>,
-    pub headings: Vec<Spanned<Heading>>,
-    /// The top-level blocks after the frontmatter, in order.
-    pub top_blocks: Vec<Spanned<BlockType>>,
-    pub items: Vec<Spanned<ListItem>>,
-    /// The blocks with a block id (§4.6), in order.
-    pub blocks: Vec<Spanned<Block>>,
+    /// The top-level blocks after the frontmatter, in order, each holding its own.
+    pub body: Vec<Spanned<Block>>,
     /// The vault's links: wikilinks, embeds and `prereqs` items, in text order.
     pub links: Vec<Spanned<Link>>,
     /// Markdown-syntax links to vault files, which lint reports (`link.markdown`).
@@ -194,44 +183,31 @@ impl Markdown {
         self.fm_str(ConceptField::Id.key())?.parse().ok()
     }
 
-    /// The section under `self.headings[i]`: the heading through the next heading of the
-    /// same or a higher level.
-    pub fn section(&self, i: usize) -> Range<usize> {
-        let h = &self.headings[i];
-        let end = self.headings[i + 1..].iter().find(|n| n.level <= h.level).map_or(self.text.len(), |n| n.span.start);
-        h.span.start..end
-    }
-
     /// The bytes `fragment` names (§5.4): the section under the first heading it
     /// matches, or the block with its id.
     pub fn fragment_range(&self, fragment: &Fragment) -> Option<Range<usize>> {
         match fragment {
             Fragment::Heading(h) => {
                 let key = heading_key(h);
-                let i = self.headings.iter().position(|n| heading_key(&n.content) == key)?;
-                Some(self.section(i))
+                let text = &self.text;
+                self.sections().find(|(n, _)| heading_key(n.content.value(text)) == key).map(|(_, section)| section)
             }
-            Fragment::Block(id) => self.blocks.iter().find(|b| *b.id == *id).map(|b| b.span.clone()),
+            Fragment::Block(id) => self.block_ids().find(|b| b.id.value(&self.text) == id).map(|b| b.span.clone()),
         }
     }
 
     /// Every H2 whose text is `text`, with the content of its section (after the
     /// heading, up to the next H1 or H2).
-    pub fn h2_sections(&self, text: &str) -> Vec<(&Spanned<Heading>, Range<usize>)> {
-        (0..self.headings.len())
-            .filter(|&i| self.headings[i].level == 2 && *self.headings[i].content == text)
-            .map(|i| (&self.headings[i], self.headings[i].span.end..self.section(i).end))
-            .collect()
+    pub fn h2_sections(&self, text: &str) -> Vec<(Spanned<&Heading>, Range<usize>)> {
+        let named = |(h, _): &(Spanned<&Heading>, Range<usize>)| h.level == 2 && h.content.value(&self.text) == text;
+        self.sections().filter(named).map(|(h, section)| (h.clone(), h.span.end..section.end)).collect()
     }
 
-    /// The top level of every H2 section whose text is `text`: its depth-1 list items,
-    /// and its other top-level blocks.
-    pub fn section_top_level(&self, text: &str) -> (Vec<&Spanned<ListItem>>, Vec<&Spanned<BlockType>>) {
+    /// The top-level blocks of every H2 section whose text is `text`.
+    pub fn section_blocks(&self, text: &str) -> Vec<&Spanned<Block>> {
         let sections: Vec<Range<usize>> = self.h2_sections(text).into_iter().map(|(_, r)| r).collect();
         let inside = |r: &Range<usize>| sections.iter().any(|s| s.start <= r.start && r.end <= s.end);
-        let items = self.items.iter().filter(|i| i.depth == 1 && inside(&i.span)).collect();
-        let blocks = self.top_blocks.iter().filter(|b| inside(&b.span)).collect();
-        (items, blocks)
+        self.body.iter().filter(|b| inside(&b.span)).collect()
     }
 
     /// Whether the file starts with a UTF-8 byte-order mark (`file.bom` in managed notes).
@@ -242,7 +218,7 @@ impl Markdown {
     /// Byte offset where the body starts: after the frontmatter block, or after a BOM.
     pub fn body_start(&self) -> usize {
         match &self.frontmatter {
-            Some(f) if f.closed() => f.span.end,
+            Some(f) if f.is_closed() => f.span.end,
             _ if self.has_bom() => BOM.len(),
             _ => 0,
         }
@@ -250,7 +226,7 @@ impl Markdown {
 
     /// Whether the frontmatter is broken (unterminated or not a mapping), so its fields
     /// cannot be read; lint reports it (`fm.unterminated`, `fm.yaml`).
-    pub fn frontmatter_broken(&self) -> bool {
+    pub fn has_broken_frontmatter(&self) -> bool {
         self.frontmatter.as_ref().is_some_and(|f| !matches!(f.node, Frontmatter::Fields { .. }))
     }
 }
@@ -272,43 +248,44 @@ pub fn parse(path: &VaultPath, text: String) -> Note {
     Note { path: path.clone(), kind, markdown: markdown(text) }
 }
 
-/// A test concept note, at `concepts/a/x.md`, holding `text`.
-#[cfg(test)]
-pub(crate) fn concept(text: &str) -> Note {
-    parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), text.to_string())
-}
-
 /// Parses `text`, a whole markdown file in the vault or not.
 pub fn markdown(text: String) -> Markdown {
     // Frontmatter starts at byte 0, after a BOM (§4.3), which pulldown-cmark would read
     // as text: the walk starts past it.
     let base = if text.starts_with(BOM) { BOM.len() } else { 0 };
-    let walk = walk_body(&text, base);
-    let frontmatter = frontmatter(&text, base, walk.meta.as_ref());
-    let blocks = blocks(&text, &walk.items, &walk.paragraphs);
+    let walked = walk_body(&text, base);
+    let frontmatter = frontmatter(&text, base, walked.meta.as_ref());
     let mut links = frontmatter.iter().flat_map(|f| frontmatter_links(f)).collect::<Vec<_>>();
-    let Walker { headings, top_blocks, items, links: body_links, markdown_links, counts, .. } = walk;
-    links.extend(body_links);
+    links.extend(walked.links);
     links.sort_by_key(|l| l.span.start);
-    Markdown { text, frontmatter, headings, top_blocks, items, blocks, links, markdown_links, counts }
+    Markdown {
+        text,
+        frontmatter,
+        body: walked.body,
+        links,
+        markdown_links: walked.markdown_links,
+        counts: walked.counts,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use crate::parse::concept as p;
+    use crate::testing::concept as p;
 
     #[test]
     fn heading_texts() {
         let t = "# T\n\n## Hello world ##\n\n# C#\n\nTitle\nmore\n=====\n\n##\n";
         let n = p(t);
-        let found: Vec<(&str, bool)> = n.headings.iter().map(|h| (h.content.as_str(), h.setext)).collect();
+        let headings: Vec<_> = n.headings().collect();
+        let found: Vec<(&str, bool)> = headings.iter().map(|h| (h.content.value(t), h.setext)).collect();
         assert_eq!(found, [("T", false), ("Hello world", false), ("C#", false), ("Title\nmore", true), ("", false)]);
-        assert_eq!(n.headings[1].content.text(t), "Hello world");
         // Found by the parse-span property: a task marker is reported inside the heading.
         let n = p("- [ ] ---\n  - \n");
-        assert_eq!(*n.headings[0].content, "---");
+        assert_eq!(n.headings().next().unwrap().content.value(&n.text), "---");
+        let n = p("Title\r\nmore\r\n===\r\n");
+        assert_eq!(n.headings().next().unwrap().content.value(&n.text), "Title\r\nmore", "the text as written (§4.6)");
     }
 
     #[test]

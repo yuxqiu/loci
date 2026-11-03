@@ -145,7 +145,8 @@ fn block_id_of_parent_item_spans_its_children() {
 
     let text = std::fs::read_to_string(fixtures_dir().join("block-ids/concepts/a/lists.md")).unwrap();
     let note = parse(&loci_core::path::VaultPath::new("concepts/a/lists.md".into()).unwrap(), text.clone());
-    let get = |id: &str| note.blocks.iter().find(|b| *b.id == id).unwrap_or_else(|| panic!("no ^{id}"));
+    let ids: Vec<_> = note.block_ids().collect();
+    let get = |id: &str| ids.iter().find(|b| b.id.value(&text) == id).unwrap_or_else(|| panic!("no ^{id}"));
     let parent = get("parent1");
     let child = get("child1");
     // The parent's id sits before the nested list and its block covers the children.

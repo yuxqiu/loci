@@ -34,7 +34,7 @@ fn field(key: &str, mark: Option<UpdateId>) -> Option<&'static Field> {
 /// The concepts whose frontmatter parsed (malformed frontmatter is reported as
 /// `fm.*`; its fields cannot be checked). No frontmatter counts as an empty mapping.
 fn concepts_with_fields<'a>(ctx: &'a Ctx) -> impl Iterator<Item = &'a Note> {
-    ctx.index.concepts().filter(|n| !n.frontmatter_broken())
+    ctx.index.concepts().filter(|n| !n.has_broken_frontmatter())
 }
 
 /// Field rules of a concept's frontmatter (m0 §6.1), by the vault's edition.

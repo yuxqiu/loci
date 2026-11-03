@@ -6,14 +6,14 @@ use std::time::{Duration, SystemTime};
 use loci_core::envelope::{Diagnostic, Refusal, Report, sort_diagnostics};
 
 use super::Ctx;
-use super::lint::lint_vault;
+use super::lint::Linted;
 
 /// Records older than this are deleted.
 const KEEP: Duration = Duration::from_secs(90 * 24 * 60 * 60);
 
 pub fn run(ctx: &Ctx, notes: &[String]) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
-    let mut linted = lint_vault(&vault);
+    let mut linted = Linted::of(&vault);
     let now = SystemTime::now();
     let record = vault.repo().record_agent_tree(now, notes).unwrap_or_else(|e| {
         linted.diagnostics.push(Diagnostic::warning("done.record", format!("the agent's work was not recorded: {e}")));
