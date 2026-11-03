@@ -11,6 +11,8 @@ toolchain (cargo, clippy, rustfmt, cargo-insta).
 | Review changed snapshots | `cargo insta review` |
 | Build the packages | `nix build .#loci .#loci-learn` |
 | All flake checks (packages with their tests, formatting) | `nix flake check` |
+| Code-quality pass (review, verify, apply, check, record) | the `quality-pass` skill, `.claude/skills/quality-pass/SKILL.md` |
+| Function-length stats | `python3 .claude/skills/quality-pass/fnlen.py` |
 | Agent evals (calls a real agent; costs money; not in CI) | `REPS=3 evals/run.sh <suite> <model>...`, e.g. `evals/run.sh finding sonnet haiku` |
 
 New source files must be known to git (`git add -N <file>`) before Nix can see
