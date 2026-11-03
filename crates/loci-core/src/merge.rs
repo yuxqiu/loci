@@ -18,6 +18,7 @@ pub fn plan(index: &Index, from: &VaultPath, into: &VaultPath) -> Result<Merge, 
     if from == into {
         return Err(Refusal::refused("merge.same", "a concept cannot be merged into itself"));
     }
+
     let targets: BTreeMap<VaultPath, VaultPath> = [(from.clone(), into.clone())].into();
     let mut change = Change { deleted: [from.clone()].into(), ..Change::default() };
     let mut edits = relink::link_edits(index, &targets, &change);
@@ -51,6 +52,7 @@ pub fn plan(index: &Index, from: &VaultPath, into: &VaultPath) -> Result<Merge, 
     if !into_edits.is_empty() {
         edits.insert(into.clone(), into_edits);
     }
+
     let change = relink::finish(index, change, &targets, edits, "merge.verify")?;
     Ok(Merge { from, into, change })
 }

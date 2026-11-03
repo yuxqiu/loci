@@ -167,13 +167,16 @@ pub fn apply(vault: &Vault, change: &Change) -> std::io::Result<()> {
         }
         std::fs::rename(vault.abs(old), &dest)?;
     }
+
     // Writes before deletions: a failed write leaves the absorbed note in place.
     for (path, written) in &change.writes {
         vault::write_atomic(&vault.abs(path), written.text.as_bytes())?;
     }
+
     for path in &change.deleted {
         std::fs::remove_file(vault.abs(path))?;
     }
+
     // Remove directories left empty.
     for old in change.moves.keys().chain(&change.deleted) {
         let mut dir = old.parent();
@@ -184,5 +187,6 @@ pub fn apply(vault: &Vault, change: &Change) -> std::io::Result<()> {
             dir = d.parent();
         }
     }
+
     Ok(())
 }

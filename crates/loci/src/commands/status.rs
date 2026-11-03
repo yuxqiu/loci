@@ -68,10 +68,12 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         let parts: Vec<&str> = f.components().collect();
         *by_folder.entry(if parts.len() > 2 { parts[1] } else { "" }).or_default() += 1;
     }
+
     let uncommitted: Option<Vec<&VaultPath>> = changes.as_ref().map(|c| {
         let changed = |f: &VaultPath| c.untracked.contains(f) || c.modified.contains(f) || c.added.contains(f);
         inbox.iter().copied().filter(|f| changed(f)).collect()
     });
+
     let folders: Vec<String> = by_folder
         .iter()
         .map(|(d, n)| if d.is_empty() { format!("{n} directly in inbox/") } else { format!("{d} {n}") })
@@ -81,6 +83,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     if !folders.is_empty() {
         human.push_str(&format!(" ({})", folders.join(", ")));
     }
+
     human.push('\n');
     if let Some(u) = uncommitted.as_ref().filter(|u| !u.is_empty()) {
         for f in u.iter().take(LISTED) {
@@ -112,6 +115,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
             vec![]
         }
     };
+
     if !waiting.is_empty() {
         let ids: Vec<String> = waiting.iter().map(ToString::to_string).collect();
         human.push_str(&format!(
@@ -132,5 +136,6 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         "inbox": {"files": inbox.len(), "by_folder": by_folder, "uncommitted": uncommitted},
         "updates": waiting,
     });
+
     Ok(Report::ok(data, human).with_diagnostics(diags))
 }

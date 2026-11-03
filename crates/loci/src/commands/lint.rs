@@ -67,9 +67,11 @@ pub fn run(ctx: &Ctx, fix: Option<FixArgs>) -> Result<Report, Refusal> {
         let (data, human) = (linted.data(), linted.summary());
         return Ok(Report::ok(data, human).with_diagnostics(linted.diagnostics));
     };
+
     if let Some(code) = args.only.as_ref().filter(|c| !lint::known_code(c)) {
         return Err(Refusal::refused("lint.unknown-code", format!("`{code}` is not a code core lint reports")));
     }
+
     // As `cargo fix`: on a clean tree the diff is exactly the fixes. A dry run writes
     // nothing, so it may run on a dirty one.
     if !args.allow_dirty && !args.dry_run {
@@ -82,6 +84,7 @@ pub fn run(ctx: &Ctx, fix: Option<FixArgs>) -> Result<Report, Refusal> {
             ));
         }
     }
+
     let index = Index::open(&vault);
     let opts = fix::Options { unsafe_fixes: args.unsafe_fixes, only: args.only.as_deref() };
     let plan = fix::plan(&index, &vault.config, &opts)?;
@@ -98,6 +101,7 @@ pub fn run(ctx: &Ctx, fix: Option<FixArgs>) -> Result<Report, Refusal> {
         relink::apply(&vault, &plan.change).map_err(Refusal::io)?;
         lint_vault(&ctx.vault()?)
     };
+
     let mut data = linted.data();
     data["fixed"] = json!(plan.applied);
     data["dry_run"] = json!(args.dry_run);

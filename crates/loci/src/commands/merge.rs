@@ -16,17 +16,20 @@ pub fn run(ctx: &Ctx, from: &str, into: &str, dry_run: bool) -> Result<Report, R
     if !dry_run {
         relink::apply(&vault, &change).map_err(Refusal::io)?;
     }
+
     let data = json!({
         "from": from,
         "into": into,
         "edited": super::edited(&change),
         "dry_run": dry_run,
     });
+
     let n = change.writes.len();
     let human = if dry_run {
         format!("would merge {from} into {into}; edit {n} file(s)\n{}", super::plan_lines(&change))
     } else {
         format!("merged {from} into {into}; edited {n} file(s)\n")
     };
+
     Ok(Report::ok(data, human))
 }

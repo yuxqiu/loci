@@ -297,6 +297,7 @@ impl Index {
                 },
             }
         };
+
         Ok(resolved)
     }
 
@@ -469,6 +470,7 @@ mod tests {
             ("inbox/drafts/d.md", "# D\n\nBFS in a draft.\n"),
             ("sources/docs/s.md", "# S\n\nBFS in a source.\n"),
         ]);
+
         let found = |p: &str| -> Vec<(String, usize)> {
             let n = i.parsed(&VaultPath::new(p.into()).unwrap()).unwrap();
             i.unlinked_mentions_of(n)
@@ -476,14 +478,17 @@ mod tests {
                 .map(|(n, r)| (n.path.to_string(), line_col(&n.text, r.start).0))
                 .collect()
         };
+
         // Hyphen or space, the alias, case; not inside a link, not in a note that links
         // it, not inside another word, not in drafts or sources.
         assert_eq!(
             found("concepts/a/breadth-first-search.md"),
             [("concepts/a/graph.md".to_string(), 3), ("concepts/a/heap.md".to_string(), 3)]
         );
+
         // A CJK title matches inside running text.
         assert_eq!(found("concepts/b/二分.md"), [("views/v.md".to_string(), 3)]);
+
         // "graph" inside "paragraph" is no mention.
         assert!(found("concepts/a/graph.md").is_empty());
     }

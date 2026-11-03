@@ -193,5 +193,6 @@ fn main() -> ExitCode {
         }
         Cmd::External(args) => return commands::dispatch::run(&ctx, args),
     };
+
     report.unwrap_or_else(Report::from).print(ctx.json, VERSION, name).into()
 }

@@ -44,6 +44,7 @@ fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::R
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()?;
+
     // Stdout is drained on its own thread so that an agent printing more than a pipe
     // buffer does not block before it exits.
     let mut stdout = child.stdout.take().expect("stdout is piped");
@@ -53,17 +54,20 @@ fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::R
         // The receiver is gone only after a timeout, when the output is not wanted.
         let _ = sender.send(stdout.read_to_end(&mut out).map(|_| out));
     });
+
     // An agent may exit without reading the question.
     match child.stdin.take().expect("stdin is piped").write_all(question.as_bytes()) {
         Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => return Err(e),
         _ => {}
     }
+
     let start = Instant::now();
     if child.wait_timeout(AGENT_TIMEOUT)?.is_none() {
         child.kill()?;
         child.wait()?;
         return Ok(None);
     }
+
     // A process the agent left running may hold stdout open, so the wait is bounded too.
     match output.recv_timeout(AGENT_TIMEOUT.saturating_sub(start.elapsed())) {
         Ok(out) => Ok(Some(out?)),
@@ -83,15 +87,18 @@ pub fn run(ctx: &Ctx, agent: &str, cases_file: Option<&Path>) -> Result<Report, 
         }
         Err(e) => return Err(Refusal::io(format!("reading `{shown}`: {e}"))),
     };
+
     let mut cases = vec![];
     for (n, line) in text.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
         let case = serde_json::from_str::<Case>(line)
             .map_err(|e| Refusal::refused("bench.case", format!("{shown} line {}: {e}", n + 1)))?;
         cases.push(case);
     }
+
     if cases.is_empty() {
         return Err(Refusal::refused("bench.none", format!("`{shown}` has no cases")));
     }
+
     let (mut passes, mut times, mut results) = (0usize, vec![], vec![]);
     for case in &cases {
         let start = Instant::now();
@@ -100,6 +107,7 @@ pub fn run(ctx: &Ctx, agent: &str, cases_file: Option<&Path>) -> Result<Report, 
         passes += usize::from(pass);
         results.push(json!({"q": case.q, "pass": pass}));
     }
+
     let pass_rate = passes as f64 / cases.len() as f64;
     let median_s = median(&mut times);
     let human = format!("{} cases: pass rate {pass_rate:.3}, median {median_s:.1} s\n", cases.len());
@@ -119,6 +127,7 @@ fn run_case(root: &Path, agent: &str, case: &Case) -> Result<bool, String> {
     else {
         return Ok(false);
     };
+
     let output = work.path().join("output.txt");
     std::fs::write(&output, reply).map_err(|e| format!("writing the agent's reply: {e}"))?;
     let status = Command::new("sh")

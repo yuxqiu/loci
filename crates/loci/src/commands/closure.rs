@@ -21,6 +21,7 @@ pub fn run(ctx: &Ctx, slug: &str, depth: Option<usize>) -> Result<Report, Refusa
                 .at_path(path.as_str()),
         );
     }
+
     let human: String = c.members.iter().map(|m| format!("- [[{}]]\n", m.path.stem())).collect();
     let data = json!({
         "concept": path,
@@ -29,5 +30,6 @@ pub fn run(ctx: &Ctx, slug: &str, depth: Option<usize>) -> Result<Report, Refusa
         })).collect::<Vec<_>>(),
         "unresolved": c.unresolved.iter().map(|(f, t)| json!({"from": f, "target": t})).collect::<Vec<_>>(),
     });
+
     Ok(Report::ok(data, human).with_diagnostics(diags))
 }

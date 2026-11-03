@@ -20,15 +20,18 @@ pub fn run(ctx: &Ctx, args: Vec<String>) -> ExitCode {
         );
         return fail(ctx, name, Refusal::refused("cmd.unknown", msg));
     };
+
     let vault = match ctx.vault() {
         Ok(v) => v,
         Err(r) => return fail(ctx, name, r),
     };
+
     let mut cmd = plugin::command(p, &vault.root, VERSION);
     cmd.args(rest);
     if ctx.json {
         cmd.arg("--json");
     }
+
     match cmd.status() {
         Ok(status) => ExitCode::from(status.code().map_or(Exit::Internal as u8, |c| c.clamp(0, 255) as u8)),
         Err(e) => fail(ctx, name, Refusal::internal("plugin.failed", format!("cannot run {}: {e}", p.path.display()))),

@@ -103,26 +103,31 @@ impl VaultPath {
         let parts: Vec<&str> = self.components().collect();
         let first = parts[0];
         let path = self.as_str();
+
         // Plugin data, git's own files and the vault's configuration are never read as
         // vault files (m0 §3).
         if first == "plugins" || first == ".git" || path == config::FILE || path == ".gitignore" {
             return None;
         }
+
         let is_md = self.is_note();
         match first {
             "sources" => return Some(Kind::Source),
             "inbox" => return Some(Kind::Inbox),
             _ => {}
         }
+
         if !is_md {
             return Some(Kind::Asset);
         }
+
         if parts.len() == 1 {
             return Some(match first {
                 vault::AGENTS | vault::RULES | vault::STYLE => Kind::Rules,
                 _ => Kind::Unknown,
             });
         }
+
         Some(match first {
             "concepts" if parts.len() == 3 && parts[2] == "AREA.md" => Kind::Area,
             "concepts" if parts.len() >= 3 => Kind::Concept,
@@ -283,6 +288,7 @@ mod tests {
         ] {
             assert_eq!(VaultPath::from_arg(given).unwrap().as_str(), path, "{given}");
         }
+
         for (bad, code) in [
             ("/etc", "path.outside"),
             ("..", "path.outside"),

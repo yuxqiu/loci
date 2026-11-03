@@ -33,6 +33,7 @@ impl Edit {
 pub fn apply(original: &str, mut edits: Vec<Edit>) -> Result<String, String> {
     edits.sort_by_key(|e| (e.range.start, e.range.end));
     let mut out = String::with_capacity(original.len());
+
     // The end of the previous edit: an edit may start there (an insert), not before.
     let mut cursor = 0;
     for edit in edits {
@@ -51,6 +52,7 @@ pub fn apply(original: &str, mut edits: Vec<Edit>) -> Result<String, String> {
         out.push_str(&edit.new);
         cursor = r.end;
     }
+
     out.push_str(&original[cursor..]);
     Ok(out)
 }

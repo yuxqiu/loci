@@ -31,6 +31,8 @@ them under its version.
 
 ### Changed
 
+- A file git tracks that has become a FIFO, socket or device refuses the vault
+  (`file.unreadable`) instead of being skipped.
 - `link.dangling-heading` lists the target note's headings in its hint, so a renamed
   heading can be relinked without opening the note.
 - `link.dangling-block` says what likely happened (the block was removed or its id

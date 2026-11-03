@@ -589,3 +589,20 @@ fn an_unreadable_file_refuses_the_vault() {
     }
     assert!(!v.exists("concepts/a/fresh.md"), "nothing written");
 }
+
+/// A tracked file replaced on disk: by a folder, it is gone (the folder's files are
+/// listed on their own); by a socket or FIFO, which opening could block on, the vault is
+/// refused (`file.unreadable`).
+#[test]
+fn a_tracked_file_replaced_by_a_folder_or_a_special_file() {
+    let v = TestVault::with_files(BIN, &[("views/a.md", "# A\n"), ("views/b.md", "# B\n"), ("views/c.md", "# C\n")]);
+    std::fs::remove_file(v.root.join("views/a.md")).unwrap();
+    v.write("views/a.md/inner.md", "# Inner\n");
+    let (code, env) = v.run(&["lint"]);
+    assert!(error_code(&env).is_empty() && code == 0, "a folder is not refused: {env:#}");
+    std::fs::remove_file(v.root.join("views/b.md")).unwrap();
+    let _socket = std::os::unix::net::UnixListener::bind(v.root.join("views/b.md")).unwrap();
+    let (code, env) = v.run(&["lint"]);
+    assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
+    assert!(env["error"]["message"].as_str().unwrap().contains("`views/b.md` is not a regular file"), "{env:#}");
+}

@@ -78,6 +78,7 @@ pub fn plan(index: &Index, config: &Config, opts: &Options) -> Result<Plan, Refu
         current = index::build(index.files.clone(), |p| texts[p].clone());
         diags = lint::run(&current, config);
     }
+
     verify(index, &before, &current, &diags)?;
     let mut change = Change::default();
     for (p, n) in edits {
@@ -86,6 +87,7 @@ pub fn plan(index: &Index, config: &Config, opts: &Options) -> Result<Plan, Refu
             change.writes.insert(p, Written { text, edits: n });
         }
     }
+
     Ok(Plan { change, applied, remaining: diags })
 }
 
@@ -159,14 +161,17 @@ fn verify(before: &Index, was: &[Diagnostic], after: &Index, now: &[Diagnostic])
         }
         n
     };
+
     let (was_n, now_n) = (errors(was), errors(now));
     if let Some((code, n)) = now_n.iter().find(|(c, n)| **n > was_n.get(*c).copied().unwrap_or(0)) {
         let w = was_n.get(code).copied().unwrap_or(0);
         return Err(refuse(format!("the fixes would raise the `{code}` errors from {w} to {n}")));
     }
+
     let targets = |idx: &Index, n: &crate::parse::Note| -> Vec<VaultPath> {
         n.links.iter().filter_map(|l| idx.link_target(n, l)).collect()
     };
+
     for note in before.notes() {
         // Every target before is still a target after (fixes may add links).
         let mut have = after.parsed(&note.path).map_or(vec![], |n| targets(after, n));
@@ -179,5 +184,6 @@ fn verify(before: &Index, was: &[Diagnostic], after: &Index, now: &[Diagnostic])
             }
         }
     }
+
     Ok(())
 }

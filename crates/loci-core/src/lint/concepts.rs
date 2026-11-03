@@ -131,6 +131,7 @@ pub(super) fn duplicates(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
             ids.entry(id).or_default().push(n);
         }
     }
+
     for (id, notes) in ids.iter().filter(|(_, ns)| ns.len() > 1) {
         // Unsafe: plugin data (a review log) may refer to the id of either note.
         let mut fix = Fix::new(Applicability::Unsafe, "give the other notes new ids");
@@ -148,6 +149,7 @@ pub(super) fn duplicates(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
                 .with_fix(fix),
         );
     }
+
     for (slug, paths) in &index.slugs {
         if paths.len() > 1 {
             out.push(
@@ -173,9 +175,11 @@ fn unquoted_prereq<'a>(text: &str, item: &'a FmValue) -> Option<(&'a str, std::o
 
 pub(super) fn prereq_cycles(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     let index = ctx.index;
+
     // Concept path -> prerequisite paths.
     let graph: BTreeMap<VaultPath, Vec<VaultPath>> =
         index.concepts().map(|n| (n.path.clone(), index.prereqs(n).0)).collect();
+
     // Iterative DFS; report each cycle once, from its member with the smallest slug.
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Visit {
@@ -184,6 +188,7 @@ pub(super) fn prereq_cycles(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
         OnPath,
         Done,
     }
+
     let mut state: BTreeMap<&VaultPath, Visit> = BTreeMap::new();
     let visit = |state: &BTreeMap<&VaultPath, Visit>, p: &VaultPath| state.get(p).copied().unwrap_or(Visit::Unseen);
     let mut reported: BTreeSet<Vec<VaultPath>> = BTreeSet::new();

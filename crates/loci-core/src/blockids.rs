@@ -18,6 +18,7 @@ pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> Ulid) -> O
     if note.h2_sections(heading).is_empty() {
         return None;
     }
+
     let (items, blocks) = note.section_top_level(heading);
     let has_id = |block: &Range<usize>| note.block_ids.iter().any(|b| &b.block == block);
 
@@ -31,11 +32,13 @@ pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> Ulid) -> O
             targets.push((item.range.clone(), item.lead.clone()));
         }
     }
+
     for (_, r) in blocks.into_iter().filter(|(b, _)| matches!(b, TopBlock::Paragraph)) {
         if !has_id(r) {
             targets.push((r.clone(), r.clone()));
         }
     }
+
     targets.sort_by_key(|(b, _)| b.start);
 
     let text = &note.text;
@@ -47,6 +50,7 @@ pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> Ulid) -> O
         assigned.push(Assigned { line: crate::envelope::line_col(text, at).0, id });
         edits.push(Edit::insert(at, format!(" ^{id}")));
     }
+
     let out = splice::apply(text, edits).expect("insertions at distinct block ends never overlap");
     Some((out, assigned))
 }

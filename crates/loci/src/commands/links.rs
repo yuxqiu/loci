@@ -12,6 +12,7 @@ pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
     let target = VaultPath::from_arg(target)?;
+
     // A note or concept, else any other vault file (an image, a source file).
     let path = match index.note(&target, "links.unknown") {
         Ok(n) => n.path.clone(),
@@ -30,6 +31,7 @@ pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
             outgoing.push(json!({"line": line, "form": link.form, "raw": link.raw, "target": target}));
         }
     }
+
     human.push_str(&format!("links to {path}:\n"));
     let mut incoming = vec![];
     for (note, link) in index.incoming(&path) {
@@ -37,6 +39,7 @@ pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
         human.push_str(&format!("  {}:{line}: {}{}\n", note.path, link.raw, form_note(link.form)));
         incoming.push(json!({"path": note.path, "line": line, "form": link.form, "raw": link.raw}));
     }
+
     // Missing links, both ways: notes that name this one, and concepts this one names.
     let (mut unlinked_in, mut unlinked_out) = (vec![], vec![]);
     if let Some(note) = index.parsed(&path) {
@@ -55,6 +58,7 @@ pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
             unlinked_out.push(json!({"line": line, "text": words, "concept": concept.path}));
         }
     }
+
     let data = json!({"note": path, "outgoing": outgoing, "incoming": incoming, "unlinked_in": unlinked_in, "unlinked_out": unlinked_out});
     Ok(Report::ok(data, human))
 }

@@ -72,11 +72,14 @@ pub fn of_note(note: &Note) -> (Vec<Card>, Vec<FormatIssue>) {
     if let Some((second, _)) = found.get(1) {
         issues.push(FormatIssue { path: note.path.clone(), range: second.range.clone() });
     }
+
     let (items, blocks) = note.section_top_level(SECTION);
+
     // Anything at the top level of the section other than a list is a format issue.
     for (_, range) in blocks.into_iter().filter(|(b, _)| !matches!(b, TopBlock::List)) {
         issues.push(FormatIssue { path: note.path.clone(), range: range.clone() });
     }
+
     let mut cards = vec![];
     for item in items {
         let id = note.block_ids.iter().find(|b| b.kind == BlockKind::Item && b.block == item.range);
@@ -99,6 +102,7 @@ pub fn of_note(note: &Note) -> (Vec<Card>, Vec<FormatIssue>) {
             None => issues.push(FormatIssue { path: note.path.clone(), range: item.range.clone() }),
         }
     }
+
     (cards, issues)
 }
 

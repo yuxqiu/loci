@@ -72,6 +72,7 @@ pub fn run(ctx: &Ctx, every: bool, handled: Option<&str>) -> Result<Report, Refu
         let text: String = list.iter().map(|u| format!("{}\n", u.text)).collect();
         return Ok(Report::ok(json!({"updates": list}), text));
     }
+
     let waiting = waiting(mark, &list)?;
     match handled {
         None => {

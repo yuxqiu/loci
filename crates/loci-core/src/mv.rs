@@ -215,17 +215,21 @@ mod tests {
             ("sources/papers/p.pdf", ""),
             ("sources/stray.md", "# Stray\n"),
         ]);
+
         let e = |f: &str, t: &str| plan(&i, &vp(f), &vp(t), |_| Ok(false), |_| false).unwrap_err().code().to_string();
         assert_eq!(e("concepts/a/x.md", "concepts/a/y.md"), "mv.exists");
         assert_eq!(e("views/v.md", "views/V.md"), "path.case-twin");
+
         // A case-only rename to a name lint rejects is refused for the name, not the case.
         assert_eq!(e("concepts/a/x.md", "concepts/a/X.md"), "slug.format");
+
         // Every path rule lint checks applies to a destination, the journal one included.
         let j = from_texts(&[("journal/research/e.md", "# E\n")]);
         let je = |f: &str, t: &str| plan(&j, &vp(f), &vp(t), |_| Ok(false), |_| false).unwrap_err().code().to_string();
         assert_eq!(je("journal/research", "journal/Research"), "journal.path");
         assert_eq!(je("journal/research/e.md", "notes.md"), "kind.unknown");
         assert_eq!(je("journal/research/e.md", "journal/My Stuff/e.md"), "journal.path");
+
         // A name that exists exactly is `mv.exists`, never twin advice.
         let twins = from_texts(&[("views/a.md", "# a\n"), ("views/A.md", "# A\n")]);
         let e2 = plan(&twins, &vp("views/a.md"), &vp("views/A.md"), |_| Ok(false), |_| false).unwrap_err();
@@ -237,13 +241,16 @@ mod tests {
             message("views/v.md", "concepts/A/z.md")
                 .ends_with("use the existing spelling `concepts/a` or another name")
         );
+
         assert_eq!(e("concepts/a", "concepts/A"), "path.case-twin", "a folder too");
+
         // A twin that breaks a path rule is refused for the rule (`Views/` is no known folder).
         assert_eq!(e("views", "Views"), "kind.unknown");
         assert_eq!(e("concepts/a/x.md", "concepts/A/z.md"), "path.case-twin", "a folder on the way");
         assert_eq!(e("concepts/a/x.md", "concepts/b/y.md"), "mv.collision");
         assert_eq!(e("concepts/a/x.md", "views/x.md"), "mv.no-area");
         assert_eq!(e("concepts/a/x.md", "concepts/x.md"), "mv.no-area", "the `concepts/` root is no area");
+
         // Messages say what is wrong with the destination.
         let message = |f: &str, t: &str| plan(&i, &vp(f), &vp(t), |_| Ok(false), |_| false).unwrap_err().error.message;
         assert!(message("concepts/a/x.md", "concepts/a/AREA.md").ends_with("would be the area file, not a concept"));
@@ -254,6 +261,7 @@ mod tests {
             (pe.code(), pe.error.message.as_str()),
             ("mv.to", "`views/fig.md`: only a note has the `.md` extension")
         );
+
         assert!(message("views/v.md", "views/w").ends_with("a note keeps the `.md` extension"));
         let folder = from_texts(&[("views/D/x.md", "# X\n"), ("views/D/y.md", "# Y\n")]);
         let m = plan(&folder, &vp("views/D/x.md"), &vp("views/d/x.md"), |_| Ok(false), |_| false)
@@ -264,21 +272,25 @@ mod tests {
         assert_eq!(e("sources/papers/p.pdf", "sources/papers/p/q.pdf"), "mv.source-file");
         assert_eq!(e("sources/papers/p.pdf", "views/p.pdf"), "mv.source-file");
         assert_eq!(e("sources/papers/p.pdf", "sources/papers/p.md"), "mv.source-file", "a source keeps its extension");
+
         // A stray file under `sources/` may leave, which fixes its `sources.layout`.
         assert!(plan(&i, &vp("sources/stray.md"), &vp("views/stray.md"), |_| Ok(false), |_| false).is_ok());
         assert_eq!(e("plugins/learn", "x"), "mv.from");
         assert_eq!(e("loci.toml", "views/x.toml"), "mv.from", "configuration cannot be moved");
         assert_eq!(e("sources", "old/sources"), "mv.source-file");
         assert_eq!(e("concepts/a/x.md", "concepts/a/Bad Name.md"), "slug.format");
+
         // A file that becomes a concept follows the concept naming rules too.
         assert_eq!(e("views/v.md", "concepts/b/x.md"), "mv.collision");
         assert_eq!(e("views/v.md", "concepts/b/Bad.md"), "slug.format");
+
         // Two moved files may not end with the same concept slug.
         let drafts = from_texts(&[
             ("concepts/a/AREA.md", "# A\n"),
             ("inbox/drafts/x.md", "# X\n"),
             ("inbox/drafts/sub/x.md", "# X2\n"),
         ]);
+
         let e = plan(&drafts, &vp("inbox/drafts"), &vp("concepts/a/new"), |_| Ok(false), |_| false).unwrap_err();
         assert_eq!(e.code(), "mv.collision");
         assert!(plan(&i, &vp("sources/papers/p.pdf"), &vp("sources/papers/q.pdf"), |_| Ok(false), |_| false).is_ok());

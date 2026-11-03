@@ -29,17 +29,20 @@ impl Config {
             new_per_day: Option<i64>,
             desired_retention: Option<f64>,
         }
+
         let raw: Raw = toml::from_str(text).map_err(|e| e.message().to_string())?;
         let mut c = Config::default();
         if let Some(n) = raw.new_per_day {
             c.new_per_day = u32::try_from(n).map_err(|_| format!("`new_per_day` must be ≥ 0, got {n}"))?;
         }
+
         if let Some(r) = raw.desired_retention {
             if !(r > 0.0 && r < 1.0) {
                 return Err(format!("`desired_retention` must be between 0 and 1, got {r}"));
             }
             c.desired_retention = r as f32;
         }
+
         Ok(c)
     }
 

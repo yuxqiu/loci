@@ -17,10 +17,12 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         Some(d) => ctx.cwd.join(d),
         None => ctx.cwd.clone(),
     };
+
     let present = |name: &str| dir.join(name).symlink_metadata().is_ok();
     if present(config::FILE) {
         return Err(Refusal::refused("init.exists", "loci.toml already exists"));
     }
+
     // There is no vault to check yet (`Vault::open` refuses symlinks): before anything
     // is written, the files `init` manages must not be links (m0 §3).
     let managed = [vault::RULES, vault::STYLE, vault::AGENTS, ".gitignore"];
@@ -28,6 +30,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         let message = format!("`{name}` is a symlink; loci does not follow symlinks");
         return Err(Refusal::refused("file.symlink", message));
     }
+
     match git::toplevel(&dir) {
         // Not in a work tree (or git cannot tell): `git init` creates one or fails loudly.
         Err(_) => {
@@ -36,12 +39,14 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         Ok(top) if dir.canonicalize().is_ok_and(|d| d == top) => {}
         Ok(_) => return Err(Refusal::refused("vault.not-git", "run `loci init` at the root of the git work tree")),
     }
+
     let files: [(&str, String); 4] = [
         (config::FILE, Config::default_file(super::updates::all().last().expect("updates ship").id)),
         (vault::RULES, "# Rules\n\n## Lessons\n".to_string()),
         (vault::STYLE, "# Style\n".to_string()),
         (vault::AGENTS, assets::AGENTS_STUB.to_string()),
     ];
+
     let (mut created, mut skipped) = (vec![], vec![]);
     for (name, content) in files {
         if present(name) {
@@ -51,6 +56,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
             created.push(name.to_string());
         }
     }
+
     // Read as bytes and append, so a `.gitignore` that is not UTF-8 is kept intact.
     let gi = dir.join(".gitignore");
     let existing = match std::fs::read(&gi) {
@@ -58,6 +64,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
         Err(e) => return Err(Refusal::io(format!("reading `.gitignore`: {e}"))),
     };
+
     if existing.split(|b| *b == b'\n').any(|l| l.strip_suffix(b"\r").unwrap_or(l) == GITIGNORE_LINE.as_bytes()) {
         skipped.push(".gitignore".to_string());
     } else {
@@ -69,6 +76,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
         std::fs::write(&gi, bytes).map_err(Refusal::io)?;
         created.push(".gitignore".to_string());
     }
+
     let human = format!("created: {}\nskipped: {}\n", created.join(", "), skipped.join(", "));
     Ok(Report::ok(json!({"created": created, "skipped": skipped}), human))
 }

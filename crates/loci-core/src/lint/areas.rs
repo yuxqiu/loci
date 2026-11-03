@@ -14,6 +14,7 @@ pub(super) fn areas(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
             out.push(Diagnostic::error("area.missing", format!("area `{a}` has no AREA.md")).at_path(p.as_str()));
         }
     }
+
     for note in ctx.index.notes().filter(|n| n.kind == Kind::Area) {
         let path = note.path.as_str();
         let Some(para) = area_paragraph(note) else {

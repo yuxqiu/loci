@@ -189,17 +189,20 @@ mod tests {
         assert!("u42".parse::<UpdateId>().is_err() && "x0042".parse::<UpdateId>().is_err());
         let bad = Config::parse("schema = 1\nupdates = \"nope\"\n").unwrap_err();
         assert!(bad.contains("`nope` is not an update id"), "{bad}");
+
         // Replaced in place, its comment, other comments and tables kept.
         let file = "schema = 1\nupdates = \"u0001\"   # note\n\n[budgets]\nnote = 5 # x\n";
         assert_eq!(
             Config::set_updates(file, id("u0004")).unwrap(),
             "schema = 1\nupdates = \"u0004\"   # note\n\n[budgets]\nnote = 5 # x\n"
         );
+
         // Added with the other top-level keys, before the first table.
         let bare = "# my vault\nschema = 1\n[budgets]\nnote = 5\n";
         let set = Config::set_updates(bare, id("u0002")).unwrap();
         assert_eq!(set, "# my vault\nschema = 1\nupdates = \"u0002\"\n[budgets]\nnote = 5\n");
         assert_eq!(Config::parse(&set).unwrap().updates, Some(id("u0002")));
+
         // A key that only starts with `updates` is another key.
         let near = "schema = 1\nupdates_note = \"x\"\n";
         assert!(

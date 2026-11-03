@@ -35,27 +35,32 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
     if !matches!(note.kind, Kind::View | Kind::Concept) {
         return Err(Refusal::refused("export.kind", format!("`{path}` is not a view or a concept")));
     }
+
     let e = export::export(&index, &path, depth);
     let out_path = match output {
         Some(o) => ctx.cwd.join(o),
         None => vault.root.join(format!(".loci/export/{}.{}", path.stem(), format.ext())),
     };
+
     let out_dir = out_path.parent().expect("an absolute file path has a parent").to_path_buf();
     let dirs = if e.assets.is_empty() { out_dir.clone() } else { out_dir.join(export::ASSETS) };
     std::fs::create_dir_all(dirs).map_err(Refusal::io)?;
     for (src, name) in &e.assets {
         std::fs::copy(vault.abs(src), out_dir.join(export::ASSETS).join(name)).map_err(Refusal::io)?;
     }
+
     let text = match format {
         Format::Md => e.markdown.clone(),
         Format::Html => html(&e, note.title()).map_err(|m| Refusal::internal("export.html", m))?,
     };
+
     std::fs::write(&out_path, text).map_err(Refusal::io)?;
     let data = json!({
         "output": out_path,
         "notes": e.notes,
         "assets": e.assets.iter().map(|(_, n)| format!("{}/{n}", export::ASSETS)).collect::<Vec<_>>(),
     });
+
     Ok(Report::ok(data, format!("{}\n", out_path.display())))
 }
 
@@ -83,9 +88,11 @@ fn html(e: &export::Export, title: &str) -> Result<String, String> {
             other => other,
         });
     }
+
     if ids.next().is_some() {
         return Err("fewer headings than identifiers".to_string());
     }
+
     let mut body = String::new();
     push_html(&mut body, events.into_iter());
     Ok(format!(

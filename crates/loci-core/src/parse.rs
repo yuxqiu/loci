@@ -321,6 +321,7 @@ pub fn parse(path: &VaultPath, kind: Kind, text: String) -> Note {
     if let Some(fm) = &frontmatter {
         links.extend(frontmatter_links(&text, fm));
     }
+
     links.sort_by_key(|l| l.range.start);
     Note {
         path: path.clone(),
@@ -363,13 +364,17 @@ fn walk_body(text: &str, base: usize) -> Body {
         List,
         Other,
     }
+
     let mut b = Body::default();
     let mut stack: Vec<Open> = vec![];
     let mut in_metadata = false;
+
     // The heading being read, and the extent of the events inside it so far.
     let mut heading: Option<Option<Range<usize>>> = None;
+
     // An item was just opened: its next event, unless it ends the item, starts its content.
     let mut item_open = false;
+
     // Per open link or image, the markdown link it is (an index into `md_links`), if
     // any, and the extent of the events inside it so far.
     let mut links_open: Vec<(Option<usize>, Option<Range<usize>>)> = vec![];
@@ -378,6 +383,7 @@ fn walk_body(text: &str, base: usize) -> Body {
         if std::mem::take(&mut item_open) && !matches!(event, Event::End(_)) {
             b.items.last_mut().expect("an item is open").content_start = range.start;
         }
+
         if let Event::End(TagEnd::Link | TagEnd::Image) = event {
             let (md, label) = links_open.pop().expect("a link is open");
             if let (Some(i), Some(label)) = (md, label) {
@@ -391,6 +397,7 @@ fn walk_body(text: &str, base: usize) -> Body {
                 }
             }
         }
+
         match (&mut heading, &event) {
             (Some(content), Event::End(TagEnd::Heading(_))) => {
                 let h = b.headings.last_mut().expect("a heading is open");
@@ -401,13 +408,16 @@ fn walk_body(text: &str, base: usize) -> Body {
                 h.setext = !text[h.range.start..h.content.start].trim_start_matches(' ').starts_with('#');
                 heading = None;
             }
+
             // pulldown-cmark reports a task-list marker inside the heading that follows it,
             // with the marker's own range, before the heading: only events within count.
             (Some(content), _) if b.headings.last().is_some_and(|h| h.range.start <= range.start) => {
                 *content = Some(content.as_ref().map_or(range.clone(), |c| c.start..range.end));
             }
+
             _ => {}
         }
+
         match event {
             Event::Start(tag) => {
                 let top_level = stack.is_empty();
@@ -502,12 +512,14 @@ fn walk_body(text: &str, base: usize) -> Body {
                 };
                 stack.push(open);
             }
+
             Event::End(tag_end) => {
                 if matches!(tag_end, TagEnd::MetadataBlock(_)) {
                     in_metadata = false;
                 }
                 stack.pop();
             }
+
             Event::Text(_) if in_metadata => {
                 // The YAML may arrive as several text events (e.g. with CRLF endings).
                 b.meta_text = Some(match b.meta_text {
@@ -515,13 +527,16 @@ fn walk_body(text: &str, base: usize) -> Body {
                     None => range,
                 });
             }
+
             Event::InlineMath(_) | Event::DisplayMath(_) => b.counts.math += 1,
             Event::Rule | Event::Html(_) if stack.is_empty() => {
                 b.top_blocks.push((TopBlock::Other, range));
             }
+
             _ => {}
         }
     }
+
     b
 }
 
@@ -565,6 +580,7 @@ fn frontmatter_links(text: &str, fm: &Frontmatter) -> Vec<Link> {
         Some(FmEntry { value: FmValue::List { items, .. }, .. }) => items.as_slice(),
         _ => &[],
     };
+
     for item in items {
         if let Some((inner, target_range)) = prereq_item(text, item)
             && let Some((target, fragment)) = normalize_target(inner)
@@ -580,6 +596,7 @@ fn frontmatter_links(text: &str, fm: &Frontmatter) -> Vec<Link> {
             });
         }
     }
+
     out
 }
 

@@ -98,6 +98,7 @@ fn anchors(units: &[Unit]) -> (Vec<Anchors>, Vec<String>) {
         order.push(id.clone());
         id
     };
+
     let mut out = vec![];
     for u in units {
         let mut a = Anchors::default();
@@ -114,6 +115,7 @@ fn anchors(units: &[Unit]) -> (Vec<Anchors>, Vec<String>) {
         }
         out.push(a);
     }
+
     drop(unique);
     (out, order)
 }
@@ -194,6 +196,7 @@ pub fn export(index: &Index, root: &VaultPath, depth: usize) -> Export {
             units.push(unit);
         }
     }
+
     let (anchors, heading_ids) = anchors(&units);
 
     // 2–4. Assemble, rewriting headings, links, images and block ids.
@@ -254,6 +257,7 @@ pub fn export(index: &Index, root: &VaultPath, depth: usize) -> Export {
         doc.push_str(edited.trim_start_matches('\n'));
         out.notes.push(note.path.clone());
     }
+
     out.markdown = format!("{}\n", doc.trim_end());
     out.assets = asset_names.into_iter().collect();
     out
@@ -337,12 +341,14 @@ mod tests {
             ("concepts/a/queue.md", &concept("Queue", "FIFO.\n")),
             ("concepts/a/attachments/g.png", ""),
         ]);
+
         let e = export(&i, &VaultPath::new("views/algo.md".into()).unwrap(), 1);
         assert_eq!(e.notes, vec!["views/algo.md", "concepts/a/bfs.md", "concepts/a/dfs.md"]);
         assert_eq!(
             e.assets,
             vec![(VaultPath::new("concepts/a/attachments/g.png".into()).unwrap(), "g.png".to_string())]
         );
+
         let md = &e.markdown;
         assert!(md.contains("[BFS](#bfs) and [depth-first](#dfs)."), "{md}");
         assert!(md.contains("### BFS\n"), "{md}");

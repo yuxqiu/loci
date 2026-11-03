@@ -49,6 +49,7 @@ fn sources_changed(changes: &git::Changes, out: &mut Vec<Diagnostic>) {
 /// fail.
 fn check_material(index: &Index, root: &Path, changes: &git::Changes, out: &mut Vec<Diagnostic>) -> Result<(), String> {
     use crate::parse::Counts;
+
     // A `HEAD` blob that is not UTF-8 holds no parsed material.
     let head = |p: &VaultPath| {
         git::show_head(root, p).map(|b| match String::from_utf8(b) {
@@ -56,8 +57,10 @@ fn check_material(index: &Index, root: &Path, changes: &git::Changes, out: &mut 
             Err(_) => [0; 3],
         })
     };
+
     let mut deleted = [0usize; 3];
     let mut added = [0usize; 3];
+
     // Per category, the first deleted path that held any (§7.1: vault-level rules
     // report on the first involved path).
     let mut first: [Option<&str>; 3] = [None; 3];
@@ -71,6 +74,7 @@ fn check_material(index: &Index, root: &Path, changes: &git::Changes, out: &mut 
             }
         }
     }
+
     let new_files = changes.added.iter().chain(&changes.untracked).map(|p| (p, false));
     let changed = changes.modified.iter().map(|p| (p, true)).chain(new_files);
     let listed = |p: &VaultPath| index.contains(p);
@@ -81,6 +85,7 @@ fn check_material(index: &Index, root: &Path, changes: &git::Changes, out: &mut 
             added[i] += now[i].saturating_sub(before[i]);
         }
     }
+
     for (i, name) in Counts::NAMES.iter().enumerate() {
         if deleted[i] > added[i] {
             let path = first[i].expect("deleted[i] > 0 implies a deleted file held some");
@@ -93,5 +98,6 @@ fn check_material(index: &Index, root: &Path, changes: &git::Changes, out: &mut 
             );
         }
     }
+
     Ok(())
 }

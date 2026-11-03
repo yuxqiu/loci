@@ -77,9 +77,11 @@ pub fn record_agent_tree(root: &Path, now: SystemTime, notes: &[String]) -> Resu
     if !has_head(root)? {
         return Ok(None);
     }
+
     let head = head(root)?;
     let git_dir = String::from_utf8(run(root, &["rev-parse", "--absolute-git-dir"])?)
         .map_err(|_| "the git directory's path is not UTF-8".to_string())?;
+
     // A private index, so the user's staging is untouched; removed when `scratch` drops.
     let scratch = tempfile::Builder::new()
         .prefix("loci-agent-")
@@ -98,14 +100,17 @@ pub fn record_agent_tree(root: &Path, now: SystemTime, notes: &[String]) -> Resu
             all.push(n);
         }
     }
+
     if all.is_empty() && tree == trimmed(run(root, &["rev-parse", &format!("{head}^{{tree}}")])?) {
         return Ok(None);
     }
+
     let mut message = RECORD_SUBJECT.to_string();
     if !all.is_empty() {
         message.push_str("\n\n");
         message.push_str(&all.iter().map(|n| format!("- {n}\n")).collect::<String>());
     }
+
     let date = format!("@{} +0000", unix_seconds(now));
     let commit = exec(
         git(root)
@@ -151,15 +156,23 @@ pub fn is_ignored(root: &Path, path: &VaultPath) -> Result<bool, String> {
     answer(root, &["check-ignore", "-q", "--", path.as_str()])
 }
 
-/// A name git lists: UTF-8, or the raw bytes of one that is not.
-pub type Listed = Result<String, Vec<u8>>;
+/// What `git ls-files` lists.
+#[derive(Debug, Default)]
+pub struct Listing {
+    /// The names, each valid UTF-8. An untracked nested repository is listed as its
+    /// folder, with a trailing `/`.
+    pub names: Vec<String>,
+    /// The names that are not UTF-8, for messages (invalid bytes replaced); loci reads no
+    /// vault that has one.
+    pub not_utf8: Vec<String>,
+    /// The warnings git printed, one per line (a directory it could not open).
+    pub warnings: Vec<String>,
+}
 
 /// Every path git sees in the work tree, or under `pathspec` when given: tracked files
 /// and untracked files it does not ignore (`git ls-files -z --cached --others
-/// --exclude-standard`), each name as UTF-8 or, when it is not UTF-8, as raw bytes, and
-/// any warnings git printed (for example about a directory it could not open). An
-/// untracked nested repository is listed as its folder, with a trailing `/`.
-pub fn ls_files(root: &Path, pathspec: Option<&VaultPath>) -> Result<(Vec<Listed>, String), String> {
+/// --exclude-standard`).
+pub fn ls_files(root: &Path, pathspec: Option<&VaultPath>) -> Result<Listing, String> {
     let what = "ls-files";
     let mut cmd = git(root);
     cmd.args(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"])
@@ -169,14 +182,16 @@ pub fn ls_files(root: &Path, pathspec: Option<&VaultPath>) -> Result<(Vec<Listed
     if !out.status.success() {
         return Err(failure(what, &out));
     }
-    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-    let paths = out
-        .stdout
-        .split(|b| *b == 0)
-        .filter(|p| !p.is_empty())
-        .map(|p| String::from_utf8(p.to_vec()).map_err(|e| e.into_bytes()))
-        .collect();
-    Ok((paths, stderr))
+    let mut listing = Listing::default();
+    for name in out.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+        match std::str::from_utf8(name) {
+            Ok(name) => listing.names.push(name.to_string()),
+            Err(_) => listing.not_utf8.push(String::from_utf8_lossy(name).into_owned()),
+        }
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    listing.warnings = stderr.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect();
+    Ok(listing)
 }
 
 /// Whether the repository has a commit.
@@ -252,6 +267,7 @@ pub fn status(root: &Path) -> Result<Changes, String> {
     } else {
         BTreeSet::new()
     };
+
     let mut ch = Changes { untracked: untracked.into_iter().map(vault_path).collect(), ..Changes::default() };
     for path in changed.into_iter().map(vault_path) {
         match (head.contains(path.as_str()), crate::vault::is_regular_file(root, &path)) {
@@ -261,6 +277,7 @@ pub fn status(root: &Path) -> Result<Changes, String> {
             (false, false) => {}
         }
     }
+
     Ok(ch)
 }
 
@@ -384,6 +401,7 @@ mod tests {
 
         git(&["mv", "r.md", "gone.md"]);
         std::fs::remove_file(root.join("gone.md")).unwrap();
+
         // Intent-to-add, then deleted: no change. Re-added as intent-to-add after
         // `rm --cached` (`DA`): modified.
         write("n.md", "n\n");

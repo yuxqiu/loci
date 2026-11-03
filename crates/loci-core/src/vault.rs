@@ -98,15 +98,18 @@ impl Vault {
                 .map(Path::to_path_buf)
                 .ok_or_else(|| not_found("no loci.toml in this directory or any parent".into()))?,
         };
+
         let root = root.canonicalize().map_err(|e| not_found(e.to_string()))?;
         let why = match crate::git::toplevel(&root) {
             Ok(top) if top == root => None,
             Ok(_) => Some("is not the root of a git work tree".to_string()),
             Err(e) => Some(format!("is not in a git work tree: {e}")),
         };
+
         if let Some(why) = why {
             return Err(Refusal::refused("vault.not-git", format!("{} {why}", root.display())));
         }
+
         // loci never reads or writes through a symlink, and reads every file it lists
         // (m0 §3). Checked here, once, so that no command has to: a vault breaking either
         // is refused before any command runs.
@@ -171,58 +174,36 @@ pub fn is_regular_file(root: &Path, rel: &VaultPath) -> bool {
 /// core reads cannot be listed, read, or decoded as UTF-8, or in which any name git
 /// lists, anywhere, is not UTF-8 (`file.unreadable`): loci never runs on a guess.
 fn walk(root: &Path) -> Result<Walk, Refusal> {
-    let (names, warnings) = crate::git::ls_files(root, None).map_err(Refusal::git)?;
-    let mut out = Walk::default();
-    let mut unreadable = vec![];
+    let listing = crate::git::ls_files(root, None).map_err(Refusal::git)?;
+
     // Git skips what it cannot read (a directory without permission) with a warning.
     // Wherever the folder is, `plugins/` included, loci cannot tell what it missed.
-    unreadable.extend(warnings.lines().filter(|l| !l.trim().is_empty()).map(|l| format!("git: {}", l.trim())));
+    let mut unreadable: Vec<String> = listing.warnings.iter().map(|w| format!("git: {w}")).collect();
+
+    // Every listed name, `plugins/` and files gone from disk included, must be UTF-8.
+    unreadable.extend(listing.not_utf8.iter().map(|n| format!("`{n}` has a name that is not UTF-8")));
+
+    let mut out = Walk::default();
     let mut symlinks = vec![];
-    for name in names {
-        // Every listed name, `plugins/` and files gone from disk included.
-        let name = match name {
-            Ok(name) => name,
-            Err(raw) => {
-                unreadable.push(format!("`{}` has a name that is not UTF-8", String::from_utf8_lossy(&raw)));
-                continue;
-            }
-        };
-        // Every UTF-8 name, `plugins/` and `loci.toml` included.
+    for name in listing.names {
+        // Every name, `plugins/` and `loci.toml` included, is checked for symlinks.
         if let Some(link) = symlink_on_path(root, &name) {
             symlinks.push(format!("`{link}`"));
             continue;
         }
         let rel = crate::git::vault_path(name);
-        if !rel.is_core() {
-            continue;
-        }
-        let abs = abs(root, &rel);
-        let meta = match std::fs::symlink_metadata(&abs) {
-            Ok(m) => m,
-            // A tracked file gone from disk, or whose folder became a file.
-            Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => continue,
-            Err(e) => {
-                unreadable.push(format!("`{rel}` cannot be read: {e}"));
-                continue;
-            }
-        };
-        if !meta.is_file() {
-            continue; // A submodule.
-        }
-        if rel.is_note() {
-            match std::fs::read(&abs).map(String::from_utf8) {
-                Ok(Ok(text)) => {
+        match entry(root, &rel) {
+            Entry::Skipped => {}
+            Entry::Unreadable(why) => unreadable.push(format!("`{rel}` {why}")),
+            Entry::File(text) => {
+                if let Some(text) = text {
                     out.markdown.insert(rel.clone(), text);
                 }
-                Ok(Err(_)) => unreadable.push(format!("`{rel}` is not valid UTF-8")),
-                Err(e) => unreadable.push(format!("`{rel}` cannot be read: {e}")),
+                out.files.push(rel);
             }
-        } else if let Err(e) = std::fs::File::open(&abs) {
-            // Opened, not read: git could not hash it either, and would call it changed.
-            unreadable.push(format!("`{rel}` cannot be read: {e}"));
         }
-        out.files.push(rel);
     }
+
     if !symlinks.is_empty() {
         symlinks.sort();
         // Every file listed under a symlinked folder names the same link.
@@ -230,6 +211,7 @@ fn walk(root: &Path) -> Result<Walk, Refusal> {
         let message = listed("loci does not follow symlinks; replace each with the file or folder itself", &symlinks);
         return Err(Refusal::refused("file.symlink", message));
     }
+
     if !unreadable.is_empty() {
         unreadable.sort();
         unreadable.dedup();
@@ -237,10 +219,67 @@ fn walk(root: &Path) -> Result<Walk, Refusal> {
             listed("every file loci reads, and every folder git lists, must be readable; fix each", &unreadable);
         return Err(Refusal::refused("file.unreadable", message));
     }
+
     out.files.sort();
+
     // An unmerged file is listed once per conflict stage.
     out.files.dedup();
     Ok(out)
+}
+
+/// What a listed vault path is, for [`walk`].
+enum Entry {
+    /// A file core reads; the text of a note.
+    File(Option<String>),
+    /// Not a file core reads: outside what core reads, gone from disk, or a folder.
+    Skipped,
+    /// Why core cannot read it (`file.unreadable`).
+    Unreadable(String),
+}
+
+/// What vault path `rel` (not under a symlink) is on disk.
+fn entry(root: &Path, rel: &VaultPath) -> Entry {
+    if !rel.is_core() {
+        return Entry::Skipped;
+    }
+
+    let abs = abs(root, rel);
+    let meta = match std::fs::symlink_metadata(&abs) {
+        Ok(m) => m,
+        // A tracked file gone from disk, or whose folder became a file.
+        Err(e) if matches!(e.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory) => {
+            return Entry::Skipped;
+        }
+        Err(e) => return Entry::Unreadable(format!("cannot be read: {e}")),
+    };
+
+    // A submodule, an untracked nested repository, or a tracked file that became a
+    // folder (git lists the folder's files on their own).
+    if meta.is_dir() {
+        return Entry::Skipped;
+    }
+
+    // A FIFO, socket or device where git tracks a file: opening one can block.
+    if !meta.is_file() {
+        return Entry::Unreadable("is not a regular file".into());
+    }
+
+    if rel.is_note() {
+        return match std::fs::read(&abs).map(String::from_utf8) {
+            Ok(Ok(text)) => Entry::File(Some(text)),
+            Ok(Err(_)) => Entry::Unreadable("is not valid UTF-8".into()),
+            Err(e) => Entry::Unreadable(format!("cannot be read: {e}")),
+        };
+    }
+
+    // Core never needs the bytes of a source or an asset, so opening it is the check.
+    // One loci cannot open, git cannot hash either: `git status` would report it
+    // modified, and lint would say a source changed (`sources.changed`) that nobody
+    // edited (D154).
+    match std::fs::File::open(&abs) {
+        Ok(_) => Entry::File(None),
+        Err(e) => Entry::Unreadable(format!("cannot be read: {e}")),
+    }
 }
 
 /// A refusal message listing `items`, one per line under `header`.

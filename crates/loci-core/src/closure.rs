@@ -45,6 +45,7 @@ pub fn closure(index: &Index, root: &VaultPath, max_depth: Option<usize>) -> Clo
         }
         edges.insert(p, ok);
     }
+
     // Topological order over the members, prerequisites first: repeatedly emit the
     // smallest-slug member whose prerequisites (within the closure) are all emitted.
     let mut emitted: BTreeSet<&VaultPath> = BTreeSet::new();
@@ -62,10 +63,12 @@ pub fn closure(index: &Index, root: &VaultPath, max_depth: Option<usize>) -> Clo
         emitted.insert(next);
         order.push(next.clone());
     }
+
     out.members = order.into_iter().map(|p| Member { depth: depth[&p], path: p }).collect();
     if edges.values().flatten().any(|p| p == root) {
         out.cyclic = true;
     }
+
     out
 }
 

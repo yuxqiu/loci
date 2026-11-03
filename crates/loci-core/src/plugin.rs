@@ -87,6 +87,7 @@ fn run_hook(plugin: &Plugin, hook: &str, vault_root: &Path, version: &str) -> Re
         .stdin(Stdio::null())
         .output()
         .map_err(|e| format!("cannot run {}: {e}", plugin.path.display()))?;
+
     // The plugin's own explanation, if it printed one, shortened.
     let stderr = String::from_utf8_lossy(&out.stderr);
     let stderr = stderr.trim();
@@ -96,20 +97,24 @@ fn run_hook(plugin: &Plugin, hook: &str, vault_root: &Path, version: &str) -> Re
         let cut = stderr.char_indices().nth(400).map_or(stderr.len(), |(i, _)| i);
         format!(": {}", &stderr[..cut])
     };
+
     match out.status.code() {
         Some(0 | 1) => {}
         Some(code) => return Err(format!("exited with code {code}{why}")),
         None => return Err(format!("was killed by a signal{why}")),
     }
+
     let env: Envelope =
         serde_json::from_slice(&out.stdout).map_err(|e| format!("printed an invalid envelope: {e}{why}"))?;
     if let Some(e) = &env.error {
         return Err(format!("returned error {}: {}", e.code, e.message));
     }
+
     let prefix = format!("{}.", plugin.name);
     if let Some(d) = env.diagnostics.iter().find(|d| !d.code.starts_with(&prefix)) {
         return Err(format!("reported code `{}` without the `{prefix}` prefix", d.code));
     }
+
     Ok(env)
 }
 

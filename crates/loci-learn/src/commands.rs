@@ -39,6 +39,7 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
             .at(text_of(&i.path), i.range.clone()),
         );
     }
+
     let mut by_id: BTreeMap<loci_core::id::Ulid, Vec<&Card>> = BTreeMap::new();
     for c in &all {
         let at = |code: &str, msg: String| {
@@ -56,6 +57,7 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
             CardId::Valid(id) => by_id.entry(*id).or_default().push(c),
         }
     }
+
     for (id, cs) in by_id.iter().filter(|(_, cs)| cs.len() > 1) {
         let others: Vec<&str> = cs[1..].iter().map(|c| c.path.as_str()).collect();
         diags.push(
@@ -64,6 +66,7 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
                 .at(text_of(&cs[0].path), cs[0].range.clone()),
         );
     }
+
     let errors = diags.len();
     Ok(Report::ok(serde_json::Value::Null, format!("{} cards, {errors} errors\n", all.len())).with_diagnostics(diags))
 }
@@ -131,6 +134,7 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
     // Each grade is appended at once; the lines are committed at the end (§2.6 step 6).
     let mut reviewed = 0;
     let stopped = grade_cards(&session, &vault.root, &mut reviewed);
+
     // Lines already appended are committed even when the session stopped on an error.
     let commit =
         if reviewed > 0 { Some(reviewlog::commit(&vault.root, "review").map_err(Refusal::git)?) } else { None };
@@ -138,6 +142,7 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
         let committed = commit.map_or(String::new(), |sha| format!(" ({reviewed} grades committed in {sha})"));
         return Err(Refusal::io(format!("the session stopped: {e}{committed}")));
     }
+
     let due_left = session.len() - reviewed;
     let data = json!({"reviewed": reviewed, "new": new_count, "due_left": due_left, "commit": commit});
     Ok(Report::ok(data, format!("reviewed {reviewed}, {due_left} left\n")))
