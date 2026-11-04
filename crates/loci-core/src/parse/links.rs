@@ -1,6 +1,9 @@
 //! Links (m0 §5): wikilinks and embeds, their targets and fragments, and markdown links.
 
 use std::ops::Range;
+use std::sync::LazyLock;
+
+use regex::Regex;
 
 use super::{Spanned, Written};
 use crate::id::Slug;
@@ -100,33 +103,27 @@ pub(crate) fn heading_key(s: &str) -> String {
     one_line(s).to_lowercase()
 }
 
+/// A line ending in heading text, with the spaces and tabs around it.
+static LINE_END: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[ \t\r]*\n[ \t]*").unwrap());
+
 /// Heading text read on one line (§4.6): each line ending of a setext heading, with the
 /// spaces and tabs around it, as one space.
 pub(crate) fn one_line(s: &str) -> std::borrow::Cow<'_, str> {
-    let ends = line_ends(s);
-    if ends.is_empty() {
-        return s.into();
-    }
-    let mut out = String::with_capacity(s.len());
-    let mut at = 0;
-    for end in ends {
-        out.push_str(&s[at..end.start]);
-        out.push(' ');
-        at = end.end;
-    }
-    out.push_str(&s[at..]);
-    out.into()
+    LINE_END.replace_all(s, " ")
+}
+
+/// What to write after heading text `s` (on one line) in an ATX heading so that it reads
+/// back whole: ` #` when it ends in a `#` run that ATX would take for closing `#`s.
+pub fn atx_closing(s: &str) -> &'static str {
+    let s = s.trim_end();
+    let before = s.trim_end_matches('#');
+    let closing = before.len() < s.len() && (before.is_empty() || before.ends_with([' ', '\t']));
+    if closing { " #" } else { "" }
 }
 
 /// The line endings in heading text `s`, each with the spaces and tabs around it.
-pub(crate) fn line_ends(s: &str) -> Vec<std::ops::Range<usize>> {
-    s.match_indices('\n')
-        .map(|(i, _)| {
-            let start = s[..i].trim_end_matches([' ', '\t', '\r']).len();
-            let end = s.len() - s[i + 1..].trim_start_matches([' ', '\t']).len();
-            start..end
-        })
-        .collect()
+pub(crate) fn line_ends(s: &str) -> impl Iterator<Item = Range<usize>> + '_ {
+    LINE_END.find_iter(s).map(|m| m.range())
 }
 
 /// As written after the `#`.

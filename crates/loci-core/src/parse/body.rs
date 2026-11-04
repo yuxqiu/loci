@@ -6,6 +6,9 @@
 //! the events inside it, and the blocks inside it only as they close. So the walk keeps
 //! a stack of open elements, each with the extent of the events inside it so far and
 //! the blocks closed inside it, and builds an element when it closes, into its parent.
+//!
+//! The walk reads normalized events ([`super::events`]); block ids are set on the
+//! finished tree ([`super::blocks::assign_ids`]).
 
 use std::ops::Range;
 use std::sync::LazyLock;
@@ -13,7 +16,8 @@ use std::sync::LazyLock;
 use pulldown_cmark::{CodeBlockKind, CowStr, Event, LinkType, Parser, Tag};
 use regex::Regex;
 
-use super::blocks::trailing_id;
+use super::blocks::assign_ids;
+use super::events::normalize;
 use super::links::wikilink;
 use super::*;
 
@@ -22,8 +26,8 @@ static URL_SCHEME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z][A-Z
 /// Walks the body, from `base` to the end. Ranges refer to the whole file.
 pub(super) fn walk_body(text: &str, base: usize) -> Walked {
     let mut w = Walker { text, stack: vec![], out: Walked::default() };
-    for (event, range) in Parser::new_ext(&text[base..], options()).into_offset_iter() {
-        let range = range.start + base..range.end + base;
+    let events = Parser::new_ext(&text[base..], options()).into_offset_iter();
+    for (event, range) in normalize(text, events.map(|(e, r)| (e, r.start + base..r.end + base))) {
         match event {
             Event::Start(tag) => {
                 w.extend_open(&range);
@@ -43,6 +47,7 @@ pub(super) fn walk_body(text: &str, base: usize) -> Walked {
 
     // Markdown links are built as they close, so one in another's label comes first.
     w.out.markdown_links.sort_by_key(|m| m.span.start);
+    assign_ids(text, &mut w.out.body);
     w.out
 }
 
@@ -72,17 +77,10 @@ struct Open<'a> {
 
 enum OpenKind<'a> {
     Heading(u8),
-    /// `lead`: the leading paragraph of the item holding it, which is the item's lead.
-    Paragraph {
-        lead: bool,
-    },
+    Paragraph,
     List(Vec<Spanned<ListItem>>),
-    /// The item's leading text (§4.6), once its first nested block shows where it ends,
-    /// and the blocks after it.
-    Item {
-        lead: Option<Range<usize>>,
-        children: Vec<Spanned<Block>>,
-    },
+    /// The blocks closed inside the item.
+    Item(Vec<Spanned<Block>>),
     /// Any other block, with the blocks closed inside it.
     Other(Vec<Spanned<Block>>),
     Link {
@@ -97,25 +95,21 @@ enum OpenKind<'a> {
 }
 
 impl<'a> Walker<'a> {
-    /// An event at `range` is inside every open element whose span holds it: the inner
-    /// extent starts at the first such event and ends at the furthest. (pulldown-cmark
-    /// reports a task box after the first event of its item, and inside the heading
-    /// that follows it, with the box's own range: the box stays in the item's marker,
-    /// and the span check keeps it out of the heading.)
+    /// An event at `range` is inside every open element: the inner extent starts at the
+    /// first such event and ends at the furthest.
     fn extend_open(&mut self, range: &Range<usize>) {
-        for open in self.stack.iter_mut().filter(|o| o.span.start <= range.start && range.end <= o.span.end) {
+        for open in &mut self.stack {
             open.inner = Some(open.inner.as_ref().map_or(range.clone(), |i| i.start..i.end.max(range.end)));
         }
     }
 
-    /// A tag opens: an item's lead may end, and the element goes on the stack.
+    /// A tag opens: the element goes on the stack.
     fn open(&mut self, tag: Tag<'a>, range: Range<usize>) {
-        let lead = self.end_item_lead(&tag, &range);
         let kind = match tag {
             Tag::Heading { level, .. } => OpenKind::Heading(level as u8),
-            Tag::Paragraph => OpenKind::Paragraph { lead },
+            Tag::Paragraph => OpenKind::Paragraph,
             Tag::List(_) => OpenKind::List(vec![]),
-            Tag::Item => OpenKind::Item { lead: None, children: vec![] },
+            Tag::Item => OpenKind::Item(vec![]),
             Tag::CodeBlock(kind) => {
                 self.out.counts.fenced_code += usize::from(matches!(kind, CodeBlockKind::Fenced(_)));
                 OpenKind::Other(vec![])
@@ -132,23 +126,6 @@ impl<'a> Walker<'a> {
         self.stack.push(Open { kind, span: range, inner: None });
     }
 
-    /// The first nested block of an item ends the item's leading text (§4.6): a loose
-    /// item's lead is that paragraph; a tight item's, its text after the marker up to
-    /// the block. Returns whether the block is the lead.
-    fn end_item_lead(&mut self, tag: &Tag, range: &Range<usize>) -> bool {
-        let Some(Open { kind: OpenKind::Item { lead: lead @ None, .. }, inner, .. }) = self.stack.last_mut() else {
-            return false;
-        };
-        if !is_nested_block(tag) {
-            return false;
-        }
-        let is_paragraph = matches!(tag, Tag::Paragraph);
-        // The marker ends where the item's first event starts; this block is one.
-        let marker_end = inner.as_ref().expect("the block is inside the item").start;
-        *lead = Some(if is_paragraph { range.clone() } else { marker_end..range.start });
-        is_paragraph
-    }
-
     /// The innermost element closes: it is built from its span and the events inside,
     /// into its parent.
     fn close(&mut self) {
@@ -158,21 +135,19 @@ impl<'a> Walker<'a> {
                 let heading = heading(self.text, level, &span, inner);
                 self.add(Spanned::new(Block::Heading(heading), span));
             }
-            OpenKind::Paragraph { lead: true } => {}
-            OpenKind::Paragraph { lead: false } => {
-                let id = trailing_id(self.text, &span);
-                self.add(Spanned::new(Block::Paragraph { id }, span));
-            }
+            OpenKind::Paragraph => self.add(Spanned::new(Block::Paragraph { id: None }, span)),
             OpenKind::List(items) => self.add(Spanned::new(Block::List(items), span)),
-            OpenKind::Item { lead, children } => {
+            OpenKind::Item(mut children) => {
                 // The marker ends where the item's first event starts.
                 let marker = Spanned::new(Marker, span.start..inner.map_or(span.end, |i| i.start));
-                // No nested block: the lead is the rest of the item. Its trailing
-                // whitespace (a line break, the next line's indent) is not its text.
-                let lead = lead.unwrap_or(marker.span.end..span.end);
+                // The lead (§4.6) is the item's first block if it is a paragraph, else
+                // empty after the marker; its trailing whitespace is not its text.
+                let lead = match children.first() {
+                    Some(Spanned { node: Block::Paragraph { .. }, .. }) => children.remove(0).span,
+                    _ => marker.span.end..marker.span.end,
+                };
                 let lead = Spanned::new(Lead, lead.start..lead.start + self.text[lead].trim_end().len());
-                let id = trailing_id(self.text, &lead.span);
-                let item = Spanned::new(ListItem { marker, lead, id, children }, span);
+                let item = Spanned::new(ListItem { marker, lead, id: None, children }, span);
                 match self.stack.last_mut() {
                     Some(Open { kind: OpenKind::List(items), .. }) => items.push(item),
                     _ => unreachable!("an item closes inside its list"),
@@ -191,7 +166,7 @@ impl<'a> Walker<'a> {
     fn add(&mut self, block: Spanned<Block>) {
         match self.stack.last_mut().map(|o| &mut o.kind) {
             None => self.out.body.push(block),
-            Some(OpenKind::Item { children, .. } | OpenKind::Other(children)) => children.push(block),
+            Some(OpenKind::Item(children) | OpenKind::Other(children)) => children.push(block),
             Some(_) => unreachable!("blocks close inside the body, an item or another block"),
         }
     }
@@ -222,19 +197,4 @@ fn heading(text: &str, level: u8, span: &Range<usize>, inner: Option<Range<usize
     let content = inner.unwrap_or(end..end);
     let setext = !text[span.start..content.start].trim_start_matches(' ').starts_with('#');
     Heading { level, setext, content: Spanned::new(HeadingText, content) }
-}
-
-/// Whether a tag is a block that ends the leading text of the item holding it.
-fn is_nested_block(tag: &Tag) -> bool {
-    matches!(
-        tag,
-        Tag::Paragraph
-            | Tag::List(_)
-            | Tag::CodeBlock(_)
-            | Tag::BlockQuote(_)
-            | Tag::HtmlBlock
-            | Tag::Table(_)
-            | Tag::Heading { .. }
-            | Tag::FootnoteDefinition(_)
-    )
 }

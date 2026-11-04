@@ -1,7 +1,6 @@
 //! `loci mv` (m0 §9.5).
 
 use loci_core::envelope::{Refusal, Report};
-use loci_core::git;
 use loci_core::index::Index;
 use loci_core::path::{Place, VaultPath};
 
@@ -45,18 +44,21 @@ pub fn run(ctx: &Ctx, from: &str, to: &str, dry_run: bool) -> Result<Report, Ref
 
 /// A folder moves whole: refused when git lists anything under `from` that is on disk
 /// and that the plan does not move (a submodule, an untracked nested repository), or a
-/// name that is not UTF-8 (the vault changed since it was opened). The plan renames a
-/// moved file under its own path, and a folder's files under theirs.
+/// name that is not UTF-8 or not a vault path (the vault changed since it was opened).
+/// The plan renames a moved file under its own path, and a folder's files under theirs.
 fn refuse_partial_folder(vault: &Vault, from: &VaultPath, plan: &Change) -> Result<(), Refusal> {
     if plan.moves.contains_key(from) {
         return Ok(()); // A file.
     }
     let listing = vault.repo().ls_files(Some(from)).map_err(Refusal::git)?;
-    // A name that is no vault path is left: the vault changed since it was opened.
-    let on_disk = |name: &String| git::vault_path(name).map_or(true, |p| vault.exists(&p));
-    let mut left: Vec<String> =
-        listing.names.into_iter().filter(|n| on_disk(n) && !plan.moves.contains_key(n.as_str())).collect();
-    left.extend(listing.not_utf8);
+    let mut left: Vec<String> = listing
+        .paths
+        .into_iter()
+        .filter(|p| vault.exists(p) && !plan.moves.contains_key(p))
+        .map(|p| p.to_string())
+        .collect();
+    // A name that is no vault path counts as left: the vault changed since it was opened.
+    left.extend(listing.bad_names);
     if left.is_empty() {
         return Ok(());
     }

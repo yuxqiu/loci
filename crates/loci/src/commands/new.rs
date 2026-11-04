@@ -20,14 +20,21 @@ pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal
     } else {
         VaultPath::new(format!("{path}.md")).expect("adding `.md` keeps a vault path")
     };
+    if let Some(t) = title.filter(|t| t.trim().is_empty() || t.contains(['\n', '\r'])) {
+        return Err(Refusal::refused(
+            "new.title",
+            format!("the title {t:?} is blank or spans lines; an H1 is one line"),
+        ));
+    }
     let slug = refuse_destination(&vault, &path)?;
 
     let id = Ulid::generate();
     let text = skeleton(id, title.unwrap_or(slug.as_str()));
     let abs = vault.abs(&path);
-    std::fs::create_dir_all(abs.parent().expect("a note path has a folder")).map_err(Refusal::io)?;
+    let dir = abs.parent().expect("a note path has a folder");
+    std::fs::create_dir_all(dir).map_err(Refusal::io_at(dir))?;
     // `create_new`: never over a file or symlink made since the check.
-    std::fs::File::create_new(&abs).and_then(|mut f| f.write_all(text.as_bytes())).map_err(Refusal::io)?;
+    std::fs::File::create_new(&abs).and_then(|mut f| f.write_all(text.as_bytes())).map_err(Refusal::io_at(&abs))?;
 
     // Marked for `git diff`, as the framework rules ask of every file an agent creates.
     let mut diags = vec![];
@@ -43,7 +50,8 @@ pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal
 
 /// A new concept: its frontmatter, then its title.
 fn skeleton(id: Ulid, title: &str) -> String {
-    format!("{}# {title}\n", loci_core::parse::new_concept_frontmatter(id))
+    let closing = loci_core::parse::atx_closing(title);
+    format!("{}# {title}{closing}\n", loci_core::parse::new_concept_frontmatter(id))
 }
 
 /// The slug of the concept `path` would be, after checking that it can be created there:
@@ -85,7 +93,7 @@ mod tests {
     #[test]
     fn the_skeleton_is_canonical() {
         let text = skeleton(Ulid::generate(), "BFS");
-        let note = loci_core::parse::parse(&VaultPath::new("concepts/a/bfs.md".into()).unwrap(), text.clone());
+        let note = loci_core::parse::parse(&VaultPath::fixed("concepts/a/bfs.md"), text.clone());
         let rewritten = loci_core::splice::apply(&text, vec![note.rewrite_frontmatter(&[])]);
         assert_eq!(rewritten.unwrap(), text, "a fix would not reformat a new concept");
     }

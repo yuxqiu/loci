@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
-use loci_core::envelope::Report;
+use loci_core::envelope::{Refusal, Report};
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -155,7 +155,13 @@ fn main() -> ExitCode {
     let matches = Cli::command().get_matches();
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     let name = command_name(&matches);
-    let cwd = std::env::current_dir().expect("the working directory is readable");
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(e) => {
+            let refusal = Refusal::io(format!("cannot read the working directory: {e}"));
+            return Report::from(refusal).print(cli.json, VERSION, &name).into();
+        }
+    };
     let vault = loci_core::vault::VaultDir::new(cli.vault.as_deref(), &cwd);
     let ctx = commands::Ctx { vault, cwd, json: cli.json };
     let report = match cli.command {

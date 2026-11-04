@@ -38,7 +38,7 @@ impl<'a> Unit<'a> {
             _ => {
                 let min = headings.iter().map(|h| h.level).min();
                 unit.shift = min.map_or(0, |m| level as i32 + 1 - m as i32);
-                unit.title = Some((level, note.title().to_string()));
+                unit.title = Some((level, note.title().into_owned()));
             }
         }
         unit
@@ -46,8 +46,12 @@ impl<'a> Unit<'a> {
 
     /// The headings of the unit's bytes; they borrow the note, not the unit.
     fn headings(&self) -> Vec<Spanned<&'a Heading>> {
-        let range = &self.range;
-        self.note.headings().filter(|h| range.start <= h.span.start && h.span.end <= range.end).collect()
+        self.note.headings().filter(|h| self.contains(&h.span)).collect()
+    }
+
+    /// Whether `span` of the note lies in the unit.
+    fn contains(&self, span: &Range<usize>) -> bool {
+        self.range.start <= span.start && span.end <= self.range.end
     }
 
     /// The first non-whitespace byte of the unit.
@@ -62,7 +66,7 @@ impl<'a> Unit<'a> {
         note.links
             .iter()
             .filter(|l| matches!(l.form, LinkForm::Wiki | LinkForm::Embed))
-            .filter(|l| self.range.start <= l.span.start && l.span.end <= self.range.end)
+            .filter(|l| self.contains(&l.span))
             .map(|l| (l, index.resolve(note, l).ok()))
             .collect()
     }
@@ -153,7 +157,7 @@ pub struct Export {
 
 /// The identifier of a heading text, by GitHub's rule, so that the links of a markdown
 /// export also work where GitHub renders it: lowercase; letters, digits, `-` and `_`
-/// kept; each space a `-`; everything else dropped.
+/// kept; each space a `-`; everything else dropped; `section` if nothing is left.
 fn anchor_id(text: &str) -> String {
     let s: String = text
         .chars()
@@ -198,7 +202,7 @@ fn append(doc: &mut String, title: Option<&(u8, String)>, edited: &str) {
         doc.push_str(if doc.ends_with('\n') { "\n" } else { "\n\n" });
     }
     if let Some((level, title)) = title {
-        doc.push_str(&format!("{} {title}\n\n", "#".repeat(*level as usize)));
+        doc.push_str(&format!("{} {title}{}\n\n", "#".repeat(*level as usize), parse::atx_closing(title)));
     }
     doc.push_str(edited.trim_start_matches('\n'));
 }
@@ -217,28 +221,49 @@ impl Assembly<'_> {
     /// and its links rewritten.
     fn unit_text(&mut self, u: &Unit) -> String {
         let note = u.note;
-        let inside = |span: &Range<usize>| u.range.start <= span.start && span.end <= u.range.end;
-        let mut edits: Vec<Edit> = u.headings().iter().flat_map(|h| heading_edits(&note.text, h, u.level(h))).collect();
+        let headings = u.headings();
+        let links = u.links(self.index);
+        let link_spans: Vec<_> = links.iter().map(|(l, _)| l.span.clone()).collect();
+        let mut edits: Vec<Edit> =
+            headings.iter().flat_map(|h| heading_edits(&note.text, h, u.level(h), &link_spans)).collect();
 
-        // Block ids are vault plumbing: dropped, with the whitespace before them (an id
-        // ends its block, so no line is joined to the next). Where the
-        // line left would change the shape of the note's blocks (`===` alone is a heading underline),
-        // an empty HTML comment keeps it text, and renders as nothing.
-        for id in note.block_ids().map(|b| b.id).filter(|id| inside(&id.span)) {
+        // Block ids are vault plumbing: dropped with all the whitespace before them, line
+        // breaks included (an id ends its block, so no line joins the next). When the line
+        // left behind would change the note's block shape (`===` alone is a setext
+        // underline), only the `^id` is replaced, by an empty HTML comment: the line stays
+        // text and renders as nothing.
+        for id in note.block_ids().map(|b| b.id).filter(|id| u.contains(&id.span)) {
             let start = note.text[..id.span.start].trim_end_matches([' ', '\t', '\r', '\n']).len();
-            let dropped = Edit::replace(start..id.span.end, "");
-            let left = splice::apply(&note.text, vec![dropped.clone()]).expect("one edit inside the text");
+            let mut left = note.text.clone();
+            left.replace_range(start..id.span.end, "");
             if parse::markdown(left).same_shape(note) {
-                edits.push(dropped);
+                edits.push(Edit::replace(start..id.span.end, ""));
             } else {
                 edits.push(Edit::replace(id.span.clone(), "<!-- -->"));
             }
         }
 
-        for (link, resolved) in u.links(self.index) {
+        for (link, resolved) in links {
             let new = self.link_replacement(note, link, resolved);
-            edits.push(Edit::replace(link.span.clone(), new));
+            // In a setext heading the link goes on the heading's one line too.
+            let inside =
+                |h: &&Spanned<&Heading>| h.content.span.start <= link.span.start && link.span.end <= h.content.span.end;
+            let in_setext = headings.iter().filter(inside).any(|h| h.setext);
+            edits.push(Edit::replace(
+                link.span.clone(),
+                if in_setext { parse::one_line(&new).into_owned() } else { new },
+            ));
         }
+
+        // A heading reads back whole: when its text after the edits above ends in a `#`
+        // run that ATX would take for closing `#`s, and it has none of its own, a closing
+        // ` #` follows it (a setext heading's underline is gone).
+        let closings: Vec<_> = headings
+            .iter()
+            .filter(|h| h.setext || note.text[h.content.span.end..h.span.end].trim().is_empty())
+            .map(|h| Edit::insert(h.content.span.end, parse::atx_closing(&edited(&note.text, &h.content.span, &edits))))
+            .collect();
+        edits.extend(closings);
 
         // The text around the unit goes too; the edits above lie inside it.
         edits.push(Edit::replace(0..u.range.start, ""));
@@ -248,17 +273,19 @@ impl Assembly<'_> {
 
     /// What `link` in `note` becomes in the document: an image under `assets/`, a link
     /// to an included note's anchor, or plain text (its label, heading or title; for a
-    /// link that does not resolve, its target as written) for anything left out.
+    /// link that does not resolve, its target as written) for anything left out. A
+    /// label, heading or title is markdown and goes in as written; a target, path or file
+    /// name is literal and goes in escaped ([`escape`]).
     fn link_replacement(&mut self, note: &Note, link: &Spanned<Link>, resolved: Option<Resolved<'_>>) -> String {
         let label = link.label.as_ref().map(|l| l.value(&note.text).to_string());
         let linked = match resolved {
-            None => return label.unwrap_or_else(|| link.target.text(&note.text).to_string()),
+            None => return label.unwrap_or_else(|| escape(link.target.text(&note.text))),
             Some(Resolved::File(p)) if link.form == LinkForm::Embed && is_image(p) => {
                 let name = self.assets.name(p);
-                let alt = label.filter(|l| !is_size(l)).unwrap_or_else(|| name.clone());
+                let alt = label.filter(|l| !is_size(l)).unwrap_or_else(|| escape(&name));
                 return format!("![{alt}]({ASSETS}/{name})");
             }
-            Some(Resolved::File(p)) => return label.unwrap_or_else(|| p.to_string()),
+            Some(Resolved::File(p)) => return label.unwrap_or_else(|| escape(p.as_str())),
             Some(Resolved::Note(n, _)) => n,
         };
 
@@ -267,7 +294,7 @@ impl Assembly<'_> {
             Some(Fragment::Block(_)) | None => None,
         };
 
-        let text = label.unwrap_or_else(|| heading.unwrap_or_else(|| linked.title()).to_string());
+        let text = label.unwrap_or_else(|| heading.map_or_else(|| linked.title().into_owned(), str::to_string));
         let anchor = self.unit_of.get(&linked.path).and_then(|&j| {
             let a = &self.anchors[j];
             heading.and_then(|h| a.headings.get(&heading_key(h))).or(a.top.as_ref())
@@ -278,6 +305,19 @@ impl Assembly<'_> {
             None => text,
         }
     }
+}
+
+/// `s` as markdown that reads as `s`: a backslash before each ASCII punctuation
+/// character, which CommonMark lets any of them take (§2.4).
+fn escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_ascii_punctuation() {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Step 1 (m1-m4 §4): each note once, at its first appearance, breadth-first from
@@ -345,20 +385,31 @@ impl Assets {
 /// Edits that give heading `h` the ATX level `level`, touching only its markers so
 /// that links inside the heading text are rewritten separately: everything before the
 /// text (an ATX heading's `#` run) becomes the new `#` run; a setext heading's text
-/// lines are also joined on one line ([`parse::line_ends`] as spaces) and its underline
-/// dropped.
-fn heading_edits(text: &str, h: &Spanned<&Heading>, level: u8) -> Vec<Edit> {
+/// lines are also joined on one line ([`parse::line_ends`] as spaces, except inside a
+/// link in `links`, whose replacement joins its own) and its underline dropped.
+fn heading_edits(text: &str, h: &Spanned<&Heading>, level: u8, links: &[Range<usize>]) -> Vec<Edit> {
     let marks = "#".repeat(level as usize);
     let prefix = if h.content.span.is_empty() { marks } else { format!("{marks} ") };
     let mut edits = vec![Edit::replace(h.span.start..h.content.span.start, prefix)];
     if h.setext {
         let start = h.content.span.start;
-        let ends = parse::line_ends(h.content.value(text));
-        edits.extend(ends.into_iter().map(|e| Edit::replace(start + e.start..start + e.end, " ")));
+        let ends = parse::line_ends(h.content.value(text)).map(|e| start + e.start..start + e.end);
+        let in_link = |e: &Range<usize>| links.iter().any(|l| l.start < e.end && e.start < l.end);
+        edits.extend(ends.filter(|e| !in_link(e)).map(|e| Edit::replace(e, " ")));
         let end = h.span.start + text[h.span.clone()].trim_end_matches(['\n', '\r']).len();
         edits.push(Edit::replace(h.content.span.end..end, ""));
     }
     edits
+}
+
+/// The bytes of `text` at `range` with the edits that lie inside it applied.
+fn edited(text: &str, range: &Range<usize>, edits: &[Edit]) -> String {
+    let inside = edits
+        .iter()
+        .filter(|e| range.start <= e.range.start && e.range.end <= range.end)
+        .map(|e| Edit::replace(e.range.start - range.start..e.range.end - range.start, e.new.clone()))
+        .collect();
+    splice::apply(&text[range.clone()], inside).expect("edits inside one heading never overlap")
 }
 
 /// The folder, beside the exported file, that holds the images it embeds.
@@ -437,8 +488,23 @@ mod tests {
 
     #[test]
     fn unresolved_links_become_plain_text() {
-        let i = crate::testing::index(&[("views/v.md", "# V\n\nSee [[nope]], [[nope|that]] and [[#Missing]].\n")]);
-        assert_eq!(export(&i, "views/v.md", 1).markdown, "# V\n\nSee nope, that and #Missing.\n");
+        // A target is literal (escaped); a label is markdown (as written).
+        let i = crate::testing::index(&[("views/v.md", "# V\n\nSee [[a_b_c*]], [[nope|*that*]] and [[#Missing]].\n")]);
+        assert_eq!(export(&i, "views/v.md", 1).markdown, "# V\n\nSee a\\_b\\_c\\*, *that* and \\#Missing.\n");
+        // What a link at a heading's end becomes may end in `#`: it gets a closing ` #`,
+        // unless the heading has closing `#`s of its own.
+        let i = crate::testing::index(&[(
+            "views/v.md",
+            "# V\n\n## See [[gone|Bug #]]\n\n## Kept [[gone|Bug #]] ##\n\nSetext [[gone|C #]]\n---\n",
+        )]);
+        let md = export(&i, "views/v.md", 0).markdown;
+        assert!(
+            md.contains("## See Bug # #\n") && md.contains("## Kept Bug # ##\n") && md.contains("## Setext C # #\n"),
+            "{md}"
+        );
+        let read = parse::markdown(md);
+        let texts: Vec<_> = read.headings().map(|h| h.content.value(&read.text).to_string()).collect();
+        assert_eq!(texts, ["V", "See Bug #", "Kept Bug #", "Setext C #"]);
     }
 
     #[test]
@@ -465,6 +531,14 @@ mod tests {
         assert!(md.contains("The key step.\n") && !md.contains("Intro.") && !md.contains("Other."), "{md}");
         assert!(!md.contains('^'), "block ids are removed: {md}");
         assert!(md.contains("See [BFS](#bfs).") && md.contains("## BFS\n\nThe key step."), "{md}");
+
+        // An inserted title reads back whole, on one line.
+        let i = crate::testing::index(&[
+            ("views/v.md", &format!("# V\n\nSee [[bfs#^{id}]].\n")),
+            ("concepts/a/bfs.md", &format!("Lang\nmore #\n===\n\nThe key step. ^{id}\n")),
+        ]);
+        let md = export(&i, "views/v.md", 1).markdown;
+        assert!(md.contains("See [Lang more #](#lang-more-).") && md.contains("## Lang more # #\n"), "{md}");
     }
 
     #[test]
@@ -510,7 +584,8 @@ mod tests {
             assert_eq!(crate::parse::markdown(md.clone()).headings().count(), 1, "{md}");
         }
         for (body, kept) in [
-            ("> Some text\n> === ^b1\n", "> === <!-- -->\n"),
+            // No block id in a block quote (§4.6): the text stays.
+            ("> Some text\n> === ^b1\n", "> === ^b1\n"),
             ("*** ^b1\n", "\n*** <!-- -->\n"),
             ("Para\n- ^b2\n", "Para\n- <!-- -->\n"),
             ("Para ^b3\n", "\nPara\n"),
@@ -540,12 +615,23 @@ mod tests {
             ("Hard  \r\n   break\\\r\nhere\r\n===\r\n", "# Hard break\\ here\n"),
             ("a `b\nc` d\n===\n", "# a `b c` d\n"),
             ("Title \nmore\n---\n", "## Title more\n"),
+            ("See [[views/v|a\nb]] here\n===\n", "# See [a b](#v) here\n"),
+            ("Issue #\n---\n", "## Issue # #\n"),
+            ("C#\n---\n", "## C#\n"),
+            ("Lang\n#######\n---\n", "## Lang ####### #\n"),
             ("> First line\n> second line\n> ===\n", "> First line\n> second line\n> ===\n"),
             ("- Item line\n  more\n  ---\n", "- Item line\n  more\n  ---\n"),
         ] {
             let i = crate::testing::index(&[("views/v.md", format!("# V\n\n{body}"))]);
             let md = export(&i, "views/v.md", 0).markdown;
             assert!(md.contains(want), "{body:?}: {md:?}");
+            let texts = |m: parse::Markdown| -> Vec<String> {
+                m.headings().map(|h| parse::one_line(h.content.value(&m.text)).into_owned()).collect()
+            };
+            if !body.contains("[[") {
+                let (got, was) = (texts(parse::markdown(md)), texts(parse::markdown(format!("# V\n\n{body}"))));
+                assert_eq!(got, was, "{body:?}: the heading texts survive");
+            }
         }
     }
 }

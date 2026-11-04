@@ -222,6 +222,12 @@ fn export_refusals() {
     assert_eq!((code, error_code(&env)), (1, "note.unknown"));
     let (code, env) = v.run(&["export", "areas/g/AREA.md"]);
     assert_eq!((code, error_code(&env)), (1, "note.kind"));
+    // An io error names the path that failed.
+    v.write("blocker", "a file, not a folder\n");
+    v.write("views/v.md", "# V\n");
+    let (code, env) = v.run(&["export", "views/v", "-o", "blocker/out.md"]);
+    assert_eq!((code, error_code(&env)), (3, "io"));
+    assert!(env["error"]["message"].as_str().unwrap().contains("blocker"), "{env:#}");
 }
 
 /// HTML is rendered by loci itself and needs no network: every `#anchor` link points at

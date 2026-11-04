@@ -136,10 +136,11 @@ impl ReviewLog<'_> {
     /// Reads every line of the log, sorted by timestamp (stable for equal times). A line
     /// that does not parse is `learn.log`.
     pub fn read(&self) -> Result<Vec<Line>, Refusal> {
-        let text = match std::fs::read_to_string(self.0.abs(&VaultPath::fixed(LOG))) {
+        let path = self.0.abs(&VaultPath::fixed(LOG));
+        let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-            Err(e) => return Err(Refusal::io(e)),
+            Err(e) => return Err(Refusal::io_at(&path)(e)),
         };
         let mut lines: Vec<Line> = text
             .lines()

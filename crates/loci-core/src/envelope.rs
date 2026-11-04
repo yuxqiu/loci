@@ -259,6 +259,11 @@ impl Refusal {
         Self::internal("io", e.to_string())
     }
 
+    /// An I/O failure at `path` (`io`, exit 3), the message naming it.
+    pub fn io_at(path: &std::path::Path) -> impl Fn(std::io::Error) -> Self + '_ {
+        move |e| Self::io(format!("{}: {e}", path.display()))
+    }
+
     /// A git failure (`git`, exit 3).
     pub fn git(e: impl fmt::Display) -> Self {
         Self::internal("git", e.to_string())

@@ -43,15 +43,10 @@ pub enum LinkError<'a> {
     Dangling(Dangling),
     /// The target climbs out of the vault or starts at its root ([`Names::Escaping`]).
     PathForm,
-    /// The target `note` has no heading `heading`.
-    Heading {
+    /// The target `note` has no heading or block that `fragment` names.
+    Fragment {
         note: &'a Note,
-        heading: String,
-    },
-    /// The target `note` has no block with id `id`.
-    Block {
-        note: &'a Note,
-        id: String,
+        fragment: Fragment,
     },
 }
 
@@ -221,7 +216,11 @@ impl<'v> Index<'v> {
     /// fragment (§5.4).
     pub fn resolve<'a>(&'a self, from: &'a Note, link: &Spanned<Link>) -> Result<Resolved<'a>, LinkError<'a>> {
         match (self.resolve_target(from, link)?, &link.target.fragment) {
-            (Resolved::Note(note, _), Some(frag)) => Ok(Resolved::Note(note, Some(fragment_range(note, frag)?))),
+            (Resolved::Note(note, _), Some(frag)) => {
+                let range =
+                    note.fragment_range(frag).ok_or_else(|| LinkError::Fragment { note, fragment: frag.clone() })?;
+                Ok(Resolved::Note(note, Some(range)))
+            }
             (resolved, _) => Ok(resolved),
         }
     }
@@ -255,15 +254,6 @@ impl<'v> Index<'v> {
     }
 }
 
-/// The bytes of `note` a `#fragment` names, found among its headings or block ids (§5.4).
-fn fragment_range<'a>(note: &'a Note, frag: &Fragment) -> Result<Range<usize>, LinkError<'a>> {
-    match (note.fragment_range(frag), frag) {
-        (Some(range), _) => Ok(range),
-        (None, Fragment::Heading(heading)) => Err(LinkError::Heading { note, heading: heading.clone() }),
-        (None, Fragment::Block(id)) => Err(LinkError::Block { note, id: id.clone() }),
-    }
-}
-
 /// ASCII case folded and `-` read as a space, byte for byte, so offsets into the
 /// folded text are offsets into the original.
 fn fold(s: &str) -> String {
@@ -276,7 +266,7 @@ fn fold(s: &str) -> String {
 fn mention_names(note: &Note) -> Vec<String> {
     let title = note.title();
     let mut names = vec![title.to_string(), note.path.stem().to_string()];
-    let (mut bare, mut rest) = (String::new(), title);
+    let (mut bare, mut rest) = (String::new(), &*title);
     while let Some((before, after)) = rest.split_once('(') {
         bare.push_str(before);
         let Some((inner, tail)) = after.split_once(')') else { break };
@@ -478,7 +468,11 @@ mod tests {
         let r: Vec<_> = n.links.iter().map(|l| i.resolve(&n, l)).collect();
         assert!(r[0].is_ok());
         assert!(r[1].is_ok());
-        assert!(matches!(&r[2], Err(LinkError::Heading { heading, .. }) if heading == "nope"), "{:?}", r[2]);
+        assert!(
+            matches!(&r[2], Err(LinkError::Fragment { fragment: Fragment::Heading(heading), .. }) if heading == "nope"),
+            "{:?}",
+            r[2]
+        );
         assert!(matches!(r[3], Err(LinkError::PathForm)) && matches!(r[4], Err(LinkError::PathForm)));
     }
 

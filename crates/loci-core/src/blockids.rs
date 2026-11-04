@@ -14,16 +14,17 @@ pub struct Assigned {
     pub id: Ulid,
 }
 
-/// Computes the new text and the assigned ids. Returns `None` when no section matches;
-/// refuses (`block-ids.changed`) ids that would change the blocks they mark.
+/// Computes the new text and the assigned ids. Refuses a note without the section
+/// (`block-ids.no-section`) and ids that would change the blocks they mark
+/// (`block-ids.changed`).
 pub fn assign(
     note: &Note,
     section: &str,
     mut new_id: impl FnMut() -> Ulid,
-) -> Result<Option<(String, Vec<Assigned>)>, Refusal> {
+) -> Result<(String, Vec<Assigned>), Refusal> {
     let sections = note.h2_sections(section);
     if sections.is_empty() {
-        return Ok(None);
+        return Err(Refusal::refused("block-ids.no-section", format!("`{}` has no `## {section}`", note.path)));
     }
 
     let blocks: Vec<_> = sections.iter().flat_map(|s| s.blocks.iter().copied()).collect();
@@ -54,7 +55,7 @@ pub fn assign(
 
     let out = splice::apply(text, edits).expect("insertions at distinct block ends never overlap");
     refuse_changed(note, &out, &assigned, section)?;
-    Ok(Some((out, assigned)))
+    Ok((out, assigned))
 }
 
 /// An id must not change what it marks (a paragraph's last line `*` becomes a list item
@@ -88,10 +89,9 @@ mod tests {
             k += 1;
             id(k)
         })
-        .unwrap()
         .unwrap();
         let again = assign(&crate::testing::concept(&out), "Cards", || unreachable!("no new target"));
-        let (again, more) = again.unwrap().unwrap();
+        let (again, more) = again.unwrap();
         assert_eq!((again.as_str(), more.len()), (out.as_str(), 0), "assigning is idempotent");
         for i in 1..=assigned.len() {
             out = out.replace(&id(i).to_string(), &format!("ID{i}"));
@@ -101,10 +101,13 @@ mod tests {
 
     #[test]
     fn ids_that_would_change_the_blocks_are_refused() {
-        for t in ["# T\n\n## Cards\n\nSteps follow\n*\n", "# T\n\n## Cards\n\n- [ ]\nAnswer text\n"] {
-            let refused = assign(&crate::testing::concept(t), "Cards", || id(1)).unwrap_err();
-            assert_eq!(refused.code(), "block-ids.changed", "{t:?}");
-        }
+        let t = "# T\n\n## Cards\n\nSteps follow\n*\n";
+        let refused = assign(&crate::testing::concept(t), "Cards", || id(1)).unwrap_err();
+        assert_eq!(refused.code(), "block-ids.changed");
+        // A box-only item has no lead (pulldown-cmark ends it at its line), so `Answer
+        // text` is a paragraph after the list and takes the id.
+        let (out, _) = run("# T\n\n## Cards\n\n- [ ]\nAnswer text\n");
+        assert_eq!(out, "# T\n\n## Cards\n\n- [ ]\nAnswer text ^ID1\n");
     }
 
     #[test]
@@ -152,6 +155,6 @@ mod tests {
     #[test]
     fn missing_section() {
         let n = crate::testing::concept("# T\n");
-        assert!(assign(&n, "Cards", || unreachable!("no section")).unwrap().is_none());
+        assert_eq!(assign(&n, "Cards", || unreachable!("no section")).unwrap_err().code(), "block-ids.no-section");
     }
 }

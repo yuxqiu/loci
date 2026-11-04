@@ -1,5 +1,6 @@
 //! Parsing a markdown file into byte-spanned structure (m0 §4, §5.1).
 
+use std::borrow::Cow;
 use std::ops::Range;
 
 use pulldown_cmark::Options;
@@ -10,6 +11,7 @@ use crate::path::VaultPath;
 
 mod blocks;
 mod body;
+mod events;
 mod frontmatter;
 mod links;
 
@@ -19,7 +21,7 @@ use frontmatter::{frontmatter, frontmatter_links};
 pub use blocks::{Block, BlockId, IdBlock, Lead, ListItem, Marker, Node};
 pub(crate) use frontmatter::prereq_slug;
 pub use frontmatter::{ConceptField, FmChange, FmEntry, FmValue, Frontmatter, new_concept_frontmatter};
-pub use links::{Fragment, Label, Link, LinkForm, MarkdownLink, Names, Target};
+pub use links::{Fragment, Label, Link, LinkForm, MarkdownLink, Names, Target, atx_closing};
 pub(crate) use links::{bare_slug, heading_key, line_ends, one_line};
 
 pub(crate) const BOM: &str = "\u{feff}";
@@ -80,8 +82,8 @@ pub struct Heading {
     pub setext: bool,
 }
 
-/// A heading's text (§4.6): its content as written, without the ATX `#` markers and
-/// closing `#`s or a setext underline.
+/// A heading's content as written, line endings kept, without the ATX `#` markers and
+/// closing `#`s or a setext underline; §4.6's heading text is it read on one line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeadingText;
 
@@ -147,9 +149,12 @@ impl std::ops::Deref for Note {
 }
 
 impl Note {
-    /// The note's title (§4.7): the first H1's heading text, else the file stem.
-    pub fn title(&self) -> &str {
-        self.headings().find(|h| h.level == 1).map_or_else(|| self.path.stem(), |h| h.content.value(&self.text))
+    /// The note's title (§4.7): the first H1's heading text, on one line, else the file
+    /// stem.
+    pub fn title(&self) -> Cow<'_, str> {
+        self.headings()
+            .find(|h| h.level == 1)
+            .map_or_else(|| self.path.stem().into(), |h| one_line(h.content.value(&self.text)))
     }
 }
 
@@ -202,7 +207,7 @@ impl Markdown {
     /// Every H2 whose text is `text`, with the top-level blocks of its section.
     pub fn h2_sections(&self, text: &str) -> Vec<H2Section<'_>> {
         self.sections()
-            .filter(|(h, _)| h.level == 2 && h.content.value(&self.text) == text)
+            .filter(|(h, _)| h.level == 2 && one_line(h.content.value(&self.text)) == text)
             .map(|(heading, section)| {
                 let inside = |b: &&Spanned<Block>| heading.span.end <= b.span.start && b.span.end <= section.end;
                 H2Section { blocks: self.body.iter().filter(inside).collect(), heading }
@@ -303,6 +308,14 @@ mod tests {
         assert_eq!(n.headings().count(), 0, "a heading in an item is no heading of the note");
         let n = p("Title\r\nmore\r\n===\r\n");
         assert_eq!(n.headings().next().unwrap().content.value(&n.text), "Title\r\nmore", "the text as written (§4.6)");
+    }
+
+    /// The title and `h2_sections` read a setext heading on one line (§4.6).
+    #[test]
+    fn multi_line_title_and_section() {
+        let n = p("Title\nmore\n===\n\nSec\nline\n---\n");
+        assert_eq!(n.title(), "Title more");
+        assert_eq!(n.h2_sections("Sec line").len(), 1);
     }
 
     #[test]

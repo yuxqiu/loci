@@ -102,15 +102,16 @@ pub fn of_note(note: &Note) -> (Vec<Spanned<Card>>, Vec<Range<usize>>) {
 /// whitespace or a line end (§1.1). Returns the question and the answer, trimmed.
 fn split(raw: &str) -> Option<(String, String)> {
     use pulldown_cmark::{Event, Parser};
+    const SEP: &str = "::";
     let bytes = raw.as_bytes();
     let text = Parser::new_ext(raw, loci_core::parse::options())
         .into_offset_iter()
         .filter_map(|(e, r)| matches!(e, Event::Text(_)).then_some(r));
-    let at = text.flat_map(|r| raw[r.clone()].match_indices("::").map(move |(i, _)| r.start + i)).find(|&i| {
+    let at = text.flat_map(|r| raw[r.clone()].match_indices(SEP).map(move |(i, _)| r.start + i)).find(|&i| {
         let before_ws = i > 0 && bytes[i - 1].is_ascii_whitespace();
-        before_ws && bytes.get(i + 2).is_none_or(|b| b.is_ascii_whitespace())
+        before_ws && bytes.get(i + SEP.len()).is_none_or(|b| b.is_ascii_whitespace())
     })?;
-    Some((raw[..at].trim().to_string(), raw[at + 2..].trim().to_string()))
+    Some((raw[..at].trim().to_string(), raw[at + SEP.len()..].trim().to_string()))
 }
 
 #[cfg(test)]
@@ -120,7 +121,7 @@ mod tests {
 
     fn cards(body: &str) -> (Vec<Spanned<Card>>, Vec<Range<usize>>) {
         let text = format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# T\n\n{body}");
-        of_note(&parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), text))
+        of_note(&parse(&VaultPath::fixed("concepts/a/x.md"), text))
     }
 
     #[test]
@@ -146,7 +147,7 @@ mod tests {
     fn the_question_starts_after_the_list_marker() {
         let (cs, _) = cards("## Cards\n\n1. q1 :: a1\n2. [ ] q2 :: a2\n");
         let qs: Vec<&str> = cs.iter().map(|c| c.question.as_str()).collect();
-        assert_eq!(qs, ["q1", "[ ] q2"]);
+        assert_eq!(qs, ["q1", "q2"], "a task box is part of the marker");
     }
 
     #[test]

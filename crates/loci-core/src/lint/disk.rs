@@ -31,7 +31,7 @@ pub fn disk_rules(index: &Index) -> Vec<Diagnostic> {
         }
     };
     sources_changed(&changes, &mut out);
-    if let Err(e) = check_material(index, repo, &changes, &mut out) {
+    if let Err(e) = check_material(index, &changes, &mut out) {
         out.push(Diagnostic::warning(Code::GitFailed, format!("git failed, `material-dropped` was not checked: {e}")));
     }
     out
@@ -70,12 +70,8 @@ struct Tally<'a> {
 /// than changed and new notes gained. Only vault files count (m0 §3): a deleted path that
 /// core would read, and a current file the index lists, whose counts the index already
 /// holds. Only reading `HEAD` can fail.
-fn check_material(
-    index: &Index,
-    repo: git::Repo,
-    changes: &git::Changes,
-    out: &mut Vec<Diagnostic>,
-) -> Result<(), String> {
+fn check_material(index: &Index, changes: &git::Changes, out: &mut Vec<Diagnostic>) -> Result<(), String> {
+    let repo = index.vault().repo();
     // A `HEAD` blob that is not UTF-8 holds no parsed material.
     let head = |p: &VaultPath| {
         repo.show_head(p).map(|b| String::from_utf8(b).map_or(Counts::default(), |t| parse::markdown(t).counts))

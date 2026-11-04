@@ -11,7 +11,7 @@ use super::*;
 /// A block of the body, spanning its bytes, with the blocks inside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Block {
-    /// A heading block; only one at the top level is a heading of the note
+    /// A heading block; it is a heading of the note only at the top level of the body
     /// ([`Markdown::headings`]).
     Heading(Heading),
     /// A paragraph, with the block id ending it. An item's leading paragraph is the
@@ -121,9 +121,10 @@ impl Markdown {
         Descendants { stack: vec![Frame::Blocks(self.body.iter())] }
     }
 
-    /// Whether `other`'s body has the same shape: blocks of the same kinds, nested the
-    /// same way, headings of the same level, lists of as many items. Text, spans and
-    /// block ids are not compared, so an edit that only adds or drops ids keeps the shape.
+    /// Whether `other`'s body has the same shape: blocks of the same kinds (every
+    /// [`Block::Other`] is one kind, compared by the blocks inside it), nested the same
+    /// way, headings of the same level, lists of as many items. Text, spans and block ids
+    /// are not compared, so an edit that only adds or drops ids keeps the shape.
     pub fn same_shape(&self, other: &Markdown) -> bool {
         // The pairs of sibling blocks still to compare.
         let mut stack = vec![(self.body.as_slice(), other.body.as_slice())];
@@ -181,8 +182,25 @@ impl Markdown {
 /// A `^id` ending a text.
 static BLOCK_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:^|\s)(\^\w+)\s*$").unwrap());
 
+/// Sets each block id (§4.6): the `^id` ending a paragraph or an item's lead. Nothing in
+/// a block quote or a footnote has one (as in Obsidian, no part of a quotation does).
+pub(super) fn assign_ids(text: &str, blocks: &mut [Spanned<Block>]) {
+    for block in blocks {
+        match &mut block.node {
+            Block::Paragraph { id } => *id = trailing_id(text, &block.span),
+            Block::List(items) => {
+                for item in items {
+                    item.node.id = trailing_id(text, &item.lead.span);
+                    assign_ids(text, &mut item.node.children);
+                }
+            }
+            Block::Heading(_) | Block::Other(_) => {}
+        }
+    }
+}
+
 /// The `^id` ending the text at `range`.
-pub(super) fn trailing_id(text: &str, range: &Range<usize>) -> Option<Spanned<BlockId>> {
+fn trailing_id(text: &str, range: &Range<usize>) -> Option<Spanned<BlockId>> {
     let id = BLOCK_ID.captures(&text[range.clone()])?.get(1)?;
     Some(Spanned::new(BlockId, range.start + id.start()..range.start + id.end()))
 }
@@ -215,6 +233,41 @@ mod tests {
         let Block::List(items) = &n.body[1].node else { panic!("a list") };
         assert_eq!(items[0].lead.value(t), "parent ^ppp");
         assert!(matches!(&items[0].children[..], [Spanned { node: Block::List(nested), .. }] if nested.len() == 1));
+    }
+
+    /// A tight item's text after a nested block is a paragraph, as in a loose item (§4.6).
+    #[test]
+    fn later_paragraph_in_a_tight_item() {
+        let tight = "# T\n\n- item\n  ```\n  code\n  ```\n  more ^bbb\n- next ^ccc\n";
+        assert_eq!(ids(&p(tight)), ["bbb", "ccc"]);
+        let n = p(tight);
+        let more = n.block_ids().next().unwrap();
+        assert_eq!(&tight[more.span.clone()], "more ^bbb");
+        let loose = "# T\n\n- item\n  ```\n  code\n  ```\n\n  more ^bbb\n";
+        assert_eq!(ids(&p(loose)), ["bbb"]);
+        assert_eq!(ids(&p("# T\n\n- a\n  - b\n  *more* text ^m\n  ***\n  after ^n\n")), ["m", "n"]);
+        // A rule is a nested block: it ends the lead.
+        assert_eq!(ids(&p("# T\n\n- item ^aaa\n  ***\n  after ^bbb\n")), ["aaa", "bbb"]);
+    }
+
+    /// A task box is part of the item's marker; an escaped first character is part of
+    /// the lead, backslash included (§4.6).
+    #[test]
+    fn marker_and_lead_as_written() {
+        let t = "# T\n\n- [ ] Q :: A ^aaa\n- \\# x\n";
+        let n = p(t);
+        let Block::List(items) = &n.body[1].node else { panic!("a list") };
+        let parts: Vec<_> = items.iter().map(|i| (i.marker.value(t), i.lead.value(t))).collect();
+        assert_eq!(parts, [("- [ ] ", "Q :: A ^aaa"), ("- ", "\\# x")]);
+        assert_eq!(ids(&n), ["aaa"]);
+        let h = p("# \\# x\n");
+        assert_eq!(h.headings().next().unwrap().content.value(&h.text), "\\# x");
+    }
+
+    /// Nothing in a block quote or a footnote has a block id (§4.6, as in Obsidian).
+    #[test]
+    fn no_block_ids_in_quotes() {
+        assert!(ids(&p("# T\n\n> quoted ^aaa\n>\n> - item ^bbb\n\n[^f]: note ^ccc\n")).is_empty());
     }
 
     /// The shape is the tree, not the order of kinds: a paragraph inside an item differs

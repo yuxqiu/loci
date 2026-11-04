@@ -17,9 +17,7 @@ pub fn run(ctx: &Ctx, note: &str, section: &str) -> Result<Report, Refusal> {
     }
 
     let path = parsed.path.clone();
-    let Some((out, assigned)) = blockids::assign(parsed, section, loci_core::id::Ulid::monotonic())? else {
-        return Err(Refusal::refused("block-ids.no-section", format!("`{path}` has no `## {section}`")));
-    };
+    let (out, assigned) = blockids::assign(parsed, section, loci_core::id::Ulid::monotonic())?;
 
     if !assigned.is_empty() {
         vault.write(&path, out.as_bytes())?;

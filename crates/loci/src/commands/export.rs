@@ -39,7 +39,7 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
     let e = export::Export::of(&index, note, depth);
     let text = match format {
         Format::Md => e.markdown.clone(),
-        Format::Html => html(&e, note.title()).map_err(|m| Refusal::internal("export.html", m))?,
+        Format::Html => html(&e, &note.title()).map_err(|m| Refusal::internal("export.html", m))?,
     };
     let out_path = write_out(&vault, &e, &path, format, output.map(|o| ctx.cwd.join(o)), text)?;
     let data = json!({
@@ -62,7 +62,10 @@ fn write_out(
     output: Option<PathBuf>,
     text: String,
 ) -> Result<PathBuf, Refusal> {
-    let read = |src: &VaultPath| std::fs::read(vault.abs(src)).map_err(Refusal::io);
+    let read = |src: &VaultPath| {
+        let abs = vault.abs(src);
+        std::fs::read(&abs).map_err(Refusal::io_at(&abs))
+    };
     let Some(out_path) = output else {
         let in_export = |name: &str| VaultPath::new(format!(".loci/export/{name}")).expect("a file name");
         for (src, name) in &e.assets {
@@ -76,11 +79,13 @@ fn write_out(
         return Err(Refusal::io(format!("`{}` names no file", out_path.display())));
     };
     let assets_dir = out_dir.join(export::ASSETS);
-    std::fs::create_dir_all(if e.assets.is_empty() { out_dir } else { &assets_dir }).map_err(Refusal::io)?;
+    let dir = if e.assets.is_empty() { out_dir } else { &assets_dir };
+    std::fs::create_dir_all(dir).map_err(Refusal::io_at(dir))?;
     for (src, name) in &e.assets {
-        std::fs::write(assets_dir.join(name), read(src)?).map_err(Refusal::io)?;
+        let dest = assets_dir.join(name);
+        std::fs::write(&dest, read(src)?).map_err(Refusal::io_at(&dest))?;
     }
-    std::fs::write(&out_path, text).map_err(Refusal::io)?;
+    std::fs::write(&out_path, text).map_err(Refusal::io_at(&out_path))?;
     Ok(out_path)
 }
 
@@ -91,22 +96,22 @@ fn write_out(
 fn html(e: &export::Export, title: &str) -> Result<String, String> {
     use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, html::push_html};
     // Notes are read with loci's options; the export has no wikilinks (they are
-    // rewritten), so the same headings are read in the same order as the identifiers
-    // were made.
+    // rewritten), so the same top-level headings are read in the same order as the
+    // identifiers were made. Only those have identifiers (m0 §4.6): a heading in a block
+    // quote or an item has none.
     let options = loci_core::parse::options() - Options::ENABLE_WIKILINKS;
     let mut ids = e.heading_ids.iter();
     let mut events = vec![];
-    // Only the document's headings, outside every other element, have identifiers (m0
-    // §4.6): a heading in a block quote or an item has none.
-    let mut open = 0usize;
+    let mut depth = 0usize;
     for event in Parser::new_ext(&e.markdown, options) {
+        let top_level = depth == 0;
         match &event {
-            Event::Start(_) => open += 1,
-            Event::End(_) => open -= 1,
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth -= 1,
             _ => {}
         }
         events.push(match event {
-            Event::Start(Tag::Heading { level, classes, attrs, .. }) if open == 1 => {
+            Event::Start(Tag::Heading { level, classes, attrs, .. }) if top_level => {
                 let id = ids.next().ok_or("more headings than identifiers")?;
                 Event::Start(Tag::Heading { level, id: Some(CowStr::from(id.clone())), classes, attrs })
             }

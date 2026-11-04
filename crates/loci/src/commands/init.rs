@@ -63,13 +63,14 @@ fn write_files(dir: &Path) -> Result<(Vec<String>, Vec<String>), Refusal> {
     let (mut created, mut skipped) = (vec![], vec![]);
     for (name, content) in files {
         // `create_new`: an existing file (or symlink) is kept, never written through.
-        match std::fs::File::create_new(dir.join(name)) {
+        let file = dir.join(name);
+        match std::fs::File::create_new(&file) {
             Ok(mut f) => {
-                f.write_all(content.as_bytes()).map_err(Refusal::io)?;
+                f.write_all(content.as_bytes()).map_err(Refusal::io_at(&file))?;
                 created.push(name.to_string());
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => skipped.push(name.to_string()),
-            Err(e) => return Err(Refusal::io(e)),
+            Err(e) => return Err(Refusal::io_at(&file)(e)),
         }
     }
 
@@ -97,6 +98,6 @@ fn add_gitignore_line(path: &std::path::Path) -> Result<bool, Refusal> {
         bytes.push(b'\n');
     }
     bytes.extend_from_slice(format!("{GITIGNORE_LINE}\n").as_bytes());
-    std::fs::write(path, bytes).map_err(Refusal::io)?;
+    std::fs::write(path, bytes).map_err(Refusal::io_at(path))?;
     Ok(true)
 }

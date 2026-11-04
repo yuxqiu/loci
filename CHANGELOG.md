@@ -34,6 +34,20 @@ them under its version.
 
 ### Changed
 
+- `loci new --title` refuses a blank title or one with a line break (`new.title`), and
+  writes a closing ` #` after a title ending in `#`, so the H1 reads back whole.
+  `loci export` keeps a multi-line setext heading on one line in a note's inserted
+  title, in a link label inside it, and when the text ends in `#` (also after a link
+  at a heading's end becomes text); a link target, file path or image name written as
+  text is escaped, so `a_b_c` stays literal; `block-ids
+  --section` and the learn plugin's `## Cards` find a multi-line H2 by its one-line
+  text. An io error from a `loci` command names the file or folder that failed, and a deleted working
+  directory is an `io` refusal, not a crash.
+- Block ids: a `^id` inside a block quote or a footnote is text, not a block id (as in
+  Obsidian); a link to one is `link.dangling-block`. In a tight list item, the text
+  after a nested block can end in a block id, as in a loose one. A task box (`- [ ] `)
+  is part of the item's marker, not its text (a card `- [ ] Q :: A` asks `Q`), and an
+  item or heading that starts with an escaped character (`\#`) keeps its backslash.
 - A note argument that names no note is `note.unknown`, and a note of the wrong kind
   `note.kind`, in every command (replacing `closure.unknown`, `export.unknown`,
   `links.unknown`, `export.kind`, `block-ids.kind`, `merge.not-concept`, and

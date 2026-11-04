@@ -142,8 +142,9 @@ impl Vault {
     pub fn write(&self, rel: &VaultPath, bytes: &[u8]) -> Result<(), Refusal> {
         self.refuse_symlink(rel)?;
         let path = self.abs(rel);
-        std::fs::create_dir_all(path.parent().expect("a vault file has a folder")).map_err(Refusal::io)?;
-        write_atomic(&path, bytes).map_err(Refusal::io)
+        let dir = path.parent().expect("a vault file has a folder");
+        std::fs::create_dir_all(dir).map_err(Refusal::io_at(dir))?;
+        write_atomic(&path, bytes).map_err(Refusal::io_at(&path))
     }
 
     /// Refuses a symlink on the way to vault path `rel` (`file.symlink`): loci never
@@ -181,8 +182,9 @@ impl Vault {
     }
 }
 
-/// The first symlink on the way to the listed path `name` (a folder above it, or the
-/// path itself), as a vault path. loci never reads or writes through a symlink (m0 §3).
+/// The first symlink on the way to vault-relative path `name` (a listed name, or a
+/// path about to be written): a folder above it, or the path itself, as a vault path.
+/// loci never reads or writes through a symlink (m0 §3).
 fn symlink_on_path(root: &Path, name: &str) -> Option<String> {
     let mut at = root.to_path_buf();
     let mut seen: Vec<&str> = vec![];
@@ -220,21 +222,14 @@ fn walk(root: &Path) -> Result<(Vec<VaultPath>, BTreeMap<VaultPath, String>), Re
     // Wherever the folder is, `plugins/` included, loci cannot tell what it missed.
     let mut unreadable: Vec<String> = listed.warnings.iter().map(|w| format!("git: {w}")).collect();
 
-    // Every listed name, `plugins/` and files gone from disk included, must be UTF-8.
-    unreadable.extend(listed.not_utf8.iter().map(|n| format!("`{n}` has a name that is not UTF-8")));
+    // Every listed name, `plugins/` and files gone from disk included, must be a vault path.
+    unreadable.extend(listed.bad_names);
 
     let (mut files, mut texts) = (vec![], BTreeMap::new());
     let mut symlinks = vec![];
-    for name in listed.names {
-        let rel = match crate::git::vault_path(&name) {
-            Ok(rel) => rel,
-            Err(e) => {
-                unreadable.push(e);
-                continue;
-            }
-        };
+    for rel in listed.paths {
         // Every name, `plugins/` and `loci.toml` included, is checked for symlinks.
-        if let Some(link) = symlink_on_path(root, &name) {
+        if let Some(link) = symlink_on_path(root, rel.as_str()) {
             symlinks.push(format!("`{link}`"));
             continue;
         }

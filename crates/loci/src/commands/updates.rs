@@ -104,7 +104,8 @@ fn handle(vault: &loci_core::vault::Vault, list: &[Update], id: &str) -> Result<
     }
 
     let path = VaultPath::fixed(config::FILE);
-    let text = std::fs::read_to_string(vault.abs(&path)).map_err(Refusal::io)?;
+    let abs = vault.abs(&path);
+    let text = std::fs::read_to_string(&abs).map_err(Refusal::io_at(&abs))?;
     let updated = Config::set_updates(&text, target.id).map_err(|e| Refusal::refused("config.invalid", e))?;
     vault.write(&path, updated.as_bytes())?;
     Ok(Report::ok(json!({"handled": target.id}), format!("handled updates through {}\n", target.id)))

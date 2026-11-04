@@ -242,6 +242,15 @@ fn new_refusals() {
         let (exit, env) = v.run(&["new", path]);
         assert_eq!((exit, error_code(&env)), (1, code), "new {path}: {env:#}");
     }
+    let (exit, env) = v.run(&["new", "concepts/a/sharp", "--title", "C #"]);
+    assert_eq!(exit, 0, "{env:#}");
+    assert!(v.read("concepts/a/sharp.md").ends_with("---\n# C # #\n"), "the title reads back whole");
+    v.git(&["rm", "-q", "--cached", "concepts/a/sharp.md"]);
+    std::fs::remove_file(v.root.join("concepts/a/sharp.md")).unwrap();
+    for title in ["", " ", "Two\n===", "a\rb"] {
+        let (exit, env) = v.run(&["new", "concepts/a/titled", "--title", title]);
+        assert_eq!((exit, error_code(&env)), (1, "new.title"), "--title {title:?}: {env:#}");
+    }
     assert_eq!(v.tree(), before);
     // Said as `mv` says it: an area file is in an area, but not a concept.
     let (_, env) = v.run(&["new", "concepts/a/AREA"]);
@@ -325,4 +334,22 @@ fn done_prunes_old_records() {
     assert_eq!(code, 0, "{env:#}");
     let refs = v.git(&["for-each-ref", "--format=%(refname)", "refs/loci/agent/"]);
     assert_eq!(refs.trim(), env["data"]["record"].as_str().unwrap(), "only the new record remains");
+}
+
+// ---------------------------------------------------------------- working directory
+
+/// A working directory deleted under loci is an `io` refusal, not a panic.
+#[test]
+fn deleted_working_directory_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let gone = tmp.path().join("gone");
+    std::fs::create_dir(&gone).unwrap();
+    let out = std::process::Command::new("sh")
+        .current_dir(&gone)
+        .args(["-c", "rmdir \"$PWD\" && exec \"$0\" --json lint", BIN])
+        .output()
+        .unwrap();
+    let env: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{out:?}"));
+    assert_eq!(out.status.code(), Some(3), "{env:#}");
+    assert_eq!(env["error"]["code"], "io", "{env:#}");
 }

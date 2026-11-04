@@ -4,7 +4,7 @@ use super::{Code, Ctx, managed};
 use crate::envelope::{Applicability, Diagnostic, Fix};
 use crate::id::Slug;
 use crate::index::{Dangling, Index, LinkError};
-use crate::parse::{FmChange, Link, LinkForm, MarkdownLink, Note, Spanned};
+use crate::parse::{FmChange, Fragment, Link, LinkForm, MarkdownLink, Note, Spanned};
 use crate::path::VaultPath;
 use crate::vault::Vault;
 
@@ -101,15 +101,16 @@ fn unresolved(index: &Index, note: &Note, link: &Spanned<Link>) -> Option<Diagno
             }
         }
 
-        LinkError::Heading { note: target_note, heading } => {
+        LinkError::Fragment { note: target_note, fragment: Fragment::Heading(heading) } => {
             at(Code::LinkDanglingHeading, format!("`{target}` has no heading `{heading}`"))
                 .with_hint(headings_hint(target_note))
         }
 
-        LinkError::Block { id, .. } => at(Code::LinkDanglingBlock, format!("`{target}` has no block `^{id}`"))
-            .with_hint(
+        LinkError::Fragment { fragment: Fragment::Block(id), .. } => {
+            at(Code::LinkDanglingBlock, format!("`{target}` has no block `^{id}`")).with_hint(
                 "the block was removed or its id changed; link the note, or another block by the `^id` that ends it",
-            ),
+            )
+        }
     };
 
     Some(diag)

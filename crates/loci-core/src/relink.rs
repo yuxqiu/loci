@@ -3,7 +3,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
-use std::path::Path;
 
 use crate::envelope::Refusal;
 use crate::index::Index;
@@ -77,8 +76,8 @@ impl Change {
         for (path, edited) in &self.writes {
             let dest = vault.abs(path);
             let dir = dest.parent().expect("a vault file has a folder");
-            std::fs::create_dir_all(dir).map_err(at(dir))?;
-            staged.push((vault::stage(&dest, edited.text.as_bytes()).map_err(at(&dest))?, dest));
+            std::fs::create_dir_all(dir).map_err(Refusal::io_at(dir))?;
+            staged.push((vault::stage(&dest, edited.text.as_bytes()).map_err(Refusal::io_at(&dest))?, dest));
         }
 
         let mut renamed = vec![];
@@ -100,12 +99,12 @@ impl Change {
 
         // Writes before deletions: a failed write leaves the absorbed note in place.
         for (tmp, dest) in staged {
-            vault::persist(tmp, &dest).map_err(at(&dest))?;
+            vault::persist(tmp, &dest).map_err(Refusal::io_at(&dest))?;
         }
 
         for path in &self.deleted {
             let path = vault.abs(path);
-            std::fs::remove_file(&path).map_err(at(&path))?;
+            std::fs::remove_file(&path).map_err(Refusal::io_at(&path))?;
         }
         remove_empty_folders(vault, self.moves.keys().chain(&self.deleted))
     }
@@ -115,7 +114,7 @@ impl Change {
 fn rename(vault: &Vault, old: &VaultPath, new: &VaultPath) -> Result<(), Refusal> {
     let (from, to) = (vault.abs(old), vault.abs(new));
     let dir = to.parent().expect("a vault file has a folder");
-    std::fs::create_dir_all(dir).map_err(at(dir))?;
+    std::fs::create_dir_all(dir).map_err(Refusal::io_at(dir))?;
     std::fs::rename(&from, &to)
         .map_err(|e| Refusal::io(format!("renaming {} -> {}: {e}", from.display(), to.display())))
 }
@@ -129,7 +128,7 @@ fn remove_empty_folders<'p>(vault: &Vault, paths: impl Iterator<Item = &'p Vault
             match std::fs::remove_dir(&abs) {
                 Ok(()) => dir = d.parent(),
                 Err(e) if matches!(e.kind(), ErrorKind::DirectoryNotEmpty | ErrorKind::NotFound) => break,
-                Err(e) => return Err(at(&abs)(e)),
+                Err(e) => return Err(Refusal::io_at(&abs)(e)),
             }
         }
     }
@@ -271,9 +270,4 @@ pub(crate) fn written(vault: &Vault, path: &VaultPath) -> String {
         Some(short) if path.parent().is_some() && vault.resolve(short) == Some(path) => short.to_string(),
         _ => path.to_string(),
     }
-}
-
-/// An io refusal naming the path it was about, for `map_err`.
-fn at(path: &Path) -> impl Fn(std::io::Error) -> Refusal + '_ {
-    move |e| Refusal::io(format!("{}: {e}", path.display()))
 }

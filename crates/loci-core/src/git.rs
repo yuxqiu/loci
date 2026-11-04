@@ -24,7 +24,7 @@ impl<'a> Repo<'a> {
 
     /// Runs git and returns stdout, or an error message including stderr.
     fn run(&self, args: &[&str]) -> Result<Vec<u8>, String> {
-        exec(self.git().args(args), &args.join(" "))
+        stdout(self.git().args(args), &args.join(" "))
     }
 
     /// Creates the repository (`git init`).
@@ -94,7 +94,7 @@ impl<'a> Repo<'a> {
         }
 
         let date = format!("@{} +0000", unix_seconds(now));
-        let commit = exec(
+        let commit = stdout(
             self.git()
                 .env("GIT_AUTHOR_NAME", "loci")
                 .env("GIT_AUTHOR_EMAIL", "loci@localhost")
@@ -119,7 +119,7 @@ impl<'a> Repo<'a> {
             .tempdir_in(git_dir)
             .map_err(|e| format!("cannot create a temporary index: {e}"))?;
         let index = scratch.path().join("index");
-        let with_index = |args: &[&str]| exec(self.git().env("GIT_INDEX_FILE", &index).args(args), &args.join(" "));
+        let with_index = |args: &[&str]| stdout(self.git().env("GIT_INDEX_FILE", &index).args(args), &args.join(" "));
         let tree = with_index(&["read-tree", head])
             .and_then(|_| with_index(&["add", "-A"]))
             .and_then(|_| with_index(&["write-tree"]).map(trimmed))?;
@@ -168,9 +168,12 @@ impl<'a> Repo<'a> {
         let out = checked(&mut cmd, what)?;
         let mut listing = LsFiles::default();
         for name in out.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()) {
-            match std::str::from_utf8(name) {
-                Ok(name) => listing.names.push(name.to_string()),
-                Err(_) => listing.not_utf8.push(String::from_utf8_lossy(name).into_owned()),
+            let path = std::str::from_utf8(name)
+                .map_err(|_| format!("`{}` has a name that is not UTF-8", String::from_utf8_lossy(name)))
+                .and_then(vault_path);
+            match path {
+                Ok(path) => listing.paths.push(path),
+                Err(e) => listing.bad_names.push(e),
             }
         }
         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -186,7 +189,7 @@ impl<'a> Repo<'a> {
     /// Runs a git query that exits 0 for yes and 1 for no; any other exit is an error.
     fn answer(&self, args: &[&str]) -> Result<bool, String> {
         let what = args.join(" ");
-        let out = spawn(self.git().args(args), &what)?;
+        let out = output(self.git().args(args), &what)?;
         match out.status.code() {
             Some(0) => Ok(true),
             Some(1) => Ok(false),
@@ -244,7 +247,7 @@ impl<'a> Repo<'a> {
 
 /// Runs a prepared git command without stdin. Failing to start it is an error naming
 /// `what`.
-fn spawn(cmd: &mut Command, what: &str) -> Result<Output, String> {
+fn output(cmd: &mut Command, what: &str) -> Result<Output, String> {
     cmd.stdin(Stdio::null()).output().map_err(|e| format!("git {what}: {e}"))
 }
 
@@ -256,12 +259,12 @@ fn failure(what: &str, out: &Output) -> String {
 /// Runs a prepared git command and returns its output, or an error naming `what` when
 /// it fails.
 fn checked(cmd: &mut Command, what: &str) -> Result<Output, String> {
-    let out = spawn(cmd, what)?;
+    let out = output(cmd, what)?;
     if out.status.success() { Ok(out) } else { Err(failure(what, &out)) }
 }
 
 /// Runs a prepared git command and returns stdout, or an error naming `what`.
-fn exec(cmd: &mut Command, what: &str) -> Result<Vec<u8>, String> {
+fn stdout(cmd: &mut Command, what: &str) -> Result<Vec<u8>, String> {
     checked(cmd, what).map(|out| out.stdout)
 }
 
@@ -297,12 +300,12 @@ fn merged_notes(previous: Vec<String>, notes: &[String]) -> Vec<String> {
 /// What `git ls-files` lists.
 #[derive(Debug, Default)]
 pub struct LsFiles {
-    /// The names, each valid UTF-8. An untracked nested repository is listed as its
-    /// folder, with a trailing `/`.
-    pub names: Vec<String>,
-    /// The names that are not UTF-8, for messages (invalid bytes replaced); loci reads no
-    /// vault that has one.
-    pub not_utf8: Vec<String>,
+    /// The names that are vault paths. An untracked nested repository is listed as its
+    /// folder.
+    pub paths: Vec<VaultPath>,
+    /// Why each other name is no vault path (not UTF-8, or a control character), for
+    /// messages; loci reads no vault that has one.
+    pub bad_names: Vec<String>,
     /// The warnings git printed, one per line (a directory it could not open).
     pub warnings: Vec<String>,
 }
@@ -325,7 +328,7 @@ fn path_line(out: Vec<u8>, what: &str) -> Result<String, String> {
 /// A name git lists, as a vault path: an untracked nested repository's trailing `/`
 /// dropped, so that it names the folder. Git lists relative paths without empty, `.` or
 /// `..` segments, so the error, shown escaped, is a name with a control character.
-pub fn vault_path(name: &str) -> Result<VaultPath, String> {
+fn vault_path(name: &str) -> Result<VaultPath, String> {
     let name = name.strip_suffix('/').unwrap_or(name);
     VaultPath::new(name.to_string()).ok_or_else(|| format!("{name:?} is not a vault path: it has a control character"))
 }

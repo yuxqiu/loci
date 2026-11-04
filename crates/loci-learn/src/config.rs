@@ -33,10 +33,11 @@ impl Config {
     /// Reads the vault's config, or the defaults if the file is absent. An invalid
     /// file is `learn.config`.
     pub fn load(vault: &Vault) -> Result<Self, Refusal> {
-        match std::fs::read_to_string(vault.abs(&VaultPath::fixed(PATH))) {
+        let path = vault.abs(&VaultPath::fixed(PATH));
+        match std::fs::read_to_string(&path) {
             Ok(text) => Self::parse(&text).map_err(|e| Refusal::refused("learn.config", e)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(Refusal::io(e)),
+            Err(e) => Err(Refusal::io_at(&path)(e)),
         }
     }
 }
