@@ -96,9 +96,17 @@ fn html(e: &export::Export, title: &str) -> Result<String, String> {
     let options = loci_core::parse::options() - Options::ENABLE_WIKILINKS;
     let mut ids = e.heading_ids.iter();
     let mut events = vec![];
+    // Only the document's headings, outside every other element, have identifiers (m0
+    // §4.6): a heading in a block quote or an item has none.
+    let mut open = 0usize;
     for event in Parser::new_ext(&e.markdown, options) {
+        match &event {
+            Event::Start(_) => open += 1,
+            Event::End(_) => open -= 1,
+            _ => {}
+        }
         events.push(match event {
-            Event::Start(Tag::Heading { level, classes, attrs, .. }) => {
+            Event::Start(Tag::Heading { level, classes, attrs, .. }) if open == 1 => {
                 let id = ids.next().ok_or("more headings than identifiers")?;
                 Event::Start(Tag::Heading { level, id: Some(CowStr::from(id.clone())), classes, attrs })
             }

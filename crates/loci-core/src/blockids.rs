@@ -63,7 +63,7 @@ fn refuse_changed(note: &Note, out: &str, assigned: &[Assigned], section: &str) 
     let after = crate::parse::markdown(out.to_string());
     let ids: BTreeSet<&str> = after.block_ids().map(|b| b.id.value(&after.text)).collect();
     let marked = assigned.iter().all(|a| ids.contains(a.id.to_string().as_str()));
-    if marked && after.descendants().count() == note.descendants().count() {
+    if marked && after.same_shape(note) {
         return Ok(());
     }
     let message = format!("block ids in `## {section}` would change its blocks; add them by hand");

@@ -153,21 +153,21 @@ fn link_edits<'i>(
         let (mut note_edits, mut prereqs) = (vec![], vec![]);
         for (i, link) in note.links.iter().enumerate() {
             let Some(new) = index.link_target(note, link).and_then(|t| targets.get(t)) else { continue };
-            let Some(slug) = link.prereq_slug() else {
-                if let Some(written) = rewrite(&tree, note, link, new) {
-                    note_edits.push(Edit::replace(link.target.span.clone(), written));
+            match link.prereq_slug() {
+                None => note_edits
+                    .extend(rewrite(&tree, note, link, new).map(|w| Edit::replace(link.target.span.clone(), w))),
+                // A prereq that would name its own note (a merge's absorbing note) goes.
+                Some(slug) if *new == change.final_path(&note.path) => {
+                    prereqs.push(FmChange::RenamePrereq { from: slug.clone(), to: None });
+                    removed.insert((note.path.clone(), i));
                 }
-                continue;
-            };
-
-            // A prereq names its concept by slug; one moved to a name that is no slug
-            // cannot be named, so the prereq stays and verification refuses the change.
-            let from = slug.clone();
-            if *new == change.final_path(&note.path) {
-                prereqs.push(FmChange::RenamePrereq { from, to: None });
-                removed.insert((note.path.clone(), i));
-            } else if let Some(to) = new.slug().filter(|to| to != slug) {
-                prereqs.push(FmChange::RenamePrereq { from, to: Some(to) });
+                // A prereq names its concept by slug; one moved to a name that is no slug
+                // cannot be named, so the prereq stays and verification refuses the change.
+                Some(slug) => {
+                    if let Some(to) = new.slug().filter(|to| to != slug) {
+                        prereqs.push(FmChange::RenamePrereq { from: slug.clone(), to: Some(to) });
+                    }
+                }
             }
         }
 
@@ -238,8 +238,8 @@ fn verify_note(
     note: &Note,
 ) -> Result<(), String> {
     let new_path = change.final_path(&note.path);
-    let Some(new_note) = after.parsed(&new_path) else {
-        return Err(format!("{new_path} would no longer parse as a note"));
+    let Some(new_note) = after.note_at(&new_path) else {
+        return Err(format!("{new_path} would no longer be a note"));
     };
     if !note.has_broken_frontmatter() && new_note.has_broken_frontmatter() {
         return Err(format!("{new_path} would get invalid frontmatter"));

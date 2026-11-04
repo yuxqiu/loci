@@ -41,6 +41,7 @@ impl<'a> Resolved<'a> {
 #[derive(Debug, Clone)]
 pub enum LinkError<'a> {
     Dangling(Dangling),
+    /// The target climbs out of the vault or starts at its root ([`Names::Escaping`]).
     PathForm,
     /// The target `note` has no heading `heading`.
     Heading {
@@ -135,8 +136,8 @@ impl<'v> Index<'v> {
             .map(|(_, s)| s)
     }
 
-    /// The parsed note at vault path `path`, if there is a markdown file there.
-    pub fn parsed(&self, path: &VaultPath) -> Option<&Note> {
+    /// The note at vault path `path`, if there is a markdown file there.
+    pub fn note_at(&self, path: &VaultPath) -> Option<&Note> {
         self.notes.get(path)
     }
 
@@ -180,7 +181,7 @@ impl<'v> Index<'v> {
     /// The formed notes ([`Kind::is_formed`]) that mention `target` without linking it,
     /// with the byte range of the first mention, in note path order: the missing links
     /// into `target` (`mention_names` says what a mention is).
-    pub fn unlinked_mentions_of(&self, target: &Note) -> Vec<(&Note, std::ops::Range<usize>)> {
+    pub fn unlinked_mentions_of(&self, target: &Note) -> Vec<(&Note, Range<usize>)> {
         let names = mention_names(target);
         let linking: BTreeSet<&VaultPath> = self.incoming(&target.path).map(|(n, _)| &n.path).collect();
         self.notes()
@@ -192,14 +193,14 @@ impl<'v> Index<'v> {
     /// The concepts that `note` mentions without linking them, with the byte range of
     /// the first mention in `note`, in text order: the missing links out of `note`. A
     /// mention inside a longer one ("queue" in "priority queue") does not count.
-    pub fn unlinked_mentions_in(&self, note: &Note) -> Vec<(&Note, std::ops::Range<usize>)> {
+    pub fn unlinked_mentions_in(&self, note: &Note) -> Vec<(&Note, Range<usize>)> {
         let linked: BTreeSet<&VaultPath> = note.links.iter().filter_map(|l| self.link_target(note, l)).collect();
-        let mut out: Vec<(&Note, std::ops::Range<usize>)> = self
+        let mut out: Vec<(&Note, Range<usize>)> = self
             .concepts()
             .filter(|c| c.path != note.path && !linked.contains(&c.path))
             .filter_map(|c| first_mention(note, &mention_names(c)).map(|at| (c, at)))
             .collect();
-        let ranges: Vec<std::ops::Range<usize>> = out.iter().map(|(_, r)| r.clone()).collect();
+        let ranges: Vec<Range<usize>> = out.iter().map(|(_, r)| r.clone()).collect();
         out.retain(|(_, r)| !ranges.iter().any(|o| o != r && o.start <= r.start && r.end <= o.end));
         out.sort_by_key(|(c, r)| (r.start, c.path.clone()));
         out
@@ -271,7 +272,7 @@ fn fold(s: &str) -> String {
 
 /// The names a mention of `note` may use, folded: its title, the title without its
 /// parenthesised parts, each parenthesised name (`# Breadth-first search (BFS)`), and
-/// its slug read as words.
+/// its file stem read as words (a concept's slug).
 fn mention_names(note: &Note) -> Vec<String> {
     let title = note.title();
     let mut names = vec![title.to_string(), note.path.stem().to_string()];
@@ -296,7 +297,7 @@ fn mention_names(note: &Note) -> Vec<String> {
 
 /// The byte range of the first mention of any of `names` in the body of `note`: a
 /// Latin match stands as whole words, and text inside a link does not count.
-fn first_mention(note: &Note, names: &[String]) -> Option<std::ops::Range<usize>> {
+fn first_mention(note: &Note, names: &[String]) -> Option<Range<usize>> {
     let edge = |c: Option<char>| !c.is_some_and(|c| c.is_ascii_alphanumeric());
     let text = fold(&note.text);
     let start = note.body_start();
@@ -319,12 +320,7 @@ fn first_mention(note: &Note, names: &[String]) -> Option<std::ops::Range<usize>
 mod tests {
     use super::*;
     use crate::envelope::line_col;
-
-    fn first_link(i: &Index, path: &str) -> (Note, Spanned<Link>) {
-        let n = i.notes[path].clone();
-        let l = n.links[0].clone();
-        (n, l)
-    }
+    use crate::testing::vp;
 
     #[test]
     fn a_bare_link_names_a_concept_by_its_file_name() {
@@ -350,8 +346,7 @@ mod tests {
         ]);
         let n = i.notes["views/v.md"].clone();
         let resolved: Vec<_> = n.links.iter().map(|l| i.link_target(&n, l).cloned()).collect();
-        let vp = |s: &str| Some(VaultPath::new(s.into()).unwrap());
-        assert_eq!(resolved, [vp("concepts/a/x.md"), vp("sources/papers/p.pdf"), None, None]);
+        assert_eq!(resolved, [Some(vp("concepts/a/x.md")), Some(vp("sources/papers/p.pdf")), None, None]);
     }
 
     #[test]
@@ -402,7 +397,7 @@ mod tests {
                 "# Dijkstra\n\nOn a graph, take from a priority queue; see [[heap]] and the heap. No graphs here.\n",
             ),
         ]);
-        let n = i.parsed(&VaultPath::new("concepts/a/dijkstra.md".into()).unwrap()).unwrap();
+        let n = i.note_at(&vp("concepts/a/dijkstra.md")).unwrap();
         let found: Vec<(&str, &str)> =
             i.unlinked_mentions_in(n).into_iter().map(|(c, r)| (c.path.stem(), &n.text[r])).collect();
         // "queue" inside "priority queue" is not a mention of Queue; Heap is linked
@@ -425,7 +420,7 @@ mod tests {
         ]);
 
         let found = |p: &str| -> Vec<(String, usize)> {
-            let n = i.parsed(&VaultPath::new(p.into()).unwrap()).unwrap();
+            let n = i.note_at(&vp(p)).unwrap();
             i.unlinked_mentions_of(n)
                 .into_iter()
                 .map(|(n, r)| (n.path.to_string(), line_col(&n.text, r.start).0))
@@ -493,8 +488,10 @@ mod tests {
             ("concepts/a/x.md", "---\nid: X\n---\n# X\n\n![[concepts/a/attachments/p.png|300]]\n"),
             ("concepts/a/attachments/p.png", ""),
         ]);
-        let (n, l) = first_link(&i, "concepts/a/x.md");
-        assert!(matches!(i.resolve(&n, &l), Ok(Resolved::File(p)) if p.as_str() == "concepts/a/attachments/p.png"));
+        let n = &i.notes["concepts/a/x.md"];
+        assert!(
+            matches!(i.resolve(n, &n.links[0]), Ok(Resolved::File(p)) if p.as_str() == "concepts/a/attachments/p.png")
+        );
     }
 
     #[test]
@@ -516,5 +513,31 @@ mod tests {
         assert_eq!(resolve("assets/x.png").unwrap_err().code(), "note.unknown", "no note");
         assert_eq!(resolve("nope").unwrap_err().code(), "note.unknown");
         assert_eq!(resolve("dup").unwrap_err().code(), "concept.ambiguous");
+    }
+
+    /// Only the note's own headings count (m0 §4.6): one in a block quote or an item is
+    /// no title and no link target.
+    #[test]
+    fn a_nested_heading_is_no_heading_of_the_note() {
+        let i = crate::testing::index(&[
+            ("views/v.md", "> # Quoted\n\n- ## Item\n\n## Top\n"),
+            ("views/w.md", "[[views/v#Quoted]] [[views/v#Item]] [[views/v#Top]]\n"),
+        ]);
+        let (v, w) = (&i.notes["views/v.md"], &i.notes["views/w.md"]);
+        assert_eq!(v.title(), "v");
+        let r: Vec<_> = w.links.iter().map(|l| i.resolve(w, l).is_ok()).collect();
+        assert_eq!(r, [false, false, true]);
+    }
+
+    /// A setext heading's lines read as one (§4.6): a link names it with a space.
+    #[test]
+    fn a_multi_line_heading_is_named_on_one_line() {
+        let i = crate::testing::index(&[
+            ("views/v.md", "Title \r\n  more\r\n===\r\n"),
+            ("views/w.md", "[[views/v#Title more]] [[views/v#Title  more]]\n"),
+        ]);
+        let w = &i.notes["views/w.md"];
+        let r: Vec<_> = w.links.iter().map(|l| i.resolve(w, l).is_ok()).collect();
+        assert_eq!(r, [true, false]);
     }
 }

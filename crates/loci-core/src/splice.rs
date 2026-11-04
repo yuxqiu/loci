@@ -31,11 +31,7 @@ pub fn apply(original: &str, mut edits: Vec<Edit>) -> Result<String, String> {
     let mut cursor = 0;
     for edit in edits {
         let r = edit.range;
-        if r.start > r.end
-            || r.end > original.len()
-            || !original.is_char_boundary(r.start)
-            || !original.is_char_boundary(r.end)
-        {
+        if original.get(r.clone()).is_none() {
             return Err(format!("edit {r:?} is outside the text or off a character boundary"));
         }
         if r.start < cursor {

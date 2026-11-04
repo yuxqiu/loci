@@ -206,6 +206,24 @@ them under its version.
   exit 1 (was exit 3).
 - Commands that take a note accept the same path forms everywhere (`./`, a trailing
   `/`, with or without `.md`) and refuse paths outside the vault (`path.outside`).
+- A `#Heading` fragment matches a heading ignoring letter case only: a `-` no longer
+  stands for a space, so `[[x#hello-world]]` no longer names `## Hello World`.
+- A note's headings are only those at the top level of its body: a heading inside a
+  block quote, a list item or a footnote is no longer a title, a section or a
+  `#Heading` link target (as in Obsidian), and export leaves it as written.
+- A multi-line setext heading's text is read on one line (each line ending, with the
+  spaces and tabs around it, as one space): `[[x#Title more]]` now names it, lint
+  hints list it on one line, and export writes it as one ATX line.
+- `loci new` refuses a symlink on the way to the new note (`file.symlink`), even an
+  ignored one.
+- `loci lint`, `status` and `mv` report a `git status` name with a control character
+  (a file whose deletion is staged) as a git error instead of crashing.
+- A vault whose folder name ends in a space opens.
+- Removing an emptied frontmatter block takes only blank lines (spaces and tabs) after
+  it, not lines of other whitespace.
+- `loci export` writes an empty HTML comment for a block id whose removal would change
+  the note's blocks (a line left as `===` was read as a heading underline, `***` as a
+  rule); other ids are still dropped.
 
 ### Removed
 

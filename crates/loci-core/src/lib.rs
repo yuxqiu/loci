@@ -1,5 +1,5 @@
 //! Core library of loci: the vault model, parsing with byte spans, link resolution,
-//! splice editing, lint, link-preserving changes (`mv`, `merge`),
+//! splice editing, lint and its fixes, link-preserving changes (`mv`, `merge`), block ids,
 //! prerequisite closure, export, plugins, git helpers and the `--json` envelope.
 
 pub mod blockids;

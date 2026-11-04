@@ -20,7 +20,7 @@ pub use blocks::{Block, BlockId, IdBlock, Lead, ListItem, Marker, Node};
 pub(crate) use frontmatter::prereq_slug;
 pub use frontmatter::{ConceptField, FmChange, FmEntry, FmValue, Frontmatter, new_concept_frontmatter};
 pub use links::{Fragment, Label, Link, LinkForm, MarkdownLink, Names, Target};
-pub(crate) use links::{bare_slug, heading_key};
+pub(crate) use links::{bare_slug, heading_key, line_ends, one_line};
 
 pub(crate) const BOM: &str = "\u{feff}";
 
@@ -217,11 +217,7 @@ impl Markdown {
 
     /// Byte offset where the body starts: after the frontmatter block, or after a BOM.
     pub fn body_start(&self) -> usize {
-        match &self.frontmatter {
-            Some(f) if f.is_closed() => f.span.end,
-            _ if self.has_bom() => BOM.len(),
-            _ => 0,
-        }
+        body_start(&self.text, self.frontmatter.as_ref())
     }
 
     /// Whether the frontmatter is broken (unterminated or not a mapping), so its fields
@@ -255,13 +251,21 @@ pub fn parse(path: &VaultPath, text: String) -> Note {
     Note { path: path.clone(), kind, markdown: markdown(text) }
 }
 
+/// Byte offset where the body of `text` starts: after a closed frontmatter block, or
+/// after a BOM.
+fn body_start(text: &str, frontmatter: Option<&Spanned<Frontmatter>>) -> usize {
+    match frontmatter {
+        Some(f) if f.is_closed() => f.span.end,
+        _ if text.starts_with(BOM) => BOM.len(),
+        _ => 0,
+    }
+}
+
 /// Parses `text`, a whole markdown file in the vault or not.
 pub fn markdown(text: String) -> Markdown {
-    // Frontmatter starts at byte 0, after a BOM (§4.3); the body is walked after a closed
-    // block.
-    let base = if text.starts_with(BOM) { BOM.len() } else { 0 };
-    let frontmatter = frontmatter(&text, base);
-    let walked = walk_body(&text, frontmatter.as_ref().filter(|f| f.is_closed()).map_or(base, |f| f.span.end));
+    // Frontmatter starts at byte 0, after a BOM (§4.3).
+    let frontmatter = frontmatter(&text, if text.starts_with(BOM) { BOM.len() } else { 0 });
+    let walked = walk_body(&text, body_start(&text, frontmatter.as_ref()));
     let mut links = frontmatter.iter().flat_map(|f| frontmatter_links(f)).collect::<Vec<_>>();
     links.extend(walked.links);
     links.sort_by_key(|l| l.span.start);
@@ -278,6 +282,7 @@ pub fn markdown(text: String) -> Markdown {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::vp;
 
     use crate::testing::concept as p;
 
@@ -290,7 +295,12 @@ mod tests {
         assert_eq!(found, [("T", false), ("Hello world", false), ("C#", false), ("Title\nmore", true), ("", false)]);
         // Found by the parse-span property: a task marker is reported inside the heading.
         let n = p("- [ ] ---\n  - \n");
-        assert_eq!(n.headings().next().unwrap().content.value(&n.text), "---");
+        let nested = n.descendants().find_map(|b| match b {
+            Node::Block(Spanned { node: Block::Heading(h), .. }) => Some(h.content.value(&n.text)),
+            _ => None,
+        });
+        assert_eq!(nested, Some("---"));
+        assert_eq!(n.headings().count(), 0, "a heading in an item is no heading of the note");
         let n = p("Title\r\nmore\r\n===\r\n");
         assert_eq!(n.headings().next().unwrap().content.value(&n.text), "Title\r\nmore", "the text as written (§4.6)");
     }
@@ -298,7 +308,7 @@ mod tests {
     #[test]
     fn bom_offsets() {
         let t = format!("{BOM}# T\n\n[[a]]\n");
-        let n = parse(&VaultPath::new("views/v.md".into()).unwrap(), t.clone());
+        let n = parse(&vp("views/v.md"), t.clone());
         assert!(n.has_bom());
         assert_eq!(&t[n.links[0].target.span.clone()], "a");
     }

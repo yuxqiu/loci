@@ -230,7 +230,7 @@ fn export_refusals() {
 #[test]
 fn export_html_is_rendered_in_process() {
     let v = vault(&[
-        ("views/plan.md", "# Plan\n\n## Proof\n\nSee [[bfs]].\n".into()),
+        ("views/plan.md", "# Plan\n\n## Proof\n\nSee [[bfs]].\n\n> ## Quoted\n".into()),
         (
             "concepts/g/bfs.md",
             concept(IDS[0], "", "# BFS\n\nCost $O(V+E)$, and $a_1 < b_2$.\n\n## Proof\n\nBy induction.\n"),
@@ -243,7 +243,9 @@ fn export_html_is_rendered_in_process() {
         assert!(page.starts_with("<!doctype html>") && page.contains("<title>Plan</title>"), "{page}");
         let ids: Vec<&str> = page.split("id=\"").skip(1).map(|s| s.split('"').next().unwrap()).collect();
         let links: Vec<&str> = page.split("href=\"#").skip(1).map(|s| s.split('"').next().unwrap()).collect();
+        // A heading in a block quote is no heading of the note (m0 §4.6): no identifier.
         assert_eq!(ids, ["plan", "proof", "bfs", "proof-1"], "{page}");
+        assert!(page.contains("<h2>Quoted</h2>"), "{page}");
         assert!(!links.is_empty() && links.iter().all(|l| ids.contains(l)), "{links:?} in {ids:?}");
         assert_eq!(page.matches("<math").count(), 2, "{page}");
         assert!(page.contains("<msub>") && page.contains("O(V+E)"), "math is MathML, source kept: {page}");

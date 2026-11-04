@@ -70,10 +70,7 @@ fn positions_are_exact() {
     let (v, _, env) = lint("cjk");
     let d = with_code(&env, "link.dangling-heading")[0];
     let text = v.read("views/linker.md");
-    let start = span_of(d)["byte_start"].as_u64().unwrap() as usize;
-    let line_start = text[..start].rfind('\n').map_or(0, |i| i + 1);
-    assert_eq!(span_of(d)["line"], text[..start].matches('\n').count() + 1);
-    assert_eq!(span_of(d)["col"], text[line_start..start].chars().count() + 1);
+    assert_eq!((&span_of(d)["line"], &span_of(d)["col"]), (&3.into(), &49.into()));
     // The target range runs from after `[[` to the first `|` or `]]` (§5.1).
     assert_eq!(covered(&text, d), "views/zh#不存在");
 }
@@ -114,10 +111,14 @@ fn dissolved_heading() {
     assert_eq!(code, 1);
     let l = "concepts/a/linker.md";
     assert_codes(&env, l, &["link.dangling-heading", "link.dangling-block"]);
-    assert_eq!(covered_by(&v, &env, "link.dangling-heading", l), ["target#Removed Heading", "#missing-local"]);
+    // Letter case is ignored; a `-` is not a space (m0 §5.4).
+    assert_eq!(
+        covered_by(&v, &env, "link.dangling-heading", l),
+        ["target#kept-heading", "target#another-one", "target#Removed Heading", "#missing-local"]
+    );
     let msgs = messages(&env, "link.dangling-heading");
-    assert!(msgs[0].contains("Removed Heading"));
-    assert!(msgs[1].contains("missing-local"));
+    assert!(msgs[2].contains("Removed Heading"));
+    assert!(msgs[3].contains("missing-local"));
     let block = with_code(&env, "link.dangling-block");
     assert_eq!(block.len(), 1);
     assert!(block[0]["message"].as_str().unwrap().contains("^gone"));
@@ -455,6 +456,20 @@ fn init_respects_the_vault_boundary() {
     assert!(!fresh.tmp.path().join("made.md").exists());
 }
 
+/// `new` refuses a symlink on the way to the note, even an ignored one git does not
+/// list, rather than writing through it.
+#[test]
+fn new_respects_the_vault_boundary() {
+    let v = TestVault::committed(BIN, "mv-rename");
+    v.write(".gitignore", "concepts/x\n");
+    let out = v.tmp.path().join("out");
+    std::fs::create_dir(&out).unwrap();
+    std::os::unix::fs::symlink(&out, v.root.join("concepts/x")).unwrap();
+    let (code, env) = v.run(&["new", "concepts/x/foo"]);
+    assert_eq!((code, error_code(&env)), (1, "file.symlink"), "{env:#}");
+    assert!(!out.join("foo.md").exists());
+}
+
 /// A tracked file that is gone from disk is a pending deletion, not an unreadable file,
 /// even when its folder became a file; but a tracked name that is not UTF-8 refuses the
 /// vault until its deletion is committed, as every name git lists must be UTF-8.
@@ -553,5 +568,5 @@ fn a_name_with_a_control_character_refuses_the_vault() {
     let (code, env) = v.run(&["lint"]);
     assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
     let message = error_message(&env);
-    assert!(message.contains(r#""views/a\nb.md" has a control character in its name"#), "{message}");
+    assert!(message.contains(r#""views/a\nb.md" is not a vault path: it has a control character"#), "{message}");
 }

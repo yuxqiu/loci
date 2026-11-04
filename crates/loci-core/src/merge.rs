@@ -22,14 +22,10 @@ pub fn plan(index: &Index, from: &Note, into: &Note) -> Result<Change, Refusal> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::path::VaultPath;
-
-    fn vp(s: &str) -> VaultPath {
-        VaultPath::new(s.to_string()).unwrap()
-    }
+    use crate::testing::vp;
 
     fn note<'i>(index: &'i Index, path: &str) -> &'i Note {
-        index.parsed(&vp(path)).unwrap()
+        index.note_at(&vp(path)).unwrap()
     }
 
     #[test]

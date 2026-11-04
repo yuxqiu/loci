@@ -237,9 +237,11 @@ fn emit(map: Mapping) -> String {
     out + "\n---\n"
 }
 
-/// The length of the whitespace-only lines, breaks included, at the start of `text`.
+/// The length of the blank lines (only spaces and tabs), breaks included, at the start
+/// of `text`.
 fn blank_lines(text: &str) -> usize {
-    text.split_inclusive('\n').take_while(|l| l.trim().is_empty() && l.ends_with('\n')).map(str::len).sum()
+    let blank = |l: &&str| l.ends_with('\n') && l.trim_matches([' ', '\t', '\r', '\n']).is_empty();
+    text.split_inclusive('\n').take_while(blank).map(str::len).sum()
 }
 
 fn set_id(map: &mut Mapping, id: Ulid) {
@@ -311,11 +313,11 @@ fn parse_yaml(yaml: &str, offset: usize) -> Result<Vec<FmEntry>, String> {
     let YamlData::Mapping(map) = &doc.data else {
         return Err("the top level is not a mapping".into());
     };
-    let yaml = Source::new(yaml, offset);
+    let source = Source::new(yaml, offset);
     let mut entries = vec![];
     for (k, v) in map.iter() {
         let Some(key) = string(k) else { return Err("a key is not a string".into()) };
-        entries.push(FmEntry { key: Spanned::new(key.to_string(), yaml.span(k)), value: yaml.value(v) });
+        entries.push(FmEntry { key: Spanned::new(key.to_string(), source.span(k)), value: source.value(v) });
     }
     Ok(entries)
 }
@@ -447,7 +449,6 @@ mod tests {
             assert!(n.body.iter().all(|b| b.span.start >= body), "{t:?}: the block's lines are no body");
         }
         assert_eq!(rewritten("---\n---\n# T\n", &[set_id()]), format!("---\nid: {ID}\n---\n# T\n"));
-        assert!(!p("---\nx\n").frontmatter.as_ref().unwrap().is_closed(), "a line that is not blank is no empty block");
         // Found by the rewrite property: removing the block would make the body's `---`
         // lines a block of their own.
         assert_eq!(rewritten("---\n---\n---\nx\n---\n", &[]), "---\n---\n---\nx\n---\n");
@@ -458,11 +459,6 @@ mod tests {
             let t = format!("---\nid: {ID}\n---\n{body}");
             assert_eq!(rewritten(&t, &[FmChange::RemoveField(ConceptField::Id)]), format!("---\n---\n{body}"));
         }
-        // Only spaces and tabs make a line blank (CommonMark): this block is YAML, and
-        // not a mapping.
-        let nbsp = p("---\n\u{a0}\n---\n# T\n");
-        assert!(matches!(nbsp.frontmatter.as_ref().unwrap().node, Frontmatter::Invalid(_)), "{:?}", nbsp.frontmatter);
-        assert_eq!(p("--- \n\t\n---\n# T\n").body_start(), 11, "an opening line with trailing whitespace");
     }
 
     #[test]
@@ -528,9 +524,11 @@ mod tests {
         assert!(matches!(n.markdown.frontmatter.unwrap().node, Frontmatter::Invalid(_)));
     }
 
+    /// Only spaces and tabs make a line blank (CommonMark): a removed block leaves a line
+    /// of other whitespace, which is text.
     #[test]
-    fn unterminated() {
-        let n = p("---\nid: a\n# T\n");
-        assert_eq!(n.frontmatter, Some(Spanned::new(Frontmatter::Unterminated, 0..4)));
+    fn a_removed_block_keeps_a_line_of_other_whitespace() {
+        let t = format!("---\nid: {ID}\n---\n \t\r\n\u{a0}\n# T\n");
+        assert_eq!(rewritten(&t, &[FmChange::RemoveField(ConceptField::Id)]), "\u{a0}\n# T\n");
     }
 }

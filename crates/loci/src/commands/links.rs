@@ -19,7 +19,7 @@ pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
             if !index.vault().contains(&file) {
                 return Err(r);
             }
-            let note = index.parsed(&file);
+            let note = index.note_at(&file);
             (file, note)
         }
     };

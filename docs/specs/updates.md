@@ -20,7 +20,8 @@ deciding each one.
 ## 2. Updates
 
 loci ships an append-only list of updates, compiled into the binary like the
-framework rules (`share/loci/updates.md`):
+framework rules (`share/loci/updates.md`). An entry looks like this (an example, not
+the shipped text):
 
 ```markdown
 ## u0002 · 2026-11-02 · Agents read the framework rules from `loci rules`

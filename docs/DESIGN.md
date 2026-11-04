@@ -448,9 +448,10 @@ Learn plugin commands: `loci learn lint`, `skills`, `log`, `state`,
 
 Implementation:
 
-- **Markdown parsing:** `pulldown-cmark`, with byte offsets. Edits are spliced, and
-  the user's text is never re-serialised.
-- **Frontmatter:** `saphyr` for reading; edits are splices of the original bytes.
+- **Markdown parsing:** `pulldown-cmark`, with byte offsets. Edits to the body are
+  spliced; the body text is never re-serialised.
+- **Frontmatter:** split off by loci (D246), read with `saphyr`; a change rewrites the
+  whole block with saphyr's emitter (m0 §6.1).
 - **Git:** the `git` CLI.
 - **Search:** none in loci; agents use ripgrep (§8).
 - **Size budgets** count characters.
@@ -465,7 +466,7 @@ Implementation:
   (`concepts/*/AREA.md`) directly and lists `concepts/<area>/` for sub-folders.
 - **User:** hister indexes the vault directly through its `indexer.directories`
   setting. loci reads nothing from hister.
-- **Benchmark:** `loci bench <agent>` runs the cases in `bench/cases.jsonl`
+- **Benchmark:** `loci bench '<agent command>' [--cases <file>]` runs the cases in `bench/cases.jsonl`
   against an agent command, each on a fresh copy of the vault, and reports the pass
   rate (a case passes when its shell check, on the agent's reply or the vault it
   left, exits 0) and the median wall time. It measures only the agent level; there is
@@ -506,8 +507,8 @@ and its benchmark cases stay in the vault.
 |---|---|
 | unit | the parser, link resolution, frontmatter, plugin dispatch; in `loci-learn`: card parsing and review-log processing |
 | fixture vaults (`tests/fixtures/`) | duplicate filenames; heading links into a dissolved note; relative and colliding image links; notes without an H1; `#` lines and hashtags inside code; CJK text; a review log with lines for deleted cards |
-| golden (`tests/golden/`) | a fixture plus a command, compared with the expected tree and JSON |
-| property (proptest) | `mv` keeps every link resolving; `lint` is idempotent; replay is deterministic |
+| golden (insta snapshots in `crates/*/tests/snapshots/`) | a fixture plus a command, compared with the expected tree and JSON |
+| property (proptest) | `mv` keeps every resolving link resolving; `merge` sends links to the kept concept; `lint` output is deterministic; splice identity and one-pass equivalence; every parsed span lies in the text, and a frontmatter rewrite keeps its meaning |
 | scale | a generated vault of 10k–100k notes, timing `lint`, `status` and replay |
 | agent evals (`evals/`) | a generated sample vault (39 neutral concepts so far; thousands needed to tell rule variants apart), suites of `loci bench` cases with shell checks, rule variants, and dated results; run on demand with a real agent (`evals/README.md`) |
 | procedures | skills run on fixed inputs with a real agent: lint passes, concepts cite their sources, no duplicates are created, and the learn closure stops at the boundary |

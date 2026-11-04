@@ -18,9 +18,8 @@ pub fn run(ctx: &Ctx, from: &str, to: &str, dry_run: bool) -> Result<Report, Ref
     let to = VaultPath::from_arg(to)?;
     let index = Index::open(&vault);
     let from = mv::stored_name(&index, &from)?;
-    let exists = |p: &VaultPath| vault.abs(p).symlink_metadata().is_ok();
     let ignored = |p: &VaultPath| vault.repo().is_ignored(p).map_err(Refusal::git);
-    let plan = mv::plan(&index, &from, &to, ignored, exists)?;
+    let plan = mv::plan(&index, &from, &to, ignored, |p| vault.exists(p))?;
 
     refuse_partial_folder(&vault, &from, &plan)?;
     refuse_changed_source(&vault, &plan)?;
@@ -53,7 +52,8 @@ fn refuse_partial_folder(vault: &Vault, from: &VaultPath, plan: &Change) -> Resu
         return Ok(()); // A file.
     }
     let listing = vault.repo().ls_files(Some(from)).map_err(Refusal::git)?;
-    let on_disk = |name: &String| vault.abs(&git::vault_path(name.clone())).symlink_metadata().is_ok();
+    // A name that is no vault path is left: the vault changed since it was opened.
+    let on_disk = |name: &String| git::vault_path(name).map_or(true, |p| vault.exists(&p));
     let mut left: Vec<String> =
         listing.names.into_iter().filter(|n| on_disk(n) && !plan.moves.contains_key(n.as_str())).collect();
     left.extend(listing.not_utf8);

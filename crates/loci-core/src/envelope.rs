@@ -371,11 +371,8 @@ impl From<Refusal> for Report {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::vp;
     use serde_json::json;
-
-    fn vp(s: &str) -> VaultPath {
-        VaultPath::new(s.into()).unwrap()
-    }
 
     #[test]
     fn fix_edits_round_trip() {

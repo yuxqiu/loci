@@ -143,7 +143,8 @@ was computed from (§4.2), in timestamp order; empty for `unknown`.
       note, at most `new_per_day` minus the number of cards whose first line has
       today's UTC date.
 4. Runs a terminal loop over the selection: show the question, wait, reveal the
-   answer, read a self-grade (`again`, `hard`, `good` or `easy`).
+   answer, read a self-grade (`again`, `hard`, `good` or `easy`, or `1`–`4`); `q` or
+   the end of input ends the session early (step 6 still runs).
 5. Appends each grade at once, through the same validation and append code as
    `log`, without committing.
 6. If any line was appended, commits once, at the end of the session, as `log`

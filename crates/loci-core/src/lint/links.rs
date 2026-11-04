@@ -18,7 +18,7 @@ pub(super) fn links(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
 /// The headings of `note`, the real choices for a heading link that misses, so it can
 /// be relinked without opening the note; picking one is judgement, so there is no fix.
 fn headings_hint(note: &Note) -> String {
-    let headings: Vec<&str> = note.headings().map(|h| h.content.value(&note.text)).collect();
+    let headings: Vec<_> = note.headings().map(|h| crate::parse::one_line(h.content.value(&note.text))).collect();
     if headings.is_empty() {
         "it has no headings".to_string()
     } else {
@@ -44,26 +44,26 @@ fn relink_fix(note: &Note, link: &Spanned<Link>, slug: &Slug) -> Fix {
 /// `link.markdown` for a markdown link to a vault file, with the wikilink that replaces
 /// it as the fix.
 fn markdown_link(vault: &Vault, note: &Note, m: &Spanned<MarkdownLink>) -> Diagnostic {
-    // The shortest wikilink target for the file the URL names; as written if it names none.
+    let at = |message: String, hint: String| {
+        Diagnostic::error(Code::LinkMarkdown, message).in_note(note, m.span.clone()).with_hint(hint)
+    };
     let resolved = vault.resolve(m.path());
+    // No path link names a root file (§5.3), so it has no wikilink to suggest.
+    if let Some(p) = resolved.filter(|p| p.parent().is_none()) {
+        let hint = "no wikilink names a root file: move it into a folder (`loci mv`) or drop the link";
+        return at(format!("a vault target must use a wikilink, and `{p}` is a root file"), hint.to_string());
+    }
+    // The shortest wikilink target for the file the URL names; as written if it names none.
     let target = resolved.map_or_else(|| m.path().to_string(), |path| crate::relink::written(vault, path));
     let bang = if m.image { "!" } else { "" };
     let wiki = format!("{bang}[[{target}]]");
-    // No path link names a root file (§5.3), so it has no wikilink to suggest.
-    let root = resolved.is_some_and(|p| p.parent().is_none());
-    let (message, hint) = if root {
-        let hint = "no wikilink names a root file: move it into a folder (`loci mv`) or drop the link".to_string();
-        (format!("a vault target must use a wikilink, and `{target}` is a root file"), hint)
-    } else {
-        (format!("a vault target must use a wikilink: `{wiki}`"), format!("write {wiki}"))
-    };
-    let diag = Diagnostic::error(Code::LinkMarkdown, message).in_note(note, m.span.clone()).with_hint(hint);
+    let diag = at(format!("a vault target must use a wikilink: `{wiki}`"), format!("write {wiki}"));
 
     // The link text becomes the label, unless it only repeats the target. No fix for a
-    // URL that names no file as written (a percent-encoded one included), a root file,
-    // or a label a wikilink cannot hold (`]]`, or a final `]`).
+    // URL that names no file as written (a percent-encoded one included), or a label a
+    // wikilink cannot hold (`]]`, or a final `]`).
     let label = m.label.value(&note.text).trim();
-    if resolved.is_none() || root || label.contains("]]") || label.ends_with(']') {
+    if resolved.is_none() || label.contains("]]") || label.ends_with(']') {
         return diag;
     }
     let pipe = if m.in_table { "\\|" } else { "|" };

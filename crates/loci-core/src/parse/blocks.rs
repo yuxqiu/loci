@@ -11,6 +11,8 @@ use super::*;
 /// A block of the body, spanning its bytes, with the blocks inside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Block {
+    /// A heading block; only one at the top level is a heading of the note
+    /// ([`Markdown::headings`]).
     Heading(Heading),
     /// A paragraph, with the block id ending it. An item's leading paragraph is the
     /// item's lead, not a block.
@@ -119,13 +121,39 @@ impl Markdown {
         Descendants { stack: vec![Frame::Blocks(self.body.iter())] }
     }
 
-    /// Every heading, nested ones included, in document order.
+    /// Whether `other`'s body has the same shape: blocks of the same kinds, nested the
+    /// same way, headings of the same level, lists of as many items. Text, spans and
+    /// block ids are not compared, so an edit that only adds or drops ids keeps the shape.
+    pub fn same_shape(&self, other: &Markdown) -> bool {
+        // The pairs of sibling blocks still to compare.
+        let mut stack = vec![(self.body.as_slice(), other.body.as_slice())];
+        while let Some((a, b)) = stack.pop() {
+            if a.len() != b.len() {
+                return false;
+            }
+            for (x, y) in a.iter().zip(b) {
+                match (&x.node, &y.node) {
+                    (Block::Heading(h), Block::Heading(k)) if h.level == k.level => {}
+                    (Block::Paragraph { .. }, Block::Paragraph { .. }) => {}
+                    (Block::List(xs), Block::List(ys)) if xs.len() == ys.len() => {
+                        stack.extend(xs.iter().zip(ys).map(|(i, j)| (i.children.as_slice(), j.children.as_slice())));
+                    }
+                    (Block::Other(xs), Block::Other(ys)) => stack.push((xs, ys)),
+                    _ => return false,
+                }
+            }
+        }
+        true
+    }
+
+    /// The document's headings, in order (§4.6): those at its top level. A heading block
+    /// inside a block quote, a list item or a footnote is part of that block, not a
+    /// heading of the document: no title, section or link target.
     pub fn headings(&self) -> impl Iterator<Item = Spanned<&Heading>> {
-        let heading = |node| match node {
-            Node::Block(Spanned { node: Block::Heading(h), span }) => Some(Spanned::new(h, span.clone())),
+        self.body.iter().filter_map(|b| match &b.node {
+            Block::Heading(h) => Some(Spanned::new(h, b.span.clone())),
             _ => None,
-        };
-        self.descendants().filter_map(heading)
+        })
     }
 
     /// Every heading with its section: the heading through the next heading of the same
@@ -187,5 +215,16 @@ mod tests {
         let Block::List(items) = &n.body[1].node else { panic!("a list") };
         assert_eq!(items[0].lead.value(t), "parent ^ppp");
         assert!(matches!(&items[0].children[..], [Spanned { node: Block::List(nested), .. }] if nested.len() == 1));
+    }
+
+    /// The shape is the tree, not the order of kinds: a paragraph inside an item differs
+    /// from one after the list.
+    #[test]
+    fn shape_compares_nesting() {
+        let md = |t: &str| crate::parse::markdown(t.to_string());
+        assert!(!md("- a\n\n  p\n").same_shape(&md("- a\n\np\n")));
+        assert!(md("- a\n\n  p\n").same_shape(&md("- b ^x\n\n  q\n")));
+        assert!(!md("# A\n").same_shape(&md("## A\n")), "a heading's level");
+        assert!(!md("- a\n- b\n").same_shape(&md("- a\n")), "a list's items");
     }
 }

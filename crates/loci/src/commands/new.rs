@@ -26,7 +26,7 @@ pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal
     let text = skeleton(id, title.unwrap_or(slug.as_str()));
     let abs = vault.abs(&path);
     std::fs::create_dir_all(abs.parent().expect("a note path has a folder")).map_err(Refusal::io)?;
-    // `create_new`: never through a symlink, nor over a file made since the check.
+    // `create_new`: never over a file or symlink made since the check.
     std::fs::File::create_new(&abs).and_then(|mut f| f.write_all(text.as_bytes())).map_err(Refusal::io)?;
 
     // Marked for `git diff`, as the framework rules ask of every file an agent creates.
@@ -47,8 +47,9 @@ fn skeleton(id: Ulid, title: &str) -> String {
 }
 
 /// The slug of the concept `path` would be, after checking that it can be created there:
-/// a concept path that follows the path rules, free on disk, and passing the destination
-/// checks `mv` makes too (m0 §9.5): no case twin, not ignored, no slug in use.
+/// a concept path that follows the path rules, with no symlink on the way, free on disk,
+/// and passing the destination checks `mv` makes too (m0 §9.5): no case twin, not
+/// ignored, no slug in use.
 fn refuse_destination(vault: &Vault, path: &VaultPath) -> Result<Slug, Refusal> {
     let slug = match path.place() {
         Ok(Some(Place::Concept { slug, .. })) => slug,
@@ -56,7 +57,8 @@ fn refuse_destination(vault: &Vault, path: &VaultPath) -> Result<Slug, Refusal> 
         _ => return Err(Refusal::refused("new.no-area", format!("`{path}` {}", path.why_not_concept()))),
     };
 
-    if vault.abs(path).symlink_metadata().is_ok() {
+    vault.refuse_symlink(path)?;
+    if vault.exists(path) {
         return Err(Refusal::refused("new.exists", format!("`{path}` already exists")));
     }
 

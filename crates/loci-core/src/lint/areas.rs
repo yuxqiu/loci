@@ -9,7 +9,7 @@ use crate::path::{AREA, Kind, VaultPath};
 pub(super) fn areas(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     for a in ctx.index.areas() {
         let p = VaultPath::new(format!("concepts/{a}/{AREA}")).expect("an area is a folder name");
-        if ctx.index.parsed(&p).is_none() {
+        if ctx.index.note_at(&p).is_none() {
             out.push(Diagnostic::error(Code::AreaMissing, format!("area `{a}` has no AREA.md")).at_path(&p));
         }
     }

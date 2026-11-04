@@ -18,7 +18,8 @@ pub(super) const DISK_CODES: &[Code] = &[Code::SourcesChanged, Code::MaterialDro
 /// warning `git.failed`: when `git status` fails neither rule is checked; when reading
 /// HEAD fails, `material-dropped` is not. Unsorted; the caller merges them with
 /// [`super::run`]'s.
-pub fn disk_rules(index: &Index, repo: git::Repo) -> Vec<Diagnostic> {
+pub fn disk_rules(index: &Index) -> Vec<Diagnostic> {
+    let repo = index.vault().repo();
     let mut out = vec![];
     let changes = match changes_since_head(repo) {
         Ok(Some(changes)) => changes,
@@ -66,9 +67,9 @@ struct Tally<'a> {
 }
 
 /// `material-dropped`: for each material, a warning when deleted notes held more of it
-/// than changed and new notes gained. Only vault files count (m0 §3): a deleted path that core would read, and a current
-/// file the index lists, whose counts the index already holds. Only reading `HEAD` can
-/// fail.
+/// than changed and new notes gained. Only vault files count (m0 §3): a deleted path that
+/// core would read, and a current file the index lists, whose counts the index already
+/// holds. Only reading `HEAD` can fail.
 fn check_material(
     index: &Index,
     repo: git::Repo,
@@ -97,8 +98,8 @@ fn check_material(
 
     // Added: what changed and new notes gained since HEAD.
     let new_files = changes.added.iter().chain(&changes.untracked).map(|p| (p, false));
-    let changed = changes.modified.iter().map(|p| (p, true)).chain(new_files);
-    for (p, note, in_head) in changed.filter_map(|(p, in_head)| Some((p, index.parsed(p)?, in_head))) {
+    let changed_or_new = changes.modified.iter().map(|p| (p, true)).chain(new_files);
+    for (p, note, in_head) in changed_or_new.filter_map(|(p, in_head)| Some((p, index.note_at(p)?, in_head))) {
         let now = note.counts;
         let before = if in_head { head(p)? } else { Counts::default() };
         for m in Material::ALL {

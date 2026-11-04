@@ -225,9 +225,11 @@ fn case_twin(vault: &Vault, path: &VaultPath) -> Option<(VaultPath, VaultPath)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::vp;
 
-    fn vp(s: &str) -> VaultPath {
-        VaultPath::new(s.to_string()).unwrap()
+    /// The plan to move `from` to `to` in `index`, nothing ignored or on disk.
+    fn try_mv(index: &Index, from: &str, to: &str) -> Result<Change, Refusal> {
+        plan(index, &vp(from), &vp(to), |_| Ok(false), |_| false)
     }
 
     const C: &str = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# T\n";
@@ -238,7 +240,7 @@ mod tests {
             ("concepts/a/dfs.md", C),
             ("views/w.md", "[[dfs#Typo]] [[concepts/a/dfs#^nope]] [[dfs]]\n"),
         ]);
-        let p = plan(&i, &vp("concepts/a/dfs.md"), &vp("concepts/a/depth-first.md"), |_| Ok(false), |_| false).unwrap();
+        let p = try_mv(&i, "concepts/a/dfs.md", "concepts/a/depth-first.md").unwrap();
         assert_eq!(
             p.writes["views/w.md"].text,
             "[[depth-first#Typo]] [[concepts/a/depth-first#^nope]] [[depth-first]]\n"
@@ -248,7 +250,7 @@ mod tests {
     #[test]
     fn a_link_by_file_name_stays_when_the_slug_does() {
         let i = crate::testing::index(&[("concepts/a/b.md", C), ("views/v.md", "[[b.md]] [[concepts/a/b]]\n")]);
-        let p = plan(&i, &vp("concepts/a/b.md"), &vp("concepts/c/b.md"), |_| Ok(false), |_| false).unwrap();
+        let p = try_mv(&i, "concepts/a/b.md", "concepts/c/b.md").unwrap();
         assert_eq!(p.writes["views/v.md"].text, "[[b.md]] [[concepts/c/b]]\n");
     }
 
@@ -290,7 +292,7 @@ mod tests {
             ("sources/stray.md", "# Stray\n"),
         ]);
 
-        let e = |f: &str, t: &str| plan(&i, &vp(f), &vp(t), |_| Ok(false), |_| false).unwrap_err().code().to_string();
+        let e = |f: &str, t: &str| try_mv(&i, f, t).unwrap_err().code().to_string();
         assert_eq!(e("concepts/a/x.md", "concepts/a/y.md"), "mv.exists");
         assert_eq!(e("views/v.md", "views/V.md"), "path.case-twin");
 
@@ -299,16 +301,16 @@ mod tests {
 
         // Every path rule lint checks applies to a destination, the journal one included.
         let j = crate::testing::index(&[("journal/research/e.md", "# E\n")]);
-        let je = |f: &str, t: &str| plan(&j, &vp(f), &vp(t), |_| Ok(false), |_| false).unwrap_err().code().to_string();
+        let je = |f: &str, t: &str| try_mv(&j, f, t).unwrap_err().code().to_string();
         assert_eq!(je("journal/research", "journal/Research"), "journal.path");
         assert_eq!(je("journal/research/e.md", "notes.md"), "kind.unknown");
         assert_eq!(je("journal/research/e.md", "journal/My Stuff/e.md"), "journal.path");
 
         // A name that exists exactly is `mv.exists`, never twin advice.
         let twins = crate::testing::index(&[("views/a.md", "# a\n"), ("views/A.md", "# A\n")]);
-        let e2 = plan(&twins, &vp("views/a.md"), &vp("views/A.md"), |_| Ok(false), |_| false).unwrap_err();
+        let e2 = try_mv(&twins, "views/a.md", "views/A.md").unwrap_err();
         assert_eq!(e2.code(), "mv.exists");
-        let message = |f: &str, t: &str| plan(&i, &vp(f), &vp(t), |_| Ok(false), |_| false).unwrap_err().error.message;
+        let message = |f: &str, t: &str| try_mv(&i, f, t).unwrap_err().error.message;
         assert!(message("views/v.md", "views/V.md").ends_with("rename it with `git mv -f`"));
         assert!(message("concepts/a/x.md", "concepts/A/z.md").ends_with("move the whole folder `concepts/a` instead"));
         assert!(
@@ -329,7 +331,7 @@ mod tests {
         assert!(message("concepts/a/x.md", "concepts/a/AREA.md").ends_with("would be the area file, not a concept"));
         assert_eq!(e("views/v.md", "views/w"), "mv.to");
         let pic = crate::testing::index(&[("views/fig.png", ""), ("views/v.md", "[[views/fig.png]]\n")]);
-        let pe = plan(&pic, &vp("views/fig.png"), &vp("views/fig.md"), |_| Ok(false), |_| false).unwrap_err();
+        let pe = try_mv(&pic, "views/fig.png", "views/fig.md").unwrap_err();
         assert_eq!(
             (pe.code(), pe.error.message.as_str()),
             ("mv.to", "`views/fig.md`: only a note has the `.md` extension")
@@ -337,17 +339,14 @@ mod tests {
 
         assert!(message("views/v.md", "views/w").ends_with("a note keeps the `.md` extension"));
         let folder = crate::testing::index(&[("views/D/x.md", "# X\n"), ("views/D/y.md", "# Y\n")]);
-        let m = plan(&folder, &vp("views/D/x.md"), &vp("views/d/x.md"), |_| Ok(false), |_| false)
-            .unwrap_err()
-            .error
-            .message;
+        let m = try_mv(&folder, "views/D/x.md", "views/d/x.md").unwrap_err().error.message;
         assert!(m.ends_with("move the whole folder `views/D` instead"), "{m}");
         assert_eq!(e("sources/papers/p.pdf", "sources/papers/p/q.pdf"), "mv.source-file");
         assert_eq!(e("sources/papers/p.pdf", "views/p.pdf"), "mv.source-file");
         assert_eq!(e("sources/papers/p.pdf", "sources/papers/p.md"), "mv.source-file", "a source keeps its extension");
 
         // A stray file under `sources/` may leave, which fixes its `sources.layout`.
-        assert!(plan(&i, &vp("sources/stray.md"), &vp("views/stray.md"), |_| Ok(false), |_| false).is_ok());
+        assert!(try_mv(&i, "sources/stray.md", "views/stray.md").is_ok());
         assert_eq!(e("plugins/learn", "x"), "mv.from");
         assert_eq!(e("loci.toml", "views/x.toml"), "mv.from", "configuration cannot be moved");
         assert_eq!(e("sources", "old/sources"), "mv.source-file");
@@ -364,9 +363,9 @@ mod tests {
             ("inbox/drafts/sub/x.md", "# X2\n"),
         ]);
 
-        let e = plan(&drafts, &vp("inbox/drafts"), &vp("concepts/a/new"), |_| Ok(false), |_| false).unwrap_err();
+        let e = try_mv(&drafts, "inbox/drafts", "concepts/a/new").unwrap_err();
         assert_eq!(e.code(), "mv.collision");
-        assert!(plan(&i, &vp("sources/papers/p.pdf"), &vp("sources/papers/q.pdf"), |_| Ok(false), |_| false).is_ok());
-        assert!(plan(&i, &vp("sources/papers"), &vp("sources/articles"), |_| Ok(false), |_| false).is_ok());
+        assert!(try_mv(&i, "sources/papers/p.pdf", "sources/papers/q.pdf").is_ok());
+        assert!(try_mv(&i, "sources/papers", "sources/articles").is_ok());
     }
 }

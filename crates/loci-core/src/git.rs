@@ -112,12 +112,11 @@ impl<'a> Repo<'a> {
     /// The id of a git tree holding the working tree as `git add -A` would stage it, built
     /// in a private index from `head`, so the user's staging is untouched.
     fn working_tree(&self, head: &str) -> Result<String, String> {
-        let git_dir = String::from_utf8(self.run(&["rev-parse", "--absolute-git-dir"])?)
-            .map_err(|_| "the git directory's path is not UTF-8".to_string())?;
+        let git_dir = path_line(self.run(&["rev-parse", "--absolute-git-dir"])?, "the git directory's path")?;
         // Removed when `scratch` drops, on any return.
         let scratch = tempfile::Builder::new()
             .prefix("loci-agent-")
-            .tempdir_in(git_dir.trim())
+            .tempdir_in(git_dir)
             .map_err(|e| format!("cannot create a temporary index: {e}"))?;
         let index = scratch.path().join("index");
         let with_index = |args: &[&str]| exec(self.git().env("GIT_INDEX_FILE", &index).args(args), &args.join(" "));
@@ -227,8 +226,10 @@ impl<'a> Repo<'a> {
             BTreeSet::new()
         };
 
-        let mut ch = Changes { untracked: untracked.into_iter().map(vault_path).collect(), ..Changes::default() };
-        for path in changed.into_iter().map(vault_path) {
+        let vp = |n: &String| vault_path(n).map_err(|e| format!("git status: {e}"));
+        let mut ch = Changes { untracked: untracked.iter().map(vp).collect::<Result<_, _>>()?, ..Changes::default() };
+        for path in changed.iter().map(vp) {
+            let path = path?;
             match (head.contains(path.as_str()), crate::vault::is_regular_file(self.0, &path)) {
                 (true, true) => ch.modified.push(path),
                 (false, true) => ch.added.push(path),
@@ -309,16 +310,24 @@ pub struct LsFiles {
 /// The top level of the git work tree holding `dir`, canonicalized. The error is git's
 /// message, for example when `dir` is in no work tree.
 pub fn toplevel(dir: &Path) -> Result<PathBuf, String> {
-    let top = trimmed(Repo::new(dir).run(&["rev-parse", "--show-toplevel"])?);
+    let top = path_line(Repo::new(dir).run(&["rev-parse", "--show-toplevel"])?, "the work tree's path")?;
     Path::new(&top).canonicalize().map_err(|e| format!("{top}: {e}"))
 }
 
+/// A path git printed on a line of its own, without the line break (and nothing else: a
+/// folder name may end in a space). An error naming `what` when it is not UTF-8.
+fn path_line(out: Vec<u8>, what: &str) -> Result<String, String> {
+    let out = String::from_utf8(out)
+        .map_err(|e| format!("{what} is not UTF-8: {}", String::from_utf8_lossy(e.as_bytes())))?;
+    Ok(out.strip_suffix('\n').unwrap_or(&out).to_string())
+}
+
 /// A name git lists, as a vault path: an untracked nested repository's trailing `/`
-/// dropped, so that it names the folder.
-pub fn vault_path(name: String) -> VaultPath {
-    let name = name.strip_suffix('/').unwrap_or(&name);
-    VaultPath::new(name.to_string())
-        .unwrap_or_else(|| panic!("git lists relative paths without empty, `.` or `..` segments, not `{name}`"))
+/// dropped, so that it names the folder. Git lists relative paths without empty, `.` or
+/// `..` segments, so the error, shown escaped, is a name with a control character.
+pub fn vault_path(name: &str) -> Result<VaultPath, String> {
+    let name = name.strip_suffix('/').unwrap_or(name);
+    VaultPath::new(name.to_string()).ok_or_else(|| format!("{name:?} is not a vault path: it has a control character"))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -503,5 +512,31 @@ mod tests {
         assert_eq!(ch.modified, Vec::<&str>::new());
         assert_eq!(ch.deleted, ["r.md"]);
         assert_eq!(ch.added, ["copy.md", "gone.md", "y.md"]);
+    }
+
+    /// A changed name that is no vault path (a control character) is an error, not a
+    /// panic: a file whose deletion is staged is no longer listed, so opening the vault
+    /// does not refuse it.
+    #[test]
+    fn status_refuses_a_name_that_is_no_vault_path() {
+        let tmp = test_repo();
+        let root = tmp.path();
+        let git = |args: &[&str]| Repo::new(root).run(args).unwrap();
+        std::fs::write(root.join("a\nb.md"), "a\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "base"]);
+        std::fs::remove_file(root.join("a\nb.md")).unwrap();
+        let err = Repo::new(root).status().unwrap_err();
+        assert!(err.contains(r#""a\nb.md" is not a vault path"#), "{err}");
+    }
+
+    /// A folder name may end in a space: only git's line break is dropped.
+    #[test]
+    fn toplevel_keeps_trailing_spaces() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("sp ");
+        std::fs::create_dir(&dir).unwrap();
+        test_repo_at(&dir);
+        assert_eq!(toplevel(&dir).unwrap(), dir.canonicalize().unwrap());
     }
 }

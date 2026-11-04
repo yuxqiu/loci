@@ -157,7 +157,7 @@ fn managed<'a>(ctx: &'a Ctx) -> impl Iterator<Item = &'a Note> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::path::VaultPath;
+    use crate::testing::vp;
 
     fn lint(files: &[(&str, &str)]) -> Vec<(String, String)> {
         let index = crate::testing::index(files);
@@ -172,10 +172,7 @@ mod tests {
             let d = lint(&files);
             assert!(d.contains(&("concepts/a/y.md".into(), "fm.field-type".into())), "{bad}: {d:?}");
             let index = crate::testing::index(&files);
-            assert!(
-                index.parsed(&VaultPath::new("concepts/a/y.md".into()).unwrap()).unwrap().links.is_empty(),
-                "{bad} is not a link"
-            );
+            assert!(index.note_at(&vp("concepts/a/y.md")).unwrap().links.is_empty(), "{bad} is not a link");
         }
     }
 
@@ -186,7 +183,7 @@ mod tests {
         let d = lint(&files);
         assert!(!d.iter().any(|(p, c)| p == "concepts/a/x.md" && c == "fm.field-type"), "{d:?}");
         let index = crate::testing::index(&files);
-        let x = index.parsed(&VaultPath::new("concepts/a/x.md".into()).unwrap()).unwrap();
+        let x = index.note_at(&vp("concepts/a/x.md")).unwrap();
         assert_eq!(x.links[0].target.names, crate::parse::Names::Slug("café".parse().unwrap()));
     }
 

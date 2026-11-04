@@ -94,9 +94,39 @@ impl Fragment {
     }
 }
 
-/// The comparison key for heading fragments (§5.4).
+/// The comparison key for heading fragments (§5.4): heading text read on one line, in
+/// lower case.
 pub(crate) fn heading_key(s: &str) -> String {
-    s.to_lowercase().replace(' ', "-")
+    one_line(s).to_lowercase()
+}
+
+/// Heading text read on one line (§4.6): each line ending of a setext heading, with the
+/// spaces and tabs around it, as one space.
+pub(crate) fn one_line(s: &str) -> std::borrow::Cow<'_, str> {
+    let ends = line_ends(s);
+    if ends.is_empty() {
+        return s.into();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut at = 0;
+    for end in ends {
+        out.push_str(&s[at..end.start]);
+        out.push(' ');
+        at = end.end;
+    }
+    out.push_str(&s[at..]);
+    out.into()
+}
+
+/// The line endings in heading text `s`, each with the spaces and tabs around it.
+pub(crate) fn line_ends(s: &str) -> Vec<std::ops::Range<usize>> {
+    s.match_indices('\n')
+        .map(|(i, _)| {
+            let start = s[..i].trim_end_matches([' ', '\t', '\r']).len();
+            let end = s.len() - s[i + 1..].trim_start_matches([' ', '\t']).len();
+            start..end
+        })
+        .collect()
 }
 
 /// As written after the `#`.

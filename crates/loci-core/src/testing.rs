@@ -13,9 +13,8 @@ use crate::vault::Vault;
 /// A vault of in-memory files, (path, text): nothing on disk, a minimal config; `.md`
 /// texts are its notes, other contents are unused.
 pub fn vault(files: &[(impl AsRef<str>, impl AsRef<str>)]) -> Vault {
-    let path = |p: &str| VaultPath::new(p.to_string()).unwrap_or_else(|| panic!("`{p}` is a vault path"));
     let texts: BTreeMap<VaultPath, String> =
-        files.iter().map(|(p, t)| (path(p.as_ref()), t.as_ref().to_string())).collect();
+        files.iter().map(|(p, t)| (vp(p.as_ref()), t.as_ref().to_string())).collect();
     let files = texts.keys().cloned().collect();
     let texts = texts.into_iter().filter(|(p, _)| p.is_note()).collect();
     let config = Config::parse("schema = 1\n").expect("a minimal config parses");
@@ -30,5 +29,10 @@ pub fn index(files: &[(impl AsRef<str>, impl AsRef<str>)]) -> Index<'static> {
 
 /// A concept note, at `concepts/a/x.md`, holding `text`.
 pub fn concept(text: &str) -> Note {
-    parse(&VaultPath::new("concepts/a/x.md".into()).unwrap(), text.to_string())
+    parse(&vp("concepts/a/x.md"), text.to_string())
+}
+
+/// `p` as a vault path; panics when it is none.
+pub fn vp(p: &str) -> VaultPath {
+    VaultPath::new(p.to_string()).unwrap_or_else(|| panic!("`{p}` is a vault path"))
 }

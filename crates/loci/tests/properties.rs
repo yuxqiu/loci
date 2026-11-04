@@ -4,6 +4,7 @@
 //! rest; `lint` is deterministic (but for the fresh ids its fixes propose); splicing an empty edit list is the identity and one-pass splicing
 //! equals applying edits one at a time from the end.
 
+use loci_core::testing::vp;
 use std::collections::BTreeMap;
 
 use loci_core::index::Index;
@@ -16,10 +17,6 @@ use proptest::prelude::*;
 use proptest::sample::subsequence;
 
 type Files = BTreeMap<String, String>;
-
-fn vp(s: &str) -> VaultPath {
-    VaultPath::new(s.to_string()).unwrap()
-}
 
 fn in_memory(files: &Files) -> Vault {
     let files: Vec<(&String, &String)> = files.iter().collect();
@@ -175,7 +172,7 @@ proptest! {
         let mapped = |p: &str| map.get(p).map_or(p.to_string(), |n| n.to_string());
         for note in before.notes() {
             let new_path = plan.moves.get(&note.path).unwrap_or(&note.path);
-            let new_note = after.parsed(new_path).expect("every note survives a move");
+            let new_note = after.note_at(new_path).expect("every note survives a move");
             prop_assert_eq!(note.links.len(), new_note.links.len(), "{}", note.path);
             for (old, new) in note.links.iter().zip(&new_note.links) {
                 let Ok(r) = before.resolve(note, old) else { continue };
@@ -204,7 +201,7 @@ proptest! {
         let from = concepts[a.index(concepts.len())].clone();
         let into = concepts[b.index(concepts.len())].clone();
         prop_assume!(from != into);
-        let plan = match merge::plan(&before, before.parsed(&from).unwrap(), before.parsed(&into).unwrap()) {
+        let plan = match merge::plan(&before, before.note_at(&from).unwrap(), before.note_at(&into).unwrap()) {
             Ok(p) => p,
             // Two concepts that share a slug cannot be named by it; any other refusal is not
             // legitimate on these vaults.
@@ -215,9 +212,9 @@ proptest! {
         };
         let after_vault = in_memory(&apply_plan(&g.files, &plan));
         let after = Index::open(&after_vault);
-        prop_assert!(after.parsed(&from).is_none(), "the absorbed note is gone");
+        prop_assert!(after.note_at(&from).is_none(), "the absorbed note is gone");
         for note in before.notes().filter(|n| n.path != from && n.path != into && n.kind != loci_core::path::Kind::Source) {
-            let new_note = after.parsed(&note.path).expect("other notes stay");
+            let new_note = after.note_at(&note.path).expect("other notes stay");
             prop_assert_eq!(note.links.len(), new_note.links.len(), "{}", note.path);
             for (old, new) in note.links.iter().zip(&new_note.links) {
                 let Some(target) = before.link_target(note, old) else { continue };
@@ -226,7 +223,7 @@ proptest! {
             }
         }
         // The concept kept names no absorbed note, and no prerequisite of itself.
-        let kept = after.parsed(&into).expect("the concept kept stays");
+        let kept = after.note_at(&into).expect("the concept kept stays");
         prop_assert!(kept.links.iter().filter_map(|l| after.link_target(kept, l)).all(|t| *t != from));
         prop_assert!(after.prereqs(kept).resolved.iter().all(|p| p.path != into));
     }

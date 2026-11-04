@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ops::Range;
 
 use crate::index::{Index, Resolved};
-use crate::parse::{Fragment, Heading, Link, LinkForm, Note, Spanned, heading_key};
+use crate::parse::{self, Fragment, Heading, Link, LinkForm, Note, Spanned, heading_key};
 use crate::path::VaultPath;
 use crate::splice::{self, Edit};
 
@@ -127,12 +127,12 @@ fn anchors(units: &[Unit]) -> (Vec<Anchors>, Vec<String>) {
         }
         let start = u.content_start();
         for h in u.headings() {
-            let text = h.content.value(&u.note.text);
-            let id = ids.take(text);
+            let text = parse::one_line(h.content.value(&u.note.text));
+            let id = ids.take(&text);
             if a.top.is_none() && h.span.start == start {
                 a.top = Some(id.clone());
             }
-            a.headings.entry(heading_key(text)).or_insert(id);
+            a.headings.entry(heading_key(&text)).or_insert(id);
         }
         out.push(a);
     }
@@ -220,10 +220,19 @@ impl Assembly<'_> {
         let inside = |span: &Range<usize>| u.range.start <= span.start && span.end <= u.range.end;
         let mut edits: Vec<Edit> = u.headings().iter().flat_map(|h| heading_edits(&note.text, h, u.level(h))).collect();
 
-        // Block ids are vault plumbing: dropped, with the spaces before them.
+        // Block ids are vault plumbing: dropped, with the whitespace before them (an id
+        // ends its block, so no line is joined to the next). Where the
+        // line left would change the shape of the note's blocks (`===` alone is a heading underline),
+        // an empty HTML comment keeps it text, and renders as nothing.
         for id in note.block_ids().map(|b| b.id).filter(|id| inside(&id.span)) {
-            let start = note.text[..id.span.start].trim_end_matches([' ', '\t']).len();
-            edits.push(Edit::replace(start..id.span.end, ""));
+            let start = note.text[..id.span.start].trim_end_matches([' ', '\t', '\r', '\n']).len();
+            let dropped = Edit::replace(start..id.span.end, "");
+            let left = splice::apply(&note.text, vec![dropped.clone()]).expect("one edit inside the text");
+            if parse::markdown(left).same_shape(note) {
+                edits.push(dropped);
+            } else {
+                edits.push(Edit::replace(id.span.clone(), "<!-- -->"));
+            }
         }
 
         for (link, resolved) in u.links(self.index) {
@@ -231,9 +240,10 @@ impl Assembly<'_> {
             edits.push(Edit::replace(link.span.clone(), new));
         }
 
-        // Edits are relative to the whole note; cut the unit's range afterwards.
-        splice::apply(&note.text[u.range.clone()], shift_edits(edits, u.range.start))
-            .expect("heading, block id and link edits never overlap")
+        // The text around the unit goes too; the edits above lie inside it.
+        edits.push(Edit::replace(0..u.range.start, ""));
+        edits.push(Edit::replace(u.range.end..note.text.len(), ""));
+        splice::apply(&note.text, edits).expect("heading, block id and link edits never overlap")
     }
 
     /// What `link` in `note` becomes in the document: an image under `assets/`, a link
@@ -335,25 +345,20 @@ impl Assets {
 /// Edits that give heading `h` the ATX level `level`, touching only its markers so
 /// that links inside the heading text are rewritten separately: everything before the
 /// text (an ATX heading's `#` run) becomes the new `#` run; a setext heading's text
-/// lines are also joined and its underline dropped.
+/// lines are also joined on one line ([`parse::line_ends`] as spaces) and its underline
+/// dropped.
 fn heading_edits(text: &str, h: &Spanned<&Heading>, level: u8) -> Vec<Edit> {
     let marks = "#".repeat(level as usize);
     let prefix = if h.content.span.is_empty() { marks } else { format!("{marks} ") };
     let mut edits = vec![Edit::replace(h.span.start..h.content.span.start, prefix)];
     if h.setext {
-        let content = h.content.value(text);
-        for (i, _) in content.match_indices('\n') {
-            let cr = usize::from(content[..i].ends_with('\r'));
-            edits.push(Edit::replace(h.content.span.start + i - cr..h.content.span.start + i + 1, " "));
-        }
+        let start = h.content.span.start;
+        let ends = parse::line_ends(h.content.value(text));
+        edits.extend(ends.into_iter().map(|e| Edit::replace(start + e.start..start + e.end, " ")));
         let end = h.span.start + text[h.span.clone()].trim_end_matches(['\n', '\r']).len();
         edits.push(Edit::replace(h.content.span.end..end, ""));
     }
     edits
-}
-
-fn shift_edits(edits: Vec<Edit>, by: usize) -> Vec<Edit> {
-    edits.into_iter().map(|e| Edit { range: e.range.start - by..e.range.end - by, new: e.new }).collect()
 }
 
 /// The folder, beside the exported file, that holds the images it embeds.
@@ -368,13 +373,14 @@ fn is_size(label: &str) -> bool {
 mod tests {
     use super::*;
     use crate::index::Index;
+    use crate::testing::vp;
 
     fn concept(title: &str, body: &str) -> String {
         format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# {title}\n\n{body}")
     }
 
     fn export(i: &Index, root: &str, depth: usize) -> Export {
-        Export::of(i, i.parsed(&VaultPath::new(root.into()).unwrap()).unwrap(), depth)
+        Export::of(i, i.note_at(&vp(root)).unwrap(), depth)
     }
 
     #[test]
@@ -403,10 +409,7 @@ mod tests {
 
         let e = export(&i, "views/algo.md", 1);
         assert_eq!(e.notes, vec!["views/algo.md", "concepts/a/bfs.md", "concepts/a/dfs.md"]);
-        assert_eq!(
-            e.assets,
-            vec![(VaultPath::new("concepts/a/attachments/g.png".into()).unwrap(), "g.png".to_string())]
-        );
+        assert_eq!(e.assets, vec![(vp("concepts/a/attachments/g.png"), "g.png".to_string())]);
 
         let md = &e.markdown;
         assert!(md.contains("[BFS](#bfs) and [depth-first](#dfs)."), "{md}");
@@ -494,5 +497,55 @@ mod tests {
             "{}",
             e.markdown
         );
+    }
+
+    /// A paragraph's last line that is only `===` or `***` once its block id goes stays
+    /// paragraph text, not a heading underline or a rule.
+    #[test]
+    fn a_dropped_block_id_leaves_no_new_block() {
+        for (line, kept) in [("=== ^b1", "=== <!-- -->"), ("--- ^b1", "--- <!-- -->"), ("*** ^b1", "*** <!-- -->")] {
+            let i = crate::testing::index(&[("concepts/a/x.md", concept("X", &format!("Some text\n{line}\n")))]);
+            let md = export(&i, "concepts/a/x.md", 0).markdown;
+            assert!(md.contains(&format!("Some text\n{kept}\n")), "{line}: {md}");
+            assert_eq!(crate::parse::markdown(md.clone()).headings().count(), 1, "{md}");
+        }
+        for (body, kept) in [
+            ("> Some text\n> === ^b1\n", "> === <!-- -->\n"),
+            ("*** ^b1\n", "\n*** <!-- -->\n"),
+            ("Para\n- ^b2\n", "Para\n- <!-- -->\n"),
+            ("Para ^b3\n", "\nPara\n"),
+            ("- a\n  - ^b4\n", "- a\n  - <!-- -->\n"),
+            ("- a\n- -- ^b5\n- c\n", "- a\n- -- <!-- -->\n- c\n"),
+            // The whitespace before a kept comment stays: it sets the item's content column.
+            ("-  ^b6\n  -\n", "-  <!-- -->\n  -\n"),
+            // An id on a line of its own goes with the line, so the list stays tight.
+            ("- a\n  ^b7\n- c\n", "- a\n- c\n"),
+        ] {
+            let i = crate::testing::index(&[("views/v.md", format!("# V\n\n{body}"))]);
+            let md = export(&i, "views/v.md", 0).markdown;
+            assert!(md.contains(kept), "{body}: {md}");
+        }
+        // A list item holding only its id keeps its marker.
+        let i = crate::testing::index(&[("views/v.md", "# V\n\n- a\n- ^b1\n")]);
+        assert!(export(&i, "views/v.md", 0).markdown.contains("- a\n-\n"));
+    }
+
+    /// A setext heading's lines are joined with one space, the spaces and tabs around each
+    /// line ending going too, inside a code span as well (a hard break's backslash stays).
+    /// A heading inside a block quote or an item is no heading of the note (§4.6): left as
+    /// written.
+    #[test]
+    fn a_setext_heading_becomes_one_atx_line() {
+        for (body, want) in [
+            ("Hard  \r\n   break\\\r\nhere\r\n===\r\n", "# Hard break\\ here\n"),
+            ("a `b\nc` d\n===\n", "# a `b c` d\n"),
+            ("Title \nmore\n---\n", "## Title more\n"),
+            ("> First line\n> second line\n> ===\n", "> First line\n> second line\n> ===\n"),
+            ("- Item line\n  more\n  ---\n", "- Item line\n  more\n  ---\n"),
+        ] {
+            let i = crate::testing::index(&[("views/v.md", format!("# V\n\n{body}"))]);
+            let md = export(&i, "views/v.md", 0).markdown;
+            assert!(md.contains(want), "{body:?}: {md:?}");
+        }
     }
 }

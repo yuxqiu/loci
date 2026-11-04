@@ -92,7 +92,7 @@ impl Plan {
             };
             if done.is_empty() {
                 verify(index, &was, current, &diags)?;
-                let changed = |p: &VaultPath, e: &Edited| index.parsed(p).is_some_and(|n| n.text != e.text);
+                let changed = |p: &VaultPath, e: &Edited| index.note_at(p).is_some_and(|n| n.text != e.text);
                 let writes = notes.into_iter().filter(|(p, e)| changed(p, e)).collect();
                 // A pass with any fix to apply applies one, so fixes are left only when
                 // the passes ran out.
@@ -203,7 +203,7 @@ enum Planned {
 /// outside its text, which `splice::apply` refuses.
 fn planned<'i>(index: &'i Index, fix: &Fix) -> Result<Vec<(&'i Note, Planned)>, Refusal> {
     let bug = |m: String| Refusal::internal("lint.fix", m);
-    let note = |p: &VaultPath| index.parsed(p).ok_or_else(|| bug(format!("a fix edits `{p}`, which is not a note")));
+    let note = |p: &VaultPath| index.note_at(p).ok_or_else(|| bug(format!("a fix edits `{p}`, which is not a note")));
 
     fix.edits
         .iter()
@@ -250,7 +250,7 @@ fn verify(before: &Index, was: &[Diagnostic], after: &Index, now: &[Diagnostic])
 
     for note in before.notes() {
         // Every target before is still a target after (fixes may add links).
-        let mut have = after.parsed(&note.path).map_or(vec![], |n| targets(after, n));
+        let mut have = after.note_at(&note.path).map_or(vec![], |n| targets(after, n));
         for t in targets(before, note) {
             match have.iter().position(|h| *h == t) {
                 Some(i) => {

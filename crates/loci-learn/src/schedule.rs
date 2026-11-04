@@ -82,7 +82,8 @@ impl Scheduler {
     }
 
     /// Cards for a session (§2.6 step 3): due cards by due time, then new cards in the
-    /// order of `all` ([`crate::cards::all`]'s order: by note path, then in note order).
+    /// order of `all` ([`crate::cards::all`]'s order: by note path, then in note order);
+    /// and how many of them are new.
     pub fn select<'a>(
         &self,
         all: &'a [Spanned<Card>],
@@ -92,13 +93,13 @@ impl Scheduler {
     ) -> (Vec<(Ulid, &'a Spanned<Card>)>, usize) {
         let by_card = lines_by_card(lines);
         let mut due: Vec<(Timestamp, Ulid, &Spanned<Card>)> = vec![];
-        let mut fresh: Vec<(Ulid, &Spanned<Card>)> = vec![];
+        let mut new_cards: Vec<(Ulid, &Spanned<Card>)> = vec![];
         for c in all {
             let Some(id) = c.id.valid() else { continue };
             match by_card.get(&id).and_then(|ls| self.state(ls)) {
                 Some(state) if state.due <= now => due.push((state.due, id, c)),
                 Some(_) => {}
-                None => fresh.push((id, c)),
+                None => new_cards.push((id, c)),
             }
         }
 
@@ -109,9 +110,9 @@ impl Scheduler {
             .filter(|ls| ls.first().is_some_and(|l| l.t.to_zoned(TimeZone::UTC).date() == today))
             .count();
         let allowance = (new_per_day as usize).saturating_sub(introduced_today);
-        let new_count = fresh.len().min(allowance);
+        let new_count = new_cards.len().min(allowance);
         let mut out: Vec<(Ulid, &Spanned<Card>)> = due.into_iter().map(|(_, id, c)| (id, c)).collect();
-        out.extend(fresh.into_iter().take(new_count));
+        out.extend(new_cards.into_iter().take(new_count));
         (out, new_count)
     }
 }

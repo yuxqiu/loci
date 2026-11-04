@@ -1,4 +1,5 @@
-//! The vault model (m0 §3): discovery, configuration and the working-tree walk.
+//! The vault model (m0 §3): discovery, configuration, and the files git lists (read once,
+//! at open).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -123,6 +124,11 @@ impl Vault {
         abs(&self.root, rel)
     }
 
+    /// Whether anything (a file, a folder, a symlink) is on disk at vault path `rel`.
+    pub fn exists(&self, rel: &VaultPath) -> bool {
+        self.abs(rel).symlink_metadata().is_ok()
+    }
+
     /// The vault's folder, for running processes in it (git, plugins). A file in the
     /// vault is reached through [`Vault::abs`], never by joining onto this.
     pub fn root(&self) -> &Path {
@@ -220,17 +226,18 @@ fn walk(root: &Path) -> Result<(Vec<VaultPath>, BTreeMap<VaultPath, String>), Re
     let (mut files, mut texts) = (vec![], BTreeMap::new());
     let mut symlinks = vec![];
     for name in listed.names {
-        // Shown escaped, so the message stays one line.
-        if crate::path::has_control(&name) {
-            unreadable.push(format!("{name:?} has a control character in its name"));
-            continue;
-        }
+        let rel = match crate::git::vault_path(&name) {
+            Ok(rel) => rel,
+            Err(e) => {
+                unreadable.push(e);
+                continue;
+            }
+        };
         // Every name, `plugins/` and `loci.toml` included, is checked for symlinks.
         if let Some(link) = symlink_on_path(root, &name) {
             symlinks.push(format!("`{link}`"));
             continue;
         }
-        let rel = crate::git::vault_path(name);
         match entry(root, &rel) {
             Entry::Skipped => {}
             Entry::Unreadable(why) => unreadable.push(format!("`{rel}` {why}")),
@@ -386,6 +393,7 @@ fn at(path: &Path) -> impl Fn(std::io::Error) -> std::io::Error + '_ {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::vp;
 
     #[test]
     fn copy_dir_names_a_link_it_cannot_copy() {
@@ -413,7 +421,7 @@ mod tests {
         for f in v.files() {
             assert_eq!(v.resolve(&crate::relink::written(&v, f)), Some(f), "{f}");
         }
-        let written = |p: &str| crate::relink::written(&v, &VaultPath::new(p.into()).unwrap());
+        let written = |p: &str| crate::relink::written(&v, &vp(p));
         assert_eq!(
             (written("n/b.md"), written("a.md.md"), written("x.png.md")),
             ("n/b".into(), "a.md.md".into(), "x.png.md".into())

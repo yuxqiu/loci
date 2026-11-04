@@ -286,7 +286,7 @@ impl VaultPath {
 }
 
 /// Whether `s` holds a control character (a newline, a tab, …), which no vault path may.
-pub(crate) fn has_control(s: &str) -> bool {
+fn has_control(s: &str) -> bool {
     s.chars().any(char::is_control)
 }
 
@@ -386,10 +386,7 @@ impl PartialEq<&str> for VaultPath {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn vp(s: &str) -> VaultPath {
-        VaultPath::new(s.to_string()).unwrap()
-    }
+    use crate::testing::vp;
 
     #[test]
     fn invariant() {
