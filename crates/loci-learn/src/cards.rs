@@ -57,14 +57,14 @@ pub fn all(index: &Index) -> Vec<Spanned<Card>> {
 pub fn of_note(note: &Note) -> (Vec<Spanned<Card>>, Vec<Range<usize>>) {
     let found = note.h2_sections(SECTION);
     let mut issues = vec![];
-    if let Some((second, _)) = found.get(1) {
-        issues.push(second.span.clone());
+    if let Some(second) = found.get(1) {
+        issues.push(second.heading.span.clone());
     }
 
     // Each item of a list at the top level of the section is a card; anything else
     // there is a format issue.
     let mut items = vec![];
-    for block in note.section_blocks(&found) {
+    for block in found.iter().flat_map(|s| &s.blocks) {
         match &block.node {
             Block::List(list) => items.extend(list),
             _ => issues.push(block.span.clone()),

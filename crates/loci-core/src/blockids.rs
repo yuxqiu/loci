@@ -26,7 +26,7 @@ pub fn assign(
         return Ok(None);
     }
 
-    let blocks = note.section_blocks(&sections);
+    let blocks: Vec<_> = sections.iter().flat_map(|s| s.blocks.iter().copied()).collect();
     let text = &note.text;
 
     // Where each new id goes: the end of the leading text of an item without one (an

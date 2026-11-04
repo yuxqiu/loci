@@ -153,6 +153,13 @@ impl ReviewLog<'_> {
         Ok(lines)
     }
 
+    /// Refuses a symlink on the way to the log, its `.gitattributes` or the config
+    /// (`file.symlink`): loci never reads or writes through one (m0 §3), and an ignored
+    /// one escaped the vault's walk.
+    pub fn refuse_symlinks(&self) -> Result<(), Refusal> {
+        [LOG, ATTRS, crate::config::PATH].into_iter().try_for_each(|p| self.0.refuse_symlink(&VaultPath::fixed(p)))
+    }
+
     /// Appends one line, creating `plugins/learn/` and its `.gitattributes` first if needed.
     /// Returns the file length before the append, for rollback.
     pub fn append(&self, line: &Line) -> std::io::Result<u64> {

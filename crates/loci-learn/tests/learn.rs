@@ -122,6 +122,39 @@ fn log_commits_alone_and_validates() {
     assert_eq!(code, 0, "the log still parses: {env}");
 }
 
+#[cfg(unix)]
+#[test]
+fn a_failed_commit_leaves_nothing_staged() {
+    use std::os::unix::fs::PermissionsExt;
+    let v = vault(&[("concepts/a/x.md", &concept(CONCEPT, &format!("- q :: a ^{ID1}\n")))]);
+    let hook = v.root.join(".git/hooks/pre-commit");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (code, env) = learn(&v, &["log"], &format!(r#"{{"card":"{ID1}","grade":"hard"}}"#));
+    assert_eq!((code, error_code(&env)), (3, "git"), "{env}");
+    assert_eq!(v.git(&["diff", "--cached", "--name-only"]), "", "the removed line is not left staged");
+}
+
+#[test]
+fn the_log_is_not_written_through_a_symlink() {
+    let v = vault(&[("concepts/a/x.md", &concept(CONCEPT, &format!("- q :: a ^{ID1}\n")))]);
+    let outside = v.root.parent().unwrap().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::create_dir_all(v.root.join("plugins")).unwrap();
+    std::os::unix::fs::symlink(&outside, v.root.join("plugins/learn")).unwrap();
+    // Ignored, so opening the vault does not see it.
+    std::fs::write(v.root.join(".git/info/exclude"), "/plugins/learn\n").unwrap();
+    let (code, env) = learn(&v, &["log"], &format!(r#"{{"card":"{ID1}","grade":"hard"}}"#));
+    assert_eq!((code, error_code(&env)), (1, "file.symlink"), "{env}");
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0, "nothing written outside the vault");
+    std::fs::write(outside.join("config.toml"), "new_per_day = 1\n").unwrap();
+    for args in [&["state", "x"][..], &["review"]] {
+        let (code, env) = learn(&v, args, "");
+        assert_eq!((code, error_code(&env)), (1, "file.symlink"), "{args:?} reads nothing through it: {env}");
+    }
+}
+
 #[test]
 fn state_kinds() {
     let v = vault(&[

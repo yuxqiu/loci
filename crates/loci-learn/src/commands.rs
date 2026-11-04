@@ -81,6 +81,7 @@ fn check_exists(line: &Line, all: &[Spanned<Card>], index: &Index) -> Result<(),
 }
 
 pub fn log(vault: &Vault, mut stdin: impl Read) -> Result<Report, Refusal> {
+    ReviewLog(vault).refuse_symlinks()?;
     let mut input = String::new();
     stdin.read_to_string(&mut input).map_err(Refusal::io)?;
     let bad = |e: String| Refusal::refused("learn.bad-input", e);
@@ -100,6 +101,7 @@ pub fn log(vault: &Vault, mut stdin: impl Read) -> Result<Report, Refusal> {
 }
 
 pub fn state(vault: &Vault, arg: &str) -> Result<Report, Refusal> {
+    ReviewLog(vault).refuse_symlinks()?;
     let index = Index::open(vault);
     let note = index.note_named(arg)?;
     if note.kind != Kind::Concept {
@@ -122,6 +124,7 @@ pub fn state(vault: &Vault, arg: &str) -> Result<Report, Refusal> {
 }
 
 pub fn review(vault: &Vault) -> Result<Report, Refusal> {
+    ReviewLog(vault).refuse_symlinks()?;
     let config = Config::load(vault)?;
     let lines = ReviewLog(vault).read()?;
     let index = Index::open(vault);
@@ -133,7 +136,8 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
     let (reviewed, stopped) = grade_cards(&session, ReviewLog(vault));
 
     // Lines already appended are committed even when the session stopped on an error.
-    let commit = if reviewed > 0 { Some(ReviewLog(vault).commit("review").map_err(Refusal::git)?) } else { None };
+    let uncommitted = |e| Refusal::git(format!("{e}; the {reviewed} grade(s) stay in the log, uncommitted"));
+    let commit = if reviewed > 0 { Some(ReviewLog(vault).commit("review").map_err(uncommitted)?) } else { None };
     if let Err(e) = stopped {
         let committed = commit.map_or(String::new(), |sha| format!(" ({reviewed} grades committed in {sha})"));
         return Err(Refusal::io(format!("the session stopped: {e}{committed}")));

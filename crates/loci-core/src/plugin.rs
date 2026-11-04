@@ -16,7 +16,7 @@ pub const ENV_VERSION: &str = "LOCI_VERSION";
 
 static NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-z][a-z0-9-]*$").unwrap());
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plugin {
     pub name: String,
     pub path: PathBuf,

@@ -26,7 +26,7 @@ pub fn run(ctx: &Ctx, from: &str, to: &str, dry_run: bool) -> Result<Report, Ref
     refuse_changed_source(&vault, &plan)?;
 
     if !dry_run {
-        plan.apply(&vault).map_err(Refusal::io)?;
+        plan.apply(&vault)?;
     }
 
     let data = json!({

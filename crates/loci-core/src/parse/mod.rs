@@ -17,10 +17,12 @@ use body::walk_body;
 use frontmatter::{frontmatter, frontmatter_links};
 
 pub use blocks::{Block, BlockId, IdBlock, Lead, ListItem, Marker, Node};
-pub use frontmatter::{ConceptField, FmChange, FmEntry, FmValue, Frontmatter, new_concept_frontmatter, prereq_slug};
-pub use links::{Fragment, Label, Link, LinkForm, MarkdownLink, Names, Target, bare_slug, heading_key};
+pub(crate) use frontmatter::prereq_slug;
+pub use frontmatter::{ConceptField, FmChange, FmEntry, FmValue, Frontmatter, new_concept_frontmatter};
+pub use links::{Fragment, Label, Link, LinkForm, MarkdownLink, Names, Target};
+pub(crate) use links::{bare_slug, heading_key};
 
-pub const BOM: &str = "\u{feff}";
+pub(crate) const BOM: &str = "\u{feff}";
 
 /// A value and the bytes of the note's text it was read from (after rustc's
 /// `Spanned`). A part whose value is read from its bytes is spanned with a marker type
@@ -90,7 +92,7 @@ impl Written for HeadingText {}
 pub struct Counts {
     pub math: usize,
     pub images: usize,
-    pub code: usize,
+    pub fenced_code: usize,
 }
 
 impl std::ops::Index<Material> for Counts {
@@ -100,7 +102,7 @@ impl std::ops::Index<Material> for Counts {
         match material {
             Material::Math => &self.math,
             Material::Images => &self.images,
-            Material::FencedCode => &self.code,
+            Material::FencedCode => &self.fenced_code,
         }
     }
 }
@@ -197,17 +199,15 @@ impl Markdown {
         }
     }
 
-    /// Every H2 whose text is `text`, with the content of its section (after the
-    /// heading, up to the next H1 or H2).
-    pub fn h2_sections(&self, text: &str) -> Vec<(Spanned<&Heading>, Range<usize>)> {
-        let named = |(h, _): &(Spanned<&Heading>, Range<usize>)| h.level == 2 && h.content.value(&self.text) == text;
-        self.sections().filter(named).map(|(h, section)| (h.clone(), h.span.end..section.end)).collect()
-    }
-
-    /// The top-level blocks of `sections` ([`Markdown::h2_sections`]).
-    pub fn section_blocks(&self, sections: &[(Spanned<&Heading>, Range<usize>)]) -> Vec<&Spanned<Block>> {
-        let inside = |r: &Range<usize>| sections.iter().any(|(_, s)| s.start <= r.start && r.end <= s.end);
-        self.body.iter().filter(|b| inside(&b.span)).collect()
+    /// Every H2 whose text is `text`, with the top-level blocks of its section.
+    pub fn h2_sections(&self, text: &str) -> Vec<H2Section<'_>> {
+        self.sections()
+            .filter(|(h, _)| h.level == 2 && h.content.value(&self.text) == text)
+            .map(|(heading, section)| {
+                let inside = |b: &&Spanned<Block>| heading.span.end <= b.span.start && b.span.end <= section.end;
+                H2Section { blocks: self.body.iter().filter(inside).collect(), heading }
+            })
+            .collect()
     }
 
     /// Whether the file starts with a UTF-8 byte-order mark (`file.bom` in managed notes).
@@ -231,11 +231,18 @@ impl Markdown {
     }
 }
 
+/// An H2 and the top-level blocks of its section (after the heading, up to the next H1
+/// or H2), as [`Markdown::h2_sections`] finds them.
+#[derive(Debug, Clone)]
+pub struct H2Section<'a> {
+    pub heading: Spanned<&'a Heading>,
+    pub blocks: Vec<&'a Spanned<Block>>,
+}
+
 /// The markdown extensions loci reads notes with.
 pub fn options() -> Options {
     Options::ENABLE_WIKILINKS
         | Options::ENABLE_MATH
-        | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
         | Options::ENABLE_TABLES
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_STRIKETHROUGH
@@ -250,11 +257,11 @@ pub fn parse(path: &VaultPath, text: String) -> Note {
 
 /// Parses `text`, a whole markdown file in the vault or not.
 pub fn markdown(text: String) -> Markdown {
-    // Frontmatter starts at byte 0, after a BOM (§4.3), which pulldown-cmark would read
-    // as text: the walk starts past it.
+    // Frontmatter starts at byte 0, after a BOM (§4.3); the body is walked after a closed
+    // block.
     let base = if text.starts_with(BOM) { BOM.len() } else { 0 };
-    let walked = walk_body(&text, base);
-    let frontmatter = frontmatter(&text, base, walked.meta.as_ref());
+    let frontmatter = frontmatter(&text, base);
+    let walked = walk_body(&text, frontmatter.as_ref().filter(|f| f.is_closed()).map_or(base, |f| f.span.end));
     let mut links = frontmatter.iter().flat_map(|f| frontmatter_links(f)).collect::<Vec<_>>();
     links.extend(walked.links);
     links.sort_by_key(|l| l.span.start);

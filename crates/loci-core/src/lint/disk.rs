@@ -65,7 +65,8 @@ struct Tally<'a> {
     first: Option<&'a VaultPath>,
 }
 
-/// Only vault files count (m0 §3): a deleted path that core would read, and a current
+/// `material-dropped`: for each material, a warning when deleted notes held more of it
+/// than changed and new notes gained. Only vault files count (m0 §3): a deleted path that core would read, and a current
 /// file the index lists, whose counts the index already holds. Only reading `HEAD` can
 /// fail.
 fn check_material(

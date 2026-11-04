@@ -11,10 +11,10 @@ them under its version.
 - `path.name-clash` (warning): a note `x.md` in a folder beside a file `x`, which
   `[[x]]` names.
 - `loci lint --fix`: applies the fixes that keep the meaning (a missing id, a
-  markdown link to a vault file, an unquoted prereq, a byte-order mark, a name not in
-  NFC), checks that nothing got worse, then writes. `--unsafe-fixes` adds likely
-  fixes (a misspelt slug, duplicate ids), `--only <code>`
-  keeps one code, `--dry-run` writes nothing. A name not in NFC is renamed with
+  markdown link to a vault file, an unquoted prereq, a byte-order mark), checks
+  that nothing got worse, then writes. `--unsafe-fixes` adds likely fixes (a
+  misspelt slug, duplicate ids), `--only <code>` keeps one code, `--dry-run` writes
+  nothing. A name not in NFC is renamed with
   `loci mv`, which its diagnostic's hint gives. Like `cargo fix`, it refuses a working
   tree with uncommitted changes unless given `--allow-dirty`. `lint --json` shows each diagnostic's
   fixes as exact edits.
@@ -185,9 +185,23 @@ them under its version.
   refused by every command with `file.symlink`, naming each link, until it is
   replaced with the file or folder itself.
 - `loci mv` refuses a directory move that would leave a moved file ignored by git.
+- A `loci learn log` or `review` whose commit fails (a hook refuses it) leaves
+  nothing staged; `review` says how many grades stay uncommitted.
+- `loci learn log`, `state` and `review` refuse a symlink on the way to
+  `plugins/learn/`'s files (`file.symlink`), even one git ignores; `loci bench`
+  names a symlink in the vault it cannot copy.
+- Frontmatter is split off by loci, not read by pulldown-cmark: it runs from a first
+  line `---` to the next `---` line (trailing spaces and tabs allowed on both). `...`
+  no longer closes it, and a `...` inside it is `fm.yaml`. An empty block has no
+  fields (`--fix` can add its id). A later `---`, text, `---` in the body is a rule
+  and a heading, as CommonMark reads it, so its links count.
+- `loci export -o /` (a path that names no file) is `io`, not a crash.
+- A rewritten frontmatter block (`mv`, `merge`, `lint --fix`) keeps the note's
+  `\r\n` line breaks instead of mixing in `\n`.
+- A `loci mv` or `loci merge` rename that fails partway (a read-only folder) undoes
+  the renames made before it; the error names both ends.
 - `loci merge` no longer fails when it removes two adjacent prerequisites; `loci mv`
-  can rename a file or folder whose name is not NFC; `loci bench` matches slugs
-  case-insensitively.
+  can rename a file or folder whose name is not NFC.
 - A line in `plugins/learn/reviews.jsonl` that does not parse is `learn.log` with
   exit 1 (was exit 3).
 - Commands that take a note accept the same path forms everywhere (`./`, a trailing

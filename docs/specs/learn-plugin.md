@@ -18,11 +18,13 @@ The plugin binary never writes notes. It writes only under `plugins/learn/`:
 
 Cards are the top-level list items under the `## Cards` H2 of a concept note (to the
 next H1 or H2). The plugin reads them from the working tree through `loci-core`:
-each item's byte range, from its `Start(Item)` and `End(Item)` offsets, is one card.
+each top-level list item of the section, as `loci-core`'s block tree gives it (m0
+§4.7), is one card, spanning the item.
 
 - The item's block id, at the end of its leading text (core: `docs/specs/m0.md`
   §4.6), is the card's id. It identifies the whole item.
-- The question and answer are split at the first `::` outside inline code that is
+- The question and answer are split at the first `::` in the item's text as markdown reads it (not inside a
+  code span or math) that is
   preceded by whitespace and followed by whitespace or a line end.
 - A nested list inside the item is part of the answer.
 
@@ -51,7 +53,7 @@ id is deleted and `loci block-ids` is run again.
 
 ### 2.1 `plugins/learn/config.toml`
 
-Optional; written by the user, read by `loci learn review`:
+Optional; written by the user, read by `loci learn review` and `loci learn state`:
 
 | Key | Default | Range | Meaning |
 |---|---|---|---|
@@ -109,13 +111,14 @@ plugins/learn/.gitattributes`, then `git commit -m "loci: learn <command>" --
 plugins/learn/reviews.jsonl plugins/learn/.gitattributes` (the user's identity).
 
 Each `log` call appends its line and commits. On a git failure the appended line is
-truncated away (exit 3). `data`: `{"line": <the appended object>, "commit"}`.
+truncated away and nothing is left staged (exit 3). `data`: `{"line": <the appended object>, "commit"}`.
 
 ### 2.5 `loci learn state <concept>`
 
 Returns the estimate of a concept (§4.2), given as a note argument (m0 §8). A note
 that is not found is `note.unknown`, one that is not a concept `note.kind` (m0 §8), and
-a concept without a valid id (reviews are logged by id) `learn.unknown-concept`. `data`:
+a concept without a valid id (reviews are logged by id) `learn.unknown-concept`; an
+invalid `config.toml` is `learn.config`. `data`:
 
 ```json
 {"concept": "01JB9XQ7Z3K4M5N6P7Q8R9S0TV",
@@ -144,8 +147,8 @@ was computed from (§4.2), in timestamp order; empty for `unknown`.
 5. Appends each grade at once, through the same validation and append code as
    `log`, without committing.
 6. If any line was appended, commits once, at the end of the session, as `log`
-   does. If that commit fails, the appended lines stay in the working tree and the
-   command exits 3. If no line was appended, nothing is committed, `commit` is
+   does. If that commit fails, the appended lines stay in the working tree, unstaged,
+   and the command exits 3, saying how many. If no line was appended, nothing is committed, `commit` is
    `null`, and the command exits 0. An interrupted session (Ctrl-C) loses no grade:
    each was appended at once, and the next `log` or `review` commits the whole log.
 

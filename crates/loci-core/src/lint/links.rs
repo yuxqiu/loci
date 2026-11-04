@@ -50,7 +50,7 @@ fn markdown_link(vault: &Vault, note: &Note, m: &Spanned<MarkdownLink>) -> Diagn
     let bang = if m.image { "!" } else { "" };
     let wiki = format!("{bang}[[{target}]]");
     // No path link names a root file (§5.3), so it has no wikilink to suggest.
-    let root = resolved.is_some() && !target.contains('/');
+    let root = resolved.is_some_and(|p| p.parent().is_none());
     let (message, hint) = if root {
         let hint = "no wikilink names a root file: move it into a folder (`loci mv`) or drop the link".to_string();
         (format!("a vault target must use a wikilink, and `{target}` is a root file"), hint)

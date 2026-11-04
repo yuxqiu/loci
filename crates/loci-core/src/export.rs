@@ -27,13 +27,9 @@ impl<'a> Unit<'a> {
     }
 
     /// The unit for `part` of `note` (m1-m4 §4 step 1: the whole note, the section under
-    /// a heading, or one block), placed under a heading of `level`. `resolve` has checked
-    /// that the fragment exists.
-    fn child(note: &'a Note, part: Option<&Fragment>, level: u8) -> Self {
-        let range = match part {
-            None => note.body_start()..note.text.len(),
-            Some(fragment) => note.fragment_range(fragment).expect("resolve checked the fragment"),
-        };
+    /// a heading, or one block, as `resolve` found it), placed under a heading of `level`.
+    fn child(note: &'a Note, part: Option<Range<usize>>, level: u8) -> Self {
+        let range = part.unwrap_or(note.body_start()..note.text.len());
         // Its top heading takes `level`; without one, a title does, above its headings.
         let mut unit = Unit { note, range, shift: 0, title: None };
         let headings = unit.headings();
@@ -245,7 +241,7 @@ impl Assembly<'_> {
     /// link that does not resolve, its target as written) for anything left out.
     fn link_replacement(&mut self, note: &Note, link: &Spanned<Link>, resolved: Option<Resolved<'_>>) -> String {
         let label = link.label.as_ref().map(|l| l.value(&note.text).to_string());
-        let target = match resolved {
+        let linked = match resolved {
             None => return label.unwrap_or_else(|| link.target.text(&note.text).to_string()),
             Some(Resolved::File(p)) if link.form == LinkForm::Embed && is_image(p) => {
                 let name = self.assets.name(p);
@@ -253,7 +249,7 @@ impl Assembly<'_> {
                 return format!("![{alt}]({ASSETS}/{name})");
             }
             Some(Resolved::File(p)) => return label.unwrap_or_else(|| p.to_string()),
-            Some(Resolved::Note(note)) => note,
+            Some(Resolved::Note(n, _)) => n,
         };
 
         let heading = match &link.target.fragment {
@@ -261,8 +257,8 @@ impl Assembly<'_> {
             Some(Fragment::Block(_)) | None => None,
         };
 
-        let text = label.unwrap_or_else(|| heading.unwrap_or_else(|| target.title()).to_string());
-        let anchor = self.unit_of.get(&target.path).and_then(|&j| {
+        let text = label.unwrap_or_else(|| heading.unwrap_or_else(|| linked.title()).to_string());
+        let anchor = self.unit_of.get(&linked.path).and_then(|&j| {
             let a = &self.anchors[j];
             heading.and_then(|h| a.headings.get(&heading_key(h))).or(a.top.as_ref())
         });
@@ -288,23 +284,23 @@ fn collect<'a>(index: &'a Index, root: &'a Note, depth: usize) -> (Vec<Unit<'a>>
         // The notes the unit links to, each placed one level below the heading before
         // its link; read before any is added, since adding moves `units`.
         let parent = &units[i];
-        let children: Vec<(&Note, Option<&Fragment>, u8)> = parent
+        let children: Vec<(&Note, Option<Range<usize>>, u8)> = parent
             .links(index)
             .into_iter()
             .filter_map(|(link, resolved)| match resolved {
-                Some(Resolved::Note(note)) => Some((link, note)),
+                Some(Resolved::Note(note, part)) => Some((link, note, part)),
                 Some(Resolved::File(_)) | None => None,
             })
-            .map(|(link, note)| (note, link.target.fragment.as_ref(), (parent.level_at(link.span.start) + 1).min(6)))
+            .map(|(link, note, part)| (note, part, (parent.level_at(link.span.start) + 1).min(6)))
             .collect();
 
-        for (note, fragment, level) in children {
+        for (note, part, level) in children {
             if unit_of.contains_key(&note.path) {
                 continue;
             }
             unit_of.insert(&note.path, units.len());
             queue.push_back((units.len(), d + 1));
-            units.push(Unit::child(note, fragment, level));
+            units.push(Unit::child(note, part, level));
         }
     }
 

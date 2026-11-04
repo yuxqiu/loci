@@ -94,8 +94,8 @@ newest id, and a vault sees only the entries after its mark.
 
 ## 5. Commands
 
-- **`loci status`** gains one line when updates are waiting:
-  `Updates: 2 waiting (u0004, u0005); read them with loci updates`.
+- **`loci status`** gains an `## Updates` section when updates are waiting:
+  ``2 waiting (u0004, u0005); read them with `loci updates` `` (m0 §9.6).
 - **`loci updates`** prints the procedure (§6) as a short header, then the waiting
   entries in full; `--all` prints every entry the binary knows. It writes nothing.
   The procedure lives in the command's output, so neither the framework rules nor a
@@ -139,7 +139,7 @@ file one renames, another edits), and because the single mark (§3) means
   - `init` writing the newest id;
   - the `status` line and `updates.newer`;
   - the procedure header.
-- **An eval suite** (`evals/suites/updates.jsonl`): a vault in an old state, the task
+- **An eval suite** (planned, not yet written; `evals/suites/updates.jsonl`): a vault in an old state, the task
   "process the waiting updates; the user says yes to each", checked by `bench`
   checks written for the suite and `loci lint`; a case where the user says no,
   checked by an unchanged tree and the key moved; and a case where an entry is

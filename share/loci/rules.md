@@ -109,7 +109,7 @@ This vault is a loci knowledge base. These rules apply to every agent working in
 ## Finding things
 
 - `loci status` reports what has changed: uncommitted changes, agent work to
-  review, and the inbox. Run it before each task.
+  review, the inbox, and vault updates waiting for the user. Run it before each task.
 - Search with `rg` (ripgrep). The formed notes are in `concepts/`, `views/` and
   `journal/`; add `sources/` or `inbox/` only when you mean them.
   - Titles: `rg -i '^# .*heap' concepts/`.

@@ -1,5 +1,5 @@
-//! The walk over the markdown events: the body's blocks, links, counts and the metadata
-//! block, each with its byte range.
+//! The walk over the body's markdown events: its blocks, links and counts, each with
+//! its byte range.
 //!
 //! pulldown-cmark gives an element's whole range when it opens, but parts of it (a
 //! heading's content, a link's label, where an item's marker ends) are known only from
@@ -10,7 +10,7 @@
 use std::ops::Range;
 use std::sync::LazyLock;
 
-use pulldown_cmark::{CodeBlockKind, CowStr, Event, LinkType, MetadataBlockKind, Parser, Tag};
+use pulldown_cmark::{CodeBlockKind, CowStr, Event, LinkType, Parser, Tag};
 use regex::Regex;
 
 use super::blocks::trailing_id;
@@ -19,7 +19,7 @@ use super::*;
 
 static URL_SCHEME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z][A-Za-z0-9+.\-]*:").unwrap());
 
-/// Walks the markdown after a BOM of `base` bytes. Ranges refer to the whole file.
+/// Walks the body, from `base` to the end. Ranges refer to the whole file.
 pub(super) fn walk_body(text: &str, base: usize) -> Walked {
     let mut w = Walker { text, stack: vec![], out: Walked::default() };
     for (event, range) in Parser::new_ext(&text[base..], options()).into_offset_iter() {
@@ -53,13 +53,6 @@ pub(super) struct Walked {
     pub(super) links: Vec<Spanned<Link>>,
     pub(super) markdown_links: Vec<Spanned<MarkdownLink>>,
     pub(super) counts: Counts,
-    pub(super) meta: Option<Meta>,
-}
-
-/// A YAML metadata block: its bytes, `---` lines included, and the YAML text inside.
-pub(super) struct Meta {
-    pub(super) block: Range<usize>,
-    pub(super) yaml: Range<usize>,
 }
 
 /// The walk's state between events.
@@ -78,7 +71,6 @@ struct Open<'a> {
 }
 
 enum OpenKind<'a> {
-    Metadata,
     Heading(u8),
     /// `lead`: the leading paragraph of the item holding it, which is the item's lead.
     Paragraph {
@@ -120,13 +112,12 @@ impl<'a> Walker<'a> {
     fn open(&mut self, tag: Tag<'a>, range: Range<usize>) {
         let lead = self.end_item_lead(&tag, &range);
         let kind = match tag {
-            Tag::MetadataBlock(MetadataBlockKind::YamlStyle) => OpenKind::Metadata,
             Tag::Heading { level, .. } => OpenKind::Heading(level as u8),
             Tag::Paragraph => OpenKind::Paragraph { lead },
             Tag::List(_) => OpenKind::List(vec![]),
             Tag::Item => OpenKind::Item { lead: None, children: vec![] },
             Tag::CodeBlock(kind) => {
-                self.out.counts.code += usize::from(matches!(kind, CodeBlockKind::Fenced(_)));
+                self.out.counts.fenced_code += usize::from(matches!(kind, CodeBlockKind::Fenced(_)));
                 OpenKind::Other(vec![])
             }
             Tag::BlockQuote(_) | Tag::HtmlBlock | Tag::Table(_) | Tag::FootnoteDefinition(_) => OpenKind::Other(vec![]),
@@ -163,11 +154,6 @@ impl<'a> Walker<'a> {
     fn close(&mut self) {
         let Open { kind, span, inner } = self.stack.pop().expect("an element is open");
         match kind {
-            OpenKind::Metadata => {
-                // An empty block (`---` then `---`) holds an empty YAML text.
-                let yaml = inner.unwrap_or(span.start..span.start);
-                self.out.meta = Some(Meta { block: span, yaml });
-            }
             OpenKind::Heading(level) => {
                 let heading = heading(self.text, level, &span, inner);
                 self.add(Spanned::new(Block::Heading(heading), span));

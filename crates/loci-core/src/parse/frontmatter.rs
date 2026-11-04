@@ -1,4 +1,4 @@
-//! The frontmatter (m0 §4.3, §6.1): the YAML metadata block, read with the byte span of
+//! The frontmatter (m0 §4.3, §6.1): the YAML block at the start of a note, read with the byte span of
 //! every key and value, the `prereqs` links in it, and rewritten whole when loci edits it.
 
 use std::collections::BTreeMap;
@@ -7,7 +7,6 @@ use std::ops::Range;
 use saphyr::{LoadableYamlNode, Mapping, MarkedYaml, Scalar, Yaml, YamlData, YamlEmitter};
 use serde::{Deserialize, Serialize};
 
-use super::body::Meta;
 use super::links::prereq;
 use super::*;
 use crate::id::{Slug, Ulid};
@@ -69,24 +68,32 @@ impl Frontmatter {
     }
 }
 
-/// The frontmatter (§4.3): a YAML metadata block at the start of the file.
-pub(super) fn frontmatter(text: &str, base: usize, meta: Option<&Meta>) -> Option<Spanned<Frontmatter>> {
-    let Some(Meta { block: span, yaml }) = meta.filter(|m| m.block.start == base) else {
-        let rest = &text[base..];
-        let opening =
-            ["---\n", "---\r\n"].into_iter().find(|o| rest.starts_with(o)).or((rest == "---").then_some("---"));
-        return opening.map(|o| Spanned::new(Frontmatter::Unterminated, base..base + o.len()));
-    };
-    // The closing `---` line's break too, so the body starts after it.
-    let rest = &text[span.end..];
-    let line_break = ["\r\n", "\n"].into_iter().find(|b| rest.starts_with(b)).map_or(0, str::len);
-    let span = span.start..span.end + line_break;
+/// The frontmatter (§4.3) at `base`, the start of the file after a BOM: from a first
+/// line `---` to the next `---` line, both with any trailing spaces and tabs. `...` is
+/// content. Split off before the markdown is read, as most tools do.
+pub(super) fn frontmatter(text: &str, base: usize) -> Option<Spanned<Frontmatter>> {
+    let mut lines = text[base..].split_inclusive('\n');
+    let opening = lines.next().filter(|l| fence(l))?;
+    let yaml_start = base + opening.len();
+    let mut at = yaml_start;
+    for line in lines {
+        if fence(line) {
+            let frontmatter = match parse_yaml(&text[yaml_start..at], yaml_start) {
+                Ok(entries) => Frontmatter::Fields { entries, yaml: yaml_start..at },
+                Err(reason) => Frontmatter::Invalid(reason),
+            };
+            return Some(Spanned::new(frontmatter, base..at + line.len()));
+        }
+        at += line.len();
+    }
+    Some(Spanned::new(Frontmatter::Unterminated, base..yaml_start))
+}
 
-    let frontmatter = match parse_yaml(&text[yaml.clone()], yaml.start) {
-        Ok(entries) => Frontmatter::Fields { entries, yaml: yaml.clone() },
-        Err(reason) => Frontmatter::Invalid(reason),
-    };
-    Some(Spanned::new(frontmatter, span))
+/// Whether `line` (with its break: LF or CRLF; a lone CR is no break) is `---` with any
+/// trailing spaces and tabs, which opens or closes the frontmatter.
+fn fence(line: &str) -> bool {
+    let bare = line.strip_suffix('\n').map_or(line, |l| l.strip_suffix('\r').unwrap_or(l));
+    bare.trim_end_matches([' ', '\t']) == "---"
 }
 
 /// The `prereqs` links (§6.1): each string item `[[<slug>]]`. Any other item is no link,
@@ -104,7 +111,7 @@ pub(super) fn frontmatter_links(fm: &Frontmatter) -> Vec<Spanned<Link>> {
 }
 
 /// The slug a `prereqs` item `[[<slug>]]` names, normalised as a link's (§5.2).
-pub fn prereq_slug(item: &str) -> Option<Slug> {
+pub(crate) fn prereq_slug(item: &str) -> Option<Slug> {
     crate::path::nfc(item.strip_prefix("[[")?.strip_suffix("]]")?).parse().ok()
 }
 
@@ -151,8 +158,9 @@ pub enum FmChange {
 
 impl Note {
     /// The edit that rewrites the note's frontmatter (§6.1) with `changes`: the whole block
-    /// in saphyr's canonical form, comments not kept. A note without frontmatter gets a
-    /// block at the start of its body; a mapping left empty loses its block.
+    /// in saphyr's canonical form, comments not kept, with the note's first line break.
+    /// A note without frontmatter gets a block at the start of its body; a mapping left
+    /// empty loses its block.
     ///
     /// # Panics
     /// When the frontmatter is broken (unterminated or not a mapping): it is not edited.
@@ -183,13 +191,23 @@ impl Note {
         if !renames.is_empty() {
             rename_prereqs(&mut map, &renames);
         }
-        if map.is_empty() {
-            // Nothing to write: the block goes, or (with none) nothing changes.
-            let range = if self.frontmatter.is_some() { self.frontmatter_reach() } else { span };
-            return Edit::replace(range, "");
-        }
-
-        Edit::replace(span, emit(map))
+        let block = if map.is_empty() {
+            // Nothing to write: the block goes, or (with none) nothing changes. A body
+            // that would then read as frontmatter (§4.3) keeps an empty block in front.
+            let reach = self.frontmatter_reach();
+            match &self.frontmatter {
+                None => return Edit::replace(span, ""),
+                Some(_) if frontmatter(&self.text[reach.end..], 0).is_none() => {
+                    return Edit::replace(reach, "");
+                }
+                Some(_) => "---\n---\n".to_string(),
+            }
+        } else {
+            emit(map)
+        };
+        // Line breaks are kept (§4): the block takes the note's first one.
+        let crlf = self.text.find('\n').is_some_and(|i| self.text[..i].ends_with('\r'));
+        Edit::replace(span, if crlf { block.replace('\n', "\r\n") } else { block })
     }
 
     /// The bytes a rewrite of the frontmatter may replace: the block, or where one goes,
@@ -285,6 +303,10 @@ fn string_node<'a>(s: impl Into<String>) -> Yaml<'a> {
 fn parse_yaml(yaml: &str, offset: usize) -> Result<Vec<FmEntry>, String> {
     // `info()` is the message without the position (§7.1: messages carry no positions).
     let docs = MarkedYaml::load_from_str(yaml).map_err(|e| e.info().to_string())?;
+    // A YAML end marker (`...`) would leave what follows it in a second document.
+    if docs.len() > 1 {
+        return Err("the frontmatter holds more than one YAML document".into());
+    }
     let Some(doc) = docs.into_iter().next() else { return Ok(vec![]) };
     let YamlData::Mapping(map) = &doc.data else {
         return Err("the top level is not a mapping".into());
@@ -368,6 +390,89 @@ mod tests {
     }
 
     const ID: &str = "01JB9XQ7Z3K4M5N6P7Q8R9S0TV";
+
+    #[test]
+    fn a_later_block_in_the_body_leaves_the_frontmatter() {
+        // Only the block at the start is frontmatter; a later `---`, text, `---` is body.
+        let n = p(&format!("---\nid: {ID}\n---\n\n---\nx\n---\n"));
+        assert_eq!(
+            n.frontmatter.as_ref().unwrap().get("id").map(|e| e.value.node.clone()),
+            Some(FmValue::Str(ID.into()))
+        );
+        // That block is body, as CommonMark reads it: its links count.
+        for t in
+            [format!("---\nid: {ID}\n---\n# H\n\n---\nSee [[t]]\n---\n"), "---\n---\n---\nSee [[t]]\n---\n# H\n".into()]
+        {
+            assert_eq!(p(&t).links.len(), 1, "{t:?}");
+        }
+    }
+
+    #[test]
+    fn the_block_runs_from_the_first_line_to_the_next_dash_line() {
+        let id = |t: &str| p(t).frontmatter.as_ref().and_then(|f| f.get("id").map(|e| e.value.node.clone()));
+        let a = Some(FmValue::Str("a".into()));
+        assert_eq!(id("---\n\nid: a\n---\n# T\n"), a, "a blank first line");
+        assert_eq!(id("---\nid: a\n---\t\n# T\n"), a, "a closing line with a trailing tab");
+        assert_eq!(id("---\r\nid: a\r\n---"), a, "closed at the end of the file");
+        // `...` is content, not a closing line.
+        let n = p("---\nid: a\n...\n# T\n");
+        assert_eq!(n.frontmatter, Some(Spanned::new(Frontmatter::Unterminated, 0..4)));
+        // A YAML end marker inside the block would hide what follows it.
+        let n = p("---\nid: a\n...\nprereqs: []\n---\n# T\n");
+        let Some(Frontmatter::Invalid(why)) = n.frontmatter.as_ref().map(|f| &f.node) else { panic!("not invalid") };
+        assert!(why.contains("more than one"), "{why}");
+        // A lone CR does not end the opening line.
+        assert!(p("---\rid: a\n---\n").frontmatter.is_none());
+    }
+
+    #[test]
+    fn an_opening_line_may_end_in_spaces_and_tabs() {
+        let n = p("--- \nid: x\n---\n# T\n");
+        assert_eq!(
+            n.frontmatter.as_ref().unwrap().get("id").map(|e| e.value.node.clone()),
+            Some(FmValue::Str("x".into()))
+        );
+        // So an unclosed one is unterminated, like an exact `---`.
+        assert_eq!(p("--- \nid: x\n").frontmatter, Some(Spanned::new(Frontmatter::Unterminated, 0..5)));
+        assert_eq!(p("---\t\r\nfoo\r\n").frontmatter, Some(Spanned::new(Frontmatter::Unterminated, 0..6)));
+    }
+
+    #[test]
+    fn an_empty_block_has_no_fields() {
+        for (t, body) in [("---\n---\n# T\n", 8), ("---\r\n \r\n\r\n---\r\n# T\r\n", 15), ("---\n---", 7)] {
+            let n = p(t);
+            let fm = n.frontmatter.as_ref().unwrap();
+            assert!(matches!(&fm.node, Frontmatter::Fields { entries, .. } if entries.is_empty()), "{t:?}: {fm:?}");
+            assert_eq!(n.body_start(), body, "{t:?}");
+            assert!(n.body.iter().all(|b| b.span.start >= body), "{t:?}: the block's lines are no body");
+        }
+        assert_eq!(rewritten("---\n---\n# T\n", &[set_id()]), format!("---\nid: {ID}\n---\n# T\n"));
+        assert!(!p("---\nx\n").frontmatter.as_ref().unwrap().is_closed(), "a line that is not blank is no empty block");
+        // Found by the rewrite property: removing the block would make the body's `---`
+        // lines a block of their own.
+        assert_eq!(rewritten("---\n---\n---\nx\n---\n", &[]), "---\n---\n---\nx\n---\n");
+        let id = format!("---\nid: {ID}\n---\n\n---\nx\n---\n");
+        assert_eq!(rewritten(&id, &[FmChange::RemoveField(ConceptField::Id)]), "---\n---\n\n---\nx\n---\n");
+        // A body that opens a block, closed or not, keeps an empty block in front of it.
+        for body in ["--- \nx: 1\n---\n", "---\t\nx: 1\n...\n"] {
+            let t = format!("---\nid: {ID}\n---\n{body}");
+            assert_eq!(rewritten(&t, &[FmChange::RemoveField(ConceptField::Id)]), format!("---\n---\n{body}"));
+        }
+        // Only spaces and tabs make a line blank (CommonMark): this block is YAML, and
+        // not a mapping.
+        let nbsp = p("---\n\u{a0}\n---\n# T\n");
+        assert!(matches!(nbsp.frontmatter.as_ref().unwrap().node, Frontmatter::Invalid(_)), "{:?}", nbsp.frontmatter);
+        assert_eq!(p("--- \n\t\n---\n# T\n").body_start(), 11, "an opening line with trailing whitespace");
+    }
+
+    #[test]
+    fn a_crlf_note_keeps_its_line_breaks() {
+        let crlf = format!("---\r\nid: {ID}\r\nprereqs: [\"[[a]]\"]\r\n---\r\n# T\r\n");
+        let rename = [FmChange::RenamePrereq { from: "a".parse().unwrap(), to: Some("b".parse().unwrap()) }];
+        let want = format!("---\r\nid: {ID}\r\nprereqs:\r\n  - \"[[b]]\"\r\n---\r\n# T\r\n");
+        assert_eq!(rewritten(&crlf, &rename), want);
+        assert_eq!(rewritten("# T\r\n", &[set_id()]), format!("---\r\nid: {ID}\r\n---\r\n# T\r\n"), "a new block");
+    }
 
     fn set_id() -> FmChange {
         FmChange::SetId(ID.parse().unwrap())

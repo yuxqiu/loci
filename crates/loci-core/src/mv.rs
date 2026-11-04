@@ -97,8 +97,8 @@ fn refuse_changed_kinds(moves: &BTreeMap<VaultPath, VaultPath>) -> Result<(), Re
         return Err(Refusal::refused("mv.no-area", format!("`{new}` {}", new.why_not_concept())));
     }
 
-    // The path rules come before the case advice below, so it never leads to a name
-    // lint rejects.
+    // Checked before `refuse_unsafe_destination`, so its case advice never suggests a
+    // name lint rejects.
     for new in moves.values() {
         new.place().map_err(|problem| problem.refusal(new))?;
     }
@@ -167,7 +167,7 @@ fn refuse_slug_collisions(index: &Index, moves: &BTreeMap<VaultPath, VaultPath>)
     let mut new_slugs = BTreeSet::new();
     for new in moves.values() {
         let Ok(Some(Place::Concept { slug, .. })) = new.place() else { continue };
-        let taken = index.concepts_named(slug.as_str()).iter().any(|p| !moves.contains_key(p));
+        let taken = index.concepts_named(&slug).iter().any(|p| !moves.contains_key(p));
         if taken || !new_slugs.insert(slug.clone()) {
             return Err(Refusal::refused("mv.collision", format!("slug `{slug}` is already used")));
         }
@@ -250,13 +250,6 @@ mod tests {
         let i = crate::testing::index(&[("concepts/a/b.md", C), ("views/v.md", "[[b.md]] [[concepts/a/b]]\n")]);
         let p = plan(&i, &vp("concepts/a/b.md"), &vp("concepts/c/b.md"), |_| Ok(false), |_| false).unwrap();
         assert_eq!(p.writes["views/v.md"].text, "[[b.md]] [[concepts/c/b]]\n");
-    }
-
-    #[test]
-    fn rename_back_is_allowed() {
-        let i = crate::testing::index(&[("concepts/a/new.md", C), ("views/v.md", "[[new]]\n")]);
-        let p = plan(&i, &vp("concepts/a/new.md"), &vp("concepts/a/old.md"), |_| Ok(false), |_| false).unwrap();
-        assert_eq!(p.writes["views/v.md"].text, "[[old]]\n");
     }
 
     #[test]

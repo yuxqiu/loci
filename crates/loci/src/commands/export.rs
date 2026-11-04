@@ -72,11 +72,13 @@ fn write_out(
         vault.write(&out, text.as_bytes())?;
         return Ok(vault.abs(&out));
     };
-    let out_dir = out_path.parent().expect("an absolute file path has a parent").to_path_buf();
-    let dirs = if e.assets.is_empty() { out_dir.clone() } else { out_dir.join(export::ASSETS) };
-    std::fs::create_dir_all(dirs).map_err(Refusal::io)?;
+    let Some(out_dir) = out_path.parent() else {
+        return Err(Refusal::io(format!("`{}` names no file", out_path.display())));
+    };
+    let assets_dir = out_dir.join(export::ASSETS);
+    std::fs::create_dir_all(if e.assets.is_empty() { out_dir } else { &assets_dir }).map_err(Refusal::io)?;
     for (src, name) in &e.assets {
-        std::fs::write(out_dir.join(export::ASSETS).join(name), read(src)?).map_err(Refusal::io)?;
+        std::fs::write(assets_dir.join(name), read(src)?).map_err(Refusal::io)?;
     }
     std::fs::write(&out_path, text).map_err(Refusal::io)?;
     Ok(out_path)
@@ -89,9 +91,9 @@ fn write_out(
 fn html(e: &export::Export, title: &str) -> Result<String, String> {
     use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, html::push_html};
     // Notes are read with loci's options; the export has no wikilinks (they are
-    // rewritten) and no frontmatter, so the same headings are read in the same order as
-    // the identifiers were made.
-    let options = loci_core::parse::options() - Options::ENABLE_WIKILINKS - Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
+    // rewritten), so the same headings are read in the same order as the identifiers
+    // were made.
+    let options = loci_core::parse::options() - Options::ENABLE_WIKILINKS;
     let mut ids = e.heading_ids.iter();
     let mut events = vec![];
     for event in Parser::new_ext(&e.markdown, options) {

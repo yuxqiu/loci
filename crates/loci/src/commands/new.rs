@@ -67,7 +67,7 @@ fn refuse_destination(vault: &Vault, path: &VaultPath) -> Result<Slug, Refusal> 
     }
 
     let index = Index::open(vault);
-    let existing: Vec<String> = index.concepts_named(slug.as_str()).iter().map(|p| format!("`{p}`")).collect();
+    let existing: Vec<String> = index.concepts_named(&slug).iter().map(|p| format!("`{p}`")).collect();
     if !existing.is_empty() {
         let message = format!("`{slug}` is already the slug of {}", existing.join(", "));
         return Err(Refusal::refused("new.collision", message));

@@ -30,7 +30,7 @@ impl Closure {
     pub fn of(index: &Index, root: &Note, max_depth: Option<usize>) -> Closure {
         // Breadth-first for depths.
         let root_path = &root.path;
-        let mut depth: BTreeMap<VaultPath, usize> = BTreeMap::new();
+        let mut depths: BTreeMap<VaultPath, usize> = BTreeMap::new();
         let mut edges: BTreeMap<VaultPath, Vec<VaultPath>> = BTreeMap::new();
         let mut out = Closure::default();
         let mut queue = VecDeque::from([(root, 0usize)]);
@@ -41,37 +41,37 @@ impl Closure {
             let prereqs = index.prereqs(note);
             out.unresolved.extend(prereqs.unresolved.into_iter().map(|s| (note.path.clone(), s.clone())));
             for q in &prereqs.resolved {
-                if q.path != *root_path && !depth.contains_key(&q.path) {
-                    depth.insert(q.path.clone(), d + 1);
+                if q.path != *root_path && !depths.contains_key(&q.path) {
+                    depths.insert(q.path.clone(), d + 1);
                     queue.push_back((q, d + 1));
                 }
             }
             edges.insert(note.path.clone(), prereqs.resolved.iter().map(|q| q.path.clone()).collect());
         }
 
-        let (order, cycle_broken) = prerequisites_first(&depth, &edges);
-        out.members = order.into_iter().map(|p| Member { depth: depth[&p], path: p }).collect();
+        let (order, cycle_broken) = prerequisites_first(&depths, &edges);
+        out.members = order.into_iter().map(|p| Member { depth: depths[&p], path: p }).collect();
         // A prereq back to the root is a cycle too, though the root is no member.
         out.cyclic = cycle_broken || edges.values().flatten().any(|p| p == root_path);
         out
     }
 }
 
-/// The members (`depth`'s keys) in topological order, prerequisites first: repeatedly
+/// The members (`depths`' keys) in topological order, prerequisites first: repeatedly
 /// the smallest-slug member whose prerequisites (within the closure) are all placed.
 /// When none is ready there is a cycle, broken at the smallest remaining slug; the
 /// second value says whether that happened.
 fn prerequisites_first(
-    depth: &BTreeMap<VaultPath, usize>,
+    depths: &BTreeMap<VaultPath, usize>,
     edges: &BTreeMap<VaultPath, Vec<VaultPath>>,
 ) -> (Vec<VaultPath>, bool) {
     let mut placed: BTreeSet<&VaultPath> = BTreeSet::new();
     let mut order: Vec<VaultPath> = vec![];
     let mut cycle_broken = false;
-    while placed.len() < depth.len() {
-        let remaining = || depth.keys().filter(|m| !placed.contains(m));
+    while placed.len() < depths.len() {
+        let remaining = || depths.keys().filter(|m| !placed.contains(m));
         let ready = remaining()
-            .filter(|m| edges.get(*m).is_none_or(|ps| ps.iter().all(|p| !depth.contains_key(p) || placed.contains(p))))
+            .filter(|m| edges.get(*m).is_none_or(|ps| ps.iter().all(|p| !depths.contains_key(p) || placed.contains(p))))
             .min_by_key(|m| m.stem());
         let next = ready.unwrap_or_else(|| {
             cycle_broken = true;

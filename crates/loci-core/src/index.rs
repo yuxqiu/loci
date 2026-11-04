@@ -3,6 +3,7 @@
 //! table, a path through the vault ([`Vault::resolve`]).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
 use crate::envelope::Refusal;
 use crate::id::Slug;
@@ -20,16 +21,18 @@ pub struct Index<'v> {
 }
 
 /// What a link resolves to: a note of the index, or another vault file.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Resolved<'a> {
-    Note(&'a Note),
+    /// A note, and the bytes of it the link's fragment names (§5.4); `None` for no
+    /// fragment.
+    Note(&'a Note, Option<Range<usize>>),
     File(&'a VaultPath),
 }
 
 impl<'a> Resolved<'a> {
     pub fn path(&self) -> &'a VaultPath {
         match self {
-            Resolved::Note(note) => &note.path,
+            Resolved::Note(note, _) => &note.path,
             Resolved::File(path) => path,
         }
     }
@@ -98,7 +101,7 @@ impl<'v> Index<'v> {
         let Some(slug) = parse::bare_slug(&written) else {
             return self.vault.resolve(&written).and_then(|p| self.notes.get(p)).ok_or_else(unknown);
         };
-        match self.concepts_named(slug.as_str()) {
+        match self.concepts_named(&slug) {
             [] => Err(unknown()),
             [path] => Ok(&self.notes[path]),
             paths => Err(Refusal::refused(
@@ -114,10 +117,9 @@ impl<'v> Index<'v> {
         self.slugs.iter().map(|(s, ps)| (s, ps.as_slice()))
     }
 
-    /// The concepts named `name`: those whose slug it is (more than one is
-    /// `slug.duplicate`; a name that is no slug names none).
-    pub fn concepts_named(&self, name: &str) -> &[VaultPath] {
-        self.slugs.get(name).map_or(&[], Vec::as_slice)
+    /// The concepts whose slug is `slug` (more than one is `slug.duplicate`).
+    pub fn concepts_named(&self, slug: &Slug) -> &[VaultPath] {
+        self.slugs.get(slug).map_or(&[], Vec::as_slice)
     }
 
     /// The existing concept slug most like `name`, if one is close (Jaro-Winkler
@@ -143,7 +145,7 @@ impl<'v> Index<'v> {
         let mut prereqs = Prereqs { resolved: vec![], unresolved: vec![] };
         for (link, slug) in note.links.iter().filter_map(|l| Some((l, l.prereq_slug()?))) {
             match self.resolve(note, link) {
-                Ok(Resolved::Note(n)) => prereqs.resolved.push(n),
+                Ok(Resolved::Note(n, _)) => prereqs.resolved.push(n),
                 _ => prereqs.unresolved.push(slug),
             }
         }
@@ -217,17 +219,16 @@ impl<'v> Index<'v> {
     /// Resolves a body or `prereqs` link from note `from` (§5.3), then checks its
     /// fragment (§5.4).
     pub fn resolve<'a>(&'a self, from: &'a Note, link: &Spanned<Link>) -> Result<Resolved<'a>, LinkError<'a>> {
-        let resolved = self.resolve_target(from, link)?;
-        if let (Some(frag), Resolved::Note(note)) = (&link.target.fragment, resolved) {
-            check_fragment(note, frag)?;
+        match (self.resolve_target(from, link)?, &link.target.fragment) {
+            (Resolved::Note(note, _), Some(frag)) => Ok(Resolved::Note(note, Some(fragment_range(note, frag)?))),
+            (resolved, _) => Ok(resolved),
         }
-        Ok(resolved)
     }
 
     /// The note or file `link` points at (§5.3), ignoring its fragment.
     fn resolve_target<'a>(&'a self, from: &'a Note, link: &Spanned<Link>) -> Result<Resolved<'a>, LinkError<'a>> {
         match &link.target.names {
-            Names::ThisNote => Ok(Resolved::Note(from)),
+            Names::ThisNote => Ok(Resolved::Note(from, None)),
             Names::Slug(slug) => self.resolve_slug(slug),
             Names::Bare(name) => {
                 Err(LinkError::Dangling(Dangling::NoConcept { closest: self.closest_slug(name).cloned() }))
@@ -239,9 +240,9 @@ impl<'v> Index<'v> {
 
     /// The concept a slug link names: exactly one concept with that slug.
     fn resolve_slug(&self, slug: &Slug) -> Result<Resolved<'_>, LinkError<'_>> {
-        match self.concepts_named(slug.as_str()) {
+        match self.concepts_named(slug) {
             [] => Err(LinkError::Dangling(Dangling::NoConcept { closest: self.closest_slug(slug.as_str()).cloned() })),
-            [path] => Ok(Resolved::Note(&self.notes[path])),
+            [path] => Ok(Resolved::Note(&self.notes[path], None)),
             paths => Err(LinkError::Dangling(Dangling::Ambiguous(paths.to_vec()))),
         }
     }
@@ -249,14 +250,14 @@ impl<'v> Index<'v> {
     /// The file a path link names ([`Vault::resolve`]).
     fn resolve_path(&self, written: &str) -> Result<Resolved<'_>, LinkError<'_>> {
         let path = self.vault.resolve(written).ok_or(LinkError::Dangling(Dangling::NoFile))?;
-        Ok(self.notes.get(path).map_or(Resolved::File(path), Resolved::Note))
+        Ok(self.notes.get(path).map_or(Resolved::File(path), |n| Resolved::Note(n, None)))
     }
 }
 
-/// Checks a `#fragment` against the headings or block ids of `note` (§5.4).
-fn check_fragment<'a>(note: &'a Note, frag: &Fragment) -> Result<(), LinkError<'a>> {
+/// The bytes of `note` a `#fragment` names, found among its headings or block ids (§5.4).
+fn fragment_range<'a>(note: &'a Note, frag: &Fragment) -> Result<Range<usize>, LinkError<'a>> {
     match (note.fragment_range(frag), frag) {
-        (Some(_), _) => Ok(()),
+        (Some(range), _) => Ok(range),
         (None, Fragment::Heading(heading)) => Err(LinkError::Heading { note, heading: heading.clone() }),
         (None, Fragment::Block(id)) => Err(LinkError::Block { note, id: id.clone() }),
     }

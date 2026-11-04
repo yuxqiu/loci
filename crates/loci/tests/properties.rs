@@ -204,16 +204,16 @@ proptest! {
         let from = concepts[a.index(concepts.len())].clone();
         let into = concepts[b.index(concepts.len())].clone();
         prop_assume!(from != into);
-        let plan = match merge::Merge::plan(&before, before.parsed(&from).unwrap(), before.parsed(&into).unwrap()) {
+        let plan = match merge::plan(&before, before.parsed(&from).unwrap(), before.parsed(&into).unwrap()) {
             Ok(p) => p,
             // Two concepts that share a slug cannot be named by it; any other refusal is not
             // legitimate on these vaults.
             Err(e) => {
-                prop_assert!(before.concepts_named(from.stem()).len() > 1, "merge {} {}: {}", from, into, e.error.message);
+                prop_assert!(before.concepts_named(&from.slug().unwrap()).len() > 1, "merge {} {}: {}", from, into, e.error.message);
                 return Ok(());
             }
         };
-        let after_vault = in_memory(&apply_plan(&g.files, &plan.change));
+        let after_vault = in_memory(&apply_plan(&g.files, &plan));
         let after = Index::open(&after_vault);
         prop_assert!(after.parsed(&from).is_none(), "the absorbed note is gone");
         for note in before.notes().filter(|n| n.path != from && n.path != into && n.kind != loci_core::path::Kind::Source) {

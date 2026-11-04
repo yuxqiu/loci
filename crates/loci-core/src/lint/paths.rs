@@ -25,7 +25,7 @@ pub(super) fn paths(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
         }
         // A note `x.md` beside a file `x`: `[[x]]` names the file (m0 §5.3). Root files
         // are named by no path link, so they cannot clash.
-        let clashes = |s: &&str| s.contains('/') && vault.resolve(s).is_some_and(|f| f != path);
+        let clashes = |s: &&str| path.parent().is_some() && vault.resolve(s).is_some_and(|f| f != path);
         if let Some(short) = path.as_str().strip_suffix(".md").filter(clashes) {
             out.push(
                 Diagnostic::warning(

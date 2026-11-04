@@ -5,9 +5,10 @@ use loci_core::path::VaultPath;
 use loci_core::vault::Vault;
 use serde::Deserialize;
 
-const PATH: &str = "plugins/learn/config.toml";
+pub(crate) const PATH: &str = "plugins/learn/config.toml";
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub new_per_day: u32,
     pub desired_retention: f32,
@@ -21,28 +22,11 @@ impl Default for Config {
 
 impl Config {
     pub fn parse(text: &str) -> Result<Self, String> {
-        // `new_per_day` is read as a signed integer so a negative value is reported as out
-        // of range rather than as a type error.
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Raw {
-            new_per_day: Option<i64>,
-            desired_retention: Option<f64>,
+        let c: Config = toml::from_str(text).map_err(|e| e.message().to_string())?;
+        let r = c.desired_retention;
+        if !(r > 0.0 && r < 1.0) {
+            return Err(format!("`desired_retention` must be between 0 and 1, got {r}"));
         }
-
-        let raw: Raw = toml::from_str(text).map_err(|e| e.message().to_string())?;
-        let mut c = Config::default();
-        if let Some(n) = raw.new_per_day {
-            c.new_per_day = u32::try_from(n).map_err(|_| format!("`new_per_day` must be ≥ 0, got {n}"))?;
-        }
-
-        if let Some(r) = raw.desired_retention {
-            if !(r > 0.0 && r < 1.0) {
-                return Err(format!("`desired_retention` must be between 0 and 1, got {r}"));
-            }
-            c.desired_retention = r as f32;
-        }
-
         Ok(c)
     }
 

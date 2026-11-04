@@ -43,7 +43,7 @@ fn outgoing(index: &Index, path: &VaultPath, note: Option<&Note>, human: &mut St
         let (line, raw) = (line_col(&note.text, link.span.start).0, link.target.text(&note.text));
         let target = index.link_target(note, link);
         let to = target.map_or("(unresolved)", VaultPath::as_str);
-        human.push_str(&format!("  {line}: {raw} -> {to}{}\n", form_note(link.form)));
+        human.push_str(&format!("  {line}: {raw} -> {to}{}\n", prereq_marker(link.form)));
         rows.push(json!({"line": line, "form": link.form, "raw": raw, "target": target}));
     }
     rows
@@ -55,7 +55,7 @@ fn incoming(index: &Index, path: &VaultPath, human: &mut String) -> Vec<Value> {
     let mut rows = vec![];
     for (note, link) in index.incoming(path) {
         let (line, raw) = (line_col(&note.text, link.span.start).0, link.target.text(&note.text));
-        human.push_str(&format!("  {}:{line}: {raw}{}\n", note.path, form_note(link.form)));
+        human.push_str(&format!("  {}:{line}: {raw}{}\n", note.path, prereq_marker(link.form)));
         rows.push(json!({"path": note.path, "line": line, "form": link.form, "raw": raw}));
     }
     rows
@@ -87,8 +87,8 @@ fn line_text(note: &Note, at: usize) -> (usize, &str) {
     (line, note.text.lines().nth(line - 1).unwrap_or_default().trim())
 }
 
-/// A marker for links that are not body wikilinks.
-fn form_note(form: LinkForm) -> &'static str {
+/// ` (prereq)` for a `prereqs` link, the one form not written in the body; empty otherwise.
+fn prereq_marker(form: LinkForm) -> &'static str {
     match form {
         LinkForm::Prereq => " (prereq)",
         _ => "",

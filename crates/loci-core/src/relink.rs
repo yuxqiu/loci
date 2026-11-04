@@ -66,8 +66,13 @@ impl Change {
 
     /// Applies a change: writes staged, renames, writes put in place, then deletions.
     /// Every write is staged in its final folder before anything changes, so one that
-    /// cannot be made (a read-only folder) fails with the vault untouched.
-    pub fn apply(&self, vault: &Vault) -> std::io::Result<()> {
+    /// cannot be made (a read-only folder) fails with the vault untouched; a rename that
+    /// fails undoes the earlier ones. A symlink on the way to a written or moved file is
+    /// refused first (`file.symlink`).
+    pub fn apply(&self, vault: &Vault) -> Result<(), Refusal> {
+        for path in self.writes.keys().chain(self.moves.values()) {
+            vault.refuse_symlink(path)?;
+        }
         let mut staged = vec![];
         for (path, edited) in &self.writes {
             let dest = vault.abs(path);
@@ -76,11 +81,21 @@ impl Change {
             staged.push((vault::stage(&dest, edited.text.as_bytes()).map_err(at(&dest))?, dest));
         }
 
+        let mut renamed = vec![];
         for (old, new) in &self.moves {
-            let dest = vault.abs(new);
-            let dir = dest.parent().expect("a vault file has a folder");
-            std::fs::create_dir_all(dir).map_err(at(dir))?;
-            std::fs::rename(vault.abs(old), &dest).map_err(at(&dest))?;
+            if let Err(failed) = rename(vault, old, new) {
+                drop(staged);
+                let undone = renamed.into_iter().rev().try_for_each(|(old, new)| rename(vault, new, old));
+                let made = self.moves.values().chain(self.writes.keys());
+                let cleaned = undone.and_then(|()| remove_empty_folders(vault, made));
+                return Err(match cleaned {
+                    Ok(()) => failed,
+                    Err(e) => {
+                        Refusal::io(format!("{}; undoing the earlier moves: {}", failed.error.message, e.error.message))
+                    }
+                });
+            }
+            renamed.push((old, new));
         }
 
         // Writes before deletions: a failed write leaves the absorbed note in place.
@@ -92,21 +107,33 @@ impl Change {
             let path = vault.abs(path);
             std::fs::remove_file(&path).map_err(at(&path))?;
         }
+        remove_empty_folders(vault, self.moves.keys().chain(&self.deleted))
+    }
+}
 
-        // Remove directories left empty, up to the first that is not.
-        for old in self.moves.keys().chain(&self.deleted) {
-            let mut dir = old.parent();
-            while let Some(d) = dir {
-                match std::fs::remove_dir(vault.abs(&d)) {
-                    Ok(()) => dir = d.parent(),
-                    Err(e) if matches!(e.kind(), ErrorKind::DirectoryNotEmpty | ErrorKind::NotFound) => break,
-                    Err(e) => return Err(e),
-                }
+/// Renames vault file `old` to `new`, creating `new`'s folders.
+fn rename(vault: &Vault, old: &VaultPath, new: &VaultPath) -> Result<(), Refusal> {
+    let (from, to) = (vault.abs(old), vault.abs(new));
+    let dir = to.parent().expect("a vault file has a folder");
+    std::fs::create_dir_all(dir).map_err(at(dir))?;
+    std::fs::rename(&from, &to)
+        .map_err(|e| Refusal::io(format!("renaming {} -> {}: {e}", from.display(), to.display())))
+}
+
+/// Removes the folders of `paths` left empty, each up to the first that is not.
+fn remove_empty_folders<'p>(vault: &Vault, paths: impl Iterator<Item = &'p VaultPath>) -> Result<(), Refusal> {
+    for path in paths {
+        let mut dir = path.parent();
+        while let Some(d) = dir {
+            let abs = vault.abs(&d);
+            match std::fs::remove_dir(&abs) {
+                Ok(()) => dir = d.parent(),
+                Err(e) if matches!(e.kind(), ErrorKind::DirectoryNotEmpty | ErrorKind::NotFound) => break,
+                Err(e) => return Err(at(&abs)(e)),
             }
         }
-
-        Ok(())
     }
+    Ok(())
 }
 
 /// The edits for every link, in files outside `sources/` that `change` does not
@@ -240,13 +267,13 @@ fn verify_note(
 /// without one is a bare name, m0 §5.3): a root file keeps its full path, which names
 /// nothing, so verification refuses a change that moves a linked file to the root.
 pub(crate) fn written(vault: &Vault, path: &VaultPath) -> String {
-    match path.as_str().strip_suffix(".md").filter(|s| s.contains('/')) {
-        Some(short) if vault.resolve(short) == Some(path) => short.to_string(),
+    match path.as_str().strip_suffix(".md") {
+        Some(short) if path.parent().is_some() && vault.resolve(short) == Some(path) => short.to_string(),
         _ => path.to_string(),
     }
 }
 
-/// An io error with the path it was about, for `map_err`.
-fn at(path: &Path) -> impl Fn(std::io::Error) -> std::io::Error + '_ {
-    move |e| std::io::Error::new(e.kind(), format!("{}: {e}", path.display()))
+/// An io refusal naming the path it was about, for `map_err`.
+fn at(path: &Path) -> impl Fn(std::io::Error) -> Refusal + '_ {
+    move |e| Refusal::io(format!("{}: {e}", path.display()))
 }

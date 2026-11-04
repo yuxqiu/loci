@@ -74,7 +74,7 @@ pub const AREA: &str = "AREA.md";
 /// Refuses an absolute path, or one whose `..` climbs above the vault root
 /// (`path.outside`), one that names the root itself (`path.root`), and one holding a
 /// control character (`path.control`).
-pub fn normalize_arg(p: &str) -> Result<String, Refusal> {
+pub(crate) fn normalize_arg(p: &str) -> Result<String, Refusal> {
     let outside = || Refusal::refused("path.outside", format!("`{p}` leads outside the vault"));
     if Path::new(p).is_absolute() {
         return Err(outside());
@@ -94,7 +94,7 @@ pub fn normalize_arg(p: &str) -> Result<String, Refusal> {
 }
 
 /// NFC form of a string.
-pub fn nfc(s: &str) -> String {
+pub(crate) fn nfc(s: &str) -> String {
     s.nfc().collect()
 }
 
@@ -143,7 +143,7 @@ impl VaultPath {
         (normal && !has_control(&s)).then_some(Self(s))
     }
 
-    /// A path argument given by the user, as a vault path ([`normalize_arg`]).
+    /// A path argument given by the user, as a vault path (`normalize_arg`).
     pub fn from_arg(p: &str) -> Result<Self, Refusal> {
         Ok(Self::new(normalize_arg(p)?).expect("a normalized path that neither is empty nor climbs out"))
     }
@@ -286,7 +286,7 @@ impl VaultPath {
 }
 
 /// Whether `s` holds a control character (a newline, a tab, …), which no vault path may.
-pub fn has_control(s: &str) -> bool {
+pub(crate) fn has_control(s: &str) -> bool {
     s.chars().any(char::is_control)
 }
 

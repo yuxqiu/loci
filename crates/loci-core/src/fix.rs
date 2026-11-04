@@ -81,15 +81,9 @@ impl Plan {
         // The tree as fixed by the passes so far, once one applied a fix.
         let mut fixed: Option<Vault> = None;
         loop {
-            let tree;
-            let (current, diags) = match &fixed {
-                None => (index, was.clone()),
-                Some(vault) => {
-                    tree = Index::open(vault);
-                    let diags = lint::run(&tree);
-                    (&tree, diags)
-                }
-            };
+            let reindexed = fixed.as_ref().map(Index::open);
+            let current = reindexed.as_ref().unwrap_or(index);
+            let diags = reindexed.as_ref().map_or_else(|| was.clone(), lint::run);
             let done = if passes_left == 0 {
                 vec![]
             } else {
@@ -126,7 +120,7 @@ fn apply_pass(
     let mut out = vec![];
     for (d, fix) in diags.iter().filter_map(|d| opts.pick(d).map(|f| (d, f))) {
         let planned = planned(index, fix)?;
-        if !pass.holds(&planned) {
+        if !pass.took_all(&planned) {
             // Edits that touch one taken wait for the next pass.
             if pass.clashes(&planned) {
                 continue;
@@ -150,7 +144,7 @@ struct Pass<'a> {
 
 impl<'a> Pass<'a> {
     /// Whether every edit of `planned` is taken already.
-    fn holds(&self, planned: &[(&Note, Planned)]) -> bool {
+    fn took_all(&self, planned: &[(&Note, Planned)]) -> bool {
         planned.iter().all(|(n, e)| match e {
             Planned::Text(e) => self.text.get(&n.path).is_some_and(|es| es.contains(e)),
             Planned::Frontmatter(c) => self.frontmatter.get(&n.path).is_some_and(|(_, cs)| cs.contains(c)),

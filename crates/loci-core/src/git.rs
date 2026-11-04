@@ -37,12 +37,18 @@ impl<'a> Repo<'a> {
         self.run(&["add", "-N", "--", path.as_str()]).map(drop)
     }
 
-    /// Commits `paths` alone with `message`, as the user; returns the commit.
+    /// Commits `paths` alone with `message`, as the user; returns the commit. When the
+    /// commit fails (a hook refuses it), `paths` are unstaged again.
     pub fn commit_paths(&self, message: &str, paths: &[VaultPath]) -> Result<String, String> {
         let paths: Vec<&str> = paths.iter().map(VaultPath::as_str).collect();
         let paths = paths.as_slice();
         self.run(&[&["add", "--"], paths].concat())?;
-        self.run(&[&["commit", "-q", "-m", message, "--"], paths].concat())?;
+        if let Err(e) = self.run(&[&["commit", "-q", "-m", message, "--"], paths].concat()) {
+            return Err(match self.run(&[&["reset", "-q", "--"], paths].concat()) {
+                Ok(_) => e,
+                Err(r) => format!("{e}; unstaging the paths also failed: {r}"),
+            });
+        }
         self.head()
     }
 
@@ -216,7 +222,7 @@ impl<'a> Repo<'a> {
         let (changed, untracked) = parse_status(&out)?;
         let head: BTreeSet<String> = if self.has_head()? {
             let out = self.run(&["ls-tree", "-r", "--name-only", "-z", "HEAD"])?;
-            utf8_paths(&out).map(str::to_string).collect()
+            utf8_records(&out).map(str::to_string).collect()
         } else {
             BTreeSet::new()
         };
@@ -260,7 +266,7 @@ fn exec(cmd: &mut Command, what: &str) -> Result<Vec<u8>, String> {
 
 /// Prefix of the local refs that record an agent's finished work (`loci done`).
 /// Refs outside `refs/heads/` and `refs/tags/` are not pushed by default.
-pub const AGENT_REFS: &str = "refs/loci/agent/";
+pub(crate) const AGENT_REFS: &str = "refs/loci/agent/";
 
 /// Whole seconds since the Unix epoch, as git dates take them.
 fn unix_seconds(t: SystemTime) -> u64 {
@@ -330,10 +336,11 @@ impl Changes {
     }
 }
 
-/// The NUL-separated records of `out` that are valid UTF-8. A non-UTF-8 path is not a
-/// vault file (under the folders core reads, the vault is refused as `file.unreadable`),
-/// so it is skipped rather than mangled into a path that does not exist.
-fn utf8_paths(out: &[u8]) -> impl Iterator<Item = &str> {
+/// The NUL-separated records of `out` (paths, or `git status` records) that are valid
+/// UTF-8. A non-UTF-8 path is not a vault file (under the folders core reads, the vault
+/// is refused as `file.unreadable`), so it is skipped rather than mangled into a path
+/// that does not exist.
+fn utf8_records(out: &[u8]) -> impl Iterator<Item = &str> {
     out.split(|b| *b == 0).filter(|r| !r.is_empty()).filter_map(|r| std::str::from_utf8(r).ok())
 }
 
@@ -341,7 +348,7 @@ fn utf8_paths(out: &[u8]) -> impl Iterator<Item = &str> {
 /// that does not have its fields is an error, not a path.
 fn parse_status(out: &[u8]) -> Result<(Vec<String>, Vec<String>), String> {
     let (mut changed, mut untracked) = (vec![], vec![]);
-    for rec in utf8_paths(out) {
+    for rec in utf8_records(out) {
         // 1 XY sub mH mI mW hH hI path; u XY sub m1 m2 m3 mW h1 h2 h3 path.
         let fields = match rec.as_bytes().first() {
             Some(b'1') => 9,

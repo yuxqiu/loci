@@ -99,17 +99,13 @@ impl Out {
 /// The inbox: counts by folder, and the files not yet committed, which block work (at
 /// most [`LISTED`] named), then the next step.
 fn inbox(files: &[VaultPath], changes: Option<&git::Changes>, out: &mut Out) -> serde_json::Value {
-    let placed: Vec<(&VaultPath, InboxPlace)> = files
-        .iter()
-        .filter_map(|f| match f.place() {
-            Ok(Some(Place::Inbox(place))) => Some((f, place)),
-            _ => None,
-        })
-        .collect();
-    let inbox: Vec<&VaultPath> = placed.iter().map(|(f, _)| *f).collect();
+    let mut inbox: Vec<&VaultPath> = vec![];
     let mut by_place: BTreeMap<InboxPlace, usize> = BTreeMap::new();
-    for (_, place) in &placed {
-        *by_place.entry(*place).or_default() += 1;
+    for f in files {
+        if let Ok(Some(Place::Inbox(place))) = f.place() {
+            inbox.push(f);
+            *by_place.entry(place).or_default() += 1;
+        }
     }
 
     let uncommitted: Option<Vec<&VaultPath>> = changes.map(|c| {

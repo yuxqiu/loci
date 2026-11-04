@@ -120,7 +120,7 @@ fn fix_vault(ctx: &Ctx, vault: &Vault, args: &FixArgs, only: Option<lint::Code>)
         // The core index rules after the fixes; nothing was written to run the rest on.
         Linted { files: index.vault().files().len(), plugins: vec![], diagnostics: plan.remaining }
     } else {
-        plan.change.apply(vault).map_err(Refusal::io)?;
+        plan.change.apply(vault)?;
         Linted::of(&ctx.vault()?)
     };
 

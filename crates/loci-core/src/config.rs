@@ -43,7 +43,7 @@ impl UpdateId {
 }
 
 /// The editions a lint rule or format entry belongs to: the vaults whose `updates` mark
-/// (the last update handled, `None` for none) is at or after `from` and before `until`.
+/// (the last update handled, `None` for none) is at or after `since` and before `until`.
 /// A vault's edition moves when it handles an update, accepted or declined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Editions {

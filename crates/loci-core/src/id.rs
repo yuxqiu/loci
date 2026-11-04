@@ -32,13 +32,6 @@ impl From<Slug> for String {
     }
 }
 
-/// Looked up by name in maps keyed by slug; a name that is no slug finds nothing.
-impl std::borrow::Borrow<str> for Slug {
-    fn borrow(&self) -> &str {
-        &self.0
-    }
-}
-
 impl Slug {
     pub fn as_str(&self) -> &str {
         &self.0

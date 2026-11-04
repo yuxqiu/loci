@@ -15,9 +15,10 @@ pub fn run(ctx: &Ctx, from: &str, into: &str, dry_run: bool) -> Result<Report, R
     if let Some(n) = [from, into].into_iter().find(|n| n.kind != Kind::Concept) {
         return Err(Refusal::refused("note.kind", format!("`{}` is not a concept", n.path)));
     }
-    let merge::Merge { from, into, change } = merge::Merge::plan(&index, from, into)?;
+    let change = merge::plan(&index, from, into)?;
+    let (from, into) = (&from.path, &into.path);
     if !dry_run {
-        change.apply(&vault).map_err(Refusal::io)?;
+        change.apply(&vault)?;
     }
 
     let data = json!({

@@ -134,13 +134,22 @@ impl Vault {
     /// loci never writes through one (m0 §3), and folders git ignores were not checked
     /// when the vault was opened.
     pub fn write(&self, rel: &VaultPath, bytes: &[u8]) -> Result<(), Refusal> {
-        if let Some(link) = symlink_on_path(&self.root, rel.as_str()) {
-            let message = format!("`{link}` is a symlink, which loci does not write through");
-            return Err(Refusal::refused("file.symlink", message));
-        }
+        self.refuse_symlink(rel)?;
         let path = self.abs(rel);
         std::fs::create_dir_all(path.parent().expect("a vault file has a folder")).map_err(Refusal::io)?;
         write_atomic(&path, bytes).map_err(Refusal::io)
+    }
+
+    /// Refuses a symlink on the way to vault path `rel` (`file.symlink`): loci never
+    /// writes through one (m0 §3).
+    pub fn refuse_symlink(&self, rel: &VaultPath) -> Result<(), Refusal> {
+        match symlink_on_path(&self.root, rel.as_str()) {
+            Some(link) => Err(Refusal::refused(
+                "file.symlink",
+                format!("`{link}` is a symlink, which loci does not write through"),
+            )),
+            None => Ok(()),
+        }
     }
 
     /// Every file core reads, sorted.
@@ -248,14 +257,14 @@ fn refuse_unsafe(mut symlinks: Vec<String>, mut unreadable: Vec<String>) -> Resu
         symlinks.sort();
         // Every file listed under a symlinked folder names the same link.
         symlinks.dedup();
-        let message = listed("loci does not follow symlinks; replace each with the file or folder itself", &symlinks);
+        let message = bulleted("loci does not follow symlinks; replace each with the file or folder itself", &symlinks);
         return Err(Refusal::refused("file.symlink", message));
     }
     if !unreadable.is_empty() {
         unreadable.sort();
         unreadable.dedup();
         let message =
-            listed("every file loci reads, and every folder git lists, must be readable; fix each", &unreadable);
+            bulleted("every file loci reads, and every folder git lists, must be readable; fix each", &unreadable);
         return Err(Refusal::refused("file.unreadable", message));
     }
     Ok(())
@@ -319,7 +328,7 @@ fn entry(root: &Path, rel: &VaultPath) -> Entry {
 }
 
 /// A refusal message listing `items`, one per line under `header`.
-fn listed(header: &str, items: &[String]) -> String {
+fn bulleted(header: &str, items: &[String]) -> String {
     format!("{header}:\n  {}", items.join("\n  "))
 }
 
@@ -348,23 +357,45 @@ pub(crate) fn persist(tmp: tempfile::NamedTempFile, path: &Path) -> std::io::Res
 }
 
 /// Copies the directory `from` to `to`, recursively, leaving out the entries of `from`
-/// itself named in `skip`.
+/// itself named in `skip`. A link to a file is copied as the file; any other link
+/// fails, since a copied link could lead back into the vault. An error names the path
+/// it was about.
 pub fn copy_dir(from: &Path, to: &Path, skip: &[&str]) -> std::io::Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let entry = entry?;
+    std::fs::create_dir_all(to).map_err(at(to))?;
+    for entry in std::fs::read_dir(from).map_err(at(from))? {
+        let entry = entry.map_err(at(from))?;
         if skip.iter().any(|s| entry.file_name() == *s) {
             continue;
         }
         let (src, dst) = (entry.path(), to.join(entry.file_name()));
-        if entry.file_type()?.is_dir() { copy_dir(&src, &dst, &[])? } else { std::fs::copy(&src, &dst).map(|_| ())? }
+        let kind = entry.file_type().map_err(at(&src))?;
+        if kind.is_dir() {
+            copy_dir(&src, &dst, &[])?
+        } else {
+            std::fs::copy(&src, &dst).map(drop).map_err(at(&src))?
+        }
     }
     Ok(())
+}
+
+/// An io error with the path it was about, for `map_err`.
+fn at(path: &Path) -> impl Fn(std::io::Error) -> std::io::Error + '_ {
+    move |e| std::io::Error::new(e.kind(), format!("{}: {e}", path.display()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copy_dir_names_a_link_it_cannot_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (from, to) = (tmp.path().join("from"), tmp.path().join("to"));
+        std::fs::create_dir_all(from.join("d")).unwrap();
+        std::os::unix::fs::symlink("d", from.join("dir-link")).unwrap();
+        let e = copy_dir(&from, &to, &[]).unwrap_err();
+        assert!(e.to_string().contains("dir-link"), "{e}");
+    }
 
     #[test]
     fn written_paths_resolve_exactly_then_with_md() {

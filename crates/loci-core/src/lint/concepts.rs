@@ -188,13 +188,11 @@ fn cycles(graph: &BTreeMap<VaultPath, Vec<VaultPath>>) -> BTreeSet<Vec<VaultPath
 
         // The walk: each node on the path with the index of its next edge.
         let mut stack: Vec<(&VaultPath, usize)> = vec![(start, 0)];
-        let mut path: Vec<&VaultPath> = vec![start];
         state.insert(start, Visit::OnPath);
         while let Some((node, i)) = stack.last_mut() {
             let Some(next) = graph[*node].get(*i) else {
                 state.insert(node, Visit::Done);
                 stack.pop();
-                path.pop();
                 continue;
             };
             *i += 1;
@@ -202,11 +200,10 @@ fn cycles(graph: &BTreeMap<VaultPath, Vec<VaultPath>>) -> BTreeSet<Vec<VaultPath
                 Visit::Unseen if graph.contains_key(next) => {
                     state.insert(next, Visit::OnPath);
                     stack.push((next, 0));
-                    path.push(next);
                 }
                 Visit::OnPath => {
-                    let pos = path.iter().position(|p| *p == next).expect("an `OnPath` node is on the path");
-                    found.insert(canonical(&path[pos..]));
+                    let pos = stack.iter().position(|(p, _)| *p == next).expect("an `OnPath` node is on the path");
+                    found.insert(canonical(stack[pos..].iter().map(|(p, _)| *p)));
                 }
                 Visit::Unseen | Visit::Done => {}
             }
@@ -218,8 +215,8 @@ fn cycles(graph: &BTreeMap<VaultPath, Vec<VaultPath>>) -> BTreeSet<Vec<VaultPath
 /// `cycle` rotated to start at its member with the smallest slug (members are reached
 /// by slug, so their slugs differ), so each cycle has one form however the walk entered
 /// it.
-fn canonical(cycle: &[&VaultPath]) -> Vec<VaultPath> {
-    let mut cycle: Vec<VaultPath> = cycle.iter().map(|p| (*p).clone()).collect();
+fn canonical<'p>(cycle: impl Iterator<Item = &'p VaultPath>) -> Vec<VaultPath> {
+    let mut cycle: Vec<VaultPath> = cycle.cloned().collect();
     let first = (0..cycle.len()).min_by_key(|&i| cycle[i].stem()).expect("a cycle has members");
     cycle.rotate_left(first);
     cycle

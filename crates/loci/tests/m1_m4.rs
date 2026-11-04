@@ -250,6 +250,8 @@ fn export_html_is_rendered_in_process() {
         assert!(!page.contains("http"), "nothing from the network: {page}");
     }
     assert!(!v.exists("assets"), "no images, no assets folder");
+    let (code, env) = v.run(&["export", "views/plan", "-o", "/"]);
+    assert_eq!((code, error_code(&env)), (3, "io"), "a path that names no file: {env:#}");
 }
 
 #[test]

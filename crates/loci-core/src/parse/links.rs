@@ -95,7 +95,7 @@ impl Fragment {
 }
 
 /// The comparison key for heading fragments (§5.4).
-pub fn heading_key(s: &str) -> String {
+pub(crate) fn heading_key(s: &str) -> String {
     s.to_lowercase().replace(' ', "-")
 }
 
@@ -157,7 +157,7 @@ pub(super) fn prereq(span: Range<usize>, slug: Slug) -> Spanned<Link> {
 
 /// The slug a bare name (no `/`) names (§5.3): the concept whose file name it is,
 /// exactly (`bfs.md`) or with `.md` added (`bfs`).
-pub fn bare_slug(name: &str) -> Option<Slug> {
+pub(crate) fn bare_slug(name: &str) -> Option<Slug> {
     name.strip_suffix(".md").unwrap_or(name).parse().ok()
 }
 
@@ -228,6 +228,6 @@ mod tests {
     fn no_links_in_code_or_math() {
         let n = p("# T\n\n`[[a]]` and $[[b]]$\n\n```\n[[c]]\n```\n\nprice $5 and $6\n");
         assert!(n.links.is_empty());
-        assert_eq!(n.counts.code, 1);
+        assert_eq!(n.counts.fenced_code, 1);
     }
 }
