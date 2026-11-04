@@ -7,6 +7,7 @@ use loci_core::export;
 use loci_core::index::Index;
 use loci_core::path::Kind;
 use loci_core::path::VaultPath;
+use loci_core::vault::Vault;
 use serde_json::json;
 
 use super::Ctx;
@@ -29,32 +30,18 @@ impl Format {
 pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option<PathBuf>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
-    let target = VaultPath::from_arg(target)?;
-    let note = index.note(&target, "export.unknown")?;
+    let note = index.note_named(target)?;
     let path = note.path.clone();
     if !matches!(note.kind, Kind::View | Kind::Concept) {
-        return Err(Refusal::refused("export.kind", format!("`{path}` is not a view or a concept")));
+        return Err(Refusal::refused("note.kind", format!("`{path}` is not a view or a concept")));
     }
 
     let e = export::Export::of(&index, note, depth);
-    let out_path = match output {
-        Some(o) => ctx.cwd.join(o),
-        None => vault.abs(&VaultPath::fixed(".loci/export")).join(format!("{}.{}", path.stem(), format.ext())),
-    };
-
-    let out_dir = out_path.parent().expect("an absolute file path has a parent").to_path_buf();
-    let dirs = if e.assets.is_empty() { out_dir.clone() } else { out_dir.join(export::ASSETS) };
-    std::fs::create_dir_all(dirs).map_err(Refusal::io)?;
-    for (src, name) in &e.assets {
-        std::fs::copy(vault.abs(src), out_dir.join(export::ASSETS).join(name)).map_err(Refusal::io)?;
-    }
-
     let text = match format {
         Format::Md => e.markdown.clone(),
         Format::Html => html(&e, note.title()).map_err(|m| Refusal::internal("export.html", m))?,
     };
-
-    std::fs::write(&out_path, text).map_err(Refusal::io)?;
+    let out_path = write_out(&vault, &e, &path, format, output.map(|o| ctx.cwd.join(o)), text)?;
     let data = json!({
         "output": out_path,
         "notes": e.notes,
@@ -62,6 +49,37 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
     });
 
     Ok(Report::ok(data, format!("{}\n", out_path.display())))
+}
+
+/// Writes the export and its images: to `output` when given (the user's path, outside
+/// the vault), else into `.loci/export/` (in the vault, gitignored, so written as vault
+/// files are). Returns where the document went.
+fn write_out(
+    vault: &Vault,
+    e: &export::Export,
+    note: &VaultPath,
+    format: Format,
+    output: Option<PathBuf>,
+    text: String,
+) -> Result<PathBuf, Refusal> {
+    let read = |src: &VaultPath| std::fs::read(vault.abs(src)).map_err(Refusal::io);
+    let Some(out_path) = output else {
+        let in_export = |name: &str| VaultPath::new(format!(".loci/export/{name}")).expect("a file name");
+        for (src, name) in &e.assets {
+            vault.write(&in_export(&format!("{}/{name}", export::ASSETS)), &read(src)?)?;
+        }
+        let out = in_export(&format!("{}.{}", note.stem(), format.ext()));
+        vault.write(&out, text.as_bytes())?;
+        return Ok(vault.abs(&out));
+    };
+    let out_dir = out_path.parent().expect("an absolute file path has a parent").to_path_buf();
+    let dirs = if e.assets.is_empty() { out_dir.clone() } else { out_dir.join(export::ASSETS) };
+    std::fs::create_dir_all(dirs).map_err(Refusal::io)?;
+    for (src, name) in &e.assets {
+        std::fs::write(out_dir.join(export::ASSETS).join(name), read(src)?).map_err(Refusal::io)?;
+    }
+    std::fs::write(&out_path, text).map_err(Refusal::io)?;
+    Ok(out_path)
 }
 
 /// A standalone HTML page for the export, which needs nothing from the network: the

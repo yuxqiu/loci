@@ -68,15 +68,43 @@ pub const STYLE: &str = "STYLE.md";
 /// An area's scope note, `concepts/<area>/AREA.md` (m0 §6.3).
 pub const AREA: &str = "AREA.md";
 
+/// A path argument given by the user (m0 §8), normalized by the `relative-path` crate:
+/// `.` and repeated or trailing `/` dropped, each `..` stepping back one folder; then
+/// put in NFC. Resolving `..` by name is exact because a vault holds no symlinks (§3).
+/// Refuses an absolute path, or one whose `..` climbs above the vault root
+/// (`path.outside`), one that names the root itself (`path.root`), and one holding a
+/// control character (`path.control`).
+pub fn normalize_arg(p: &str) -> Result<String, Refusal> {
+    let outside = || Refusal::refused("path.outside", format!("`{p}` leads outside the vault"));
+    if Path::new(p).is_absolute() {
+        return Err(outside());
+    }
+    // `normalize` keeps a `..` it cannot resolve at the front.
+    let path = RelativePath::new(p).normalize();
+    if path.components().next() == Some(Component::ParentDir) {
+        return Err(outside());
+    }
+    if path.as_str().is_empty() {
+        return Err(Refusal::refused("path.root", format!("`{p}` is the vault root, not a file or folder in it")));
+    }
+    if has_control(p) {
+        return Err(Refusal::refused("path.control", format!("{p:?} has a control character")));
+    }
+    Ok(nfc(path.as_str()))
+}
+
 /// NFC form of a string.
 pub fn nfc(s: &str) -> String {
     s.nfc().collect()
 }
 
-/// A vault-relative path: `/`-separated UTF-8, with no empty, `.` or `..` segment, no
-/// leading or trailing `/`, and no control character (so every message that names one
-/// stays on one line). Not necessarily NFC: git lists the names as stored, and
-/// lint reports a non-NFC one (`path.not-nfc`). Ordered by bytes, as outputs are.
+/// A file or folder in the vault, named exactly as it is: vault-relative, extension
+/// included, so a note's path ends in `.md`. How a user names a note (`.md` left off,
+/// or a concept slug) is resolved to one of these ([`crate::index::Index::note_named`]).
+/// `/`-separated UTF-8, with no empty, `.` or `..` segment, no leading or trailing `/`,
+/// and no control character (so every message that names one stays on one line). Not
+/// necessarily NFC: git lists the names as stored, and lint reports a non-NFC one
+/// (`path.not-nfc`). Ordered by bytes, as outputs are.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct VaultPath(String);
@@ -115,29 +143,9 @@ impl VaultPath {
         (normal && !has_control(&s)).then_some(Self(s))
     }
 
-    /// A path argument given by the user, as a vault path, normalized by the
-    /// `relative-path` crate: `.` and repeated or trailing `/` dropped, each `..` stepping
-    /// back one folder; then put in NFC. Resolving `..` by name is exact because a vault
-    /// holds no symlinks (§3). Refuses an absolute path, or one whose `..` climbs above
-    /// the vault root (`path.outside`), and one that names the root itself (`path.root`)
-    /// (m0 §8).
+    /// A path argument given by the user, as a vault path ([`normalize_arg`]).
     pub fn from_arg(p: &str) -> Result<Self, Refusal> {
-        let outside = || Refusal::refused("path.outside", format!("`{p}` leads outside the vault"));
-        if Path::new(p).is_absolute() {
-            return Err(outside());
-        }
-        // `normalize` keeps a `..` it cannot resolve at the front.
-        let path = RelativePath::new(p).normalize();
-        if path.components().next() == Some(Component::ParentDir) {
-            return Err(outside());
-        }
-        if path.as_str().is_empty() {
-            return Err(Refusal::refused("path.root", format!("`{p}` is the vault root, not a file or folder in it")));
-        }
-        if has_control(p) {
-            return Err(Refusal::refused("path.control", format!("{p:?} has a control character")));
-        }
-        Ok(Self::new(nfc(path.as_str())).expect("a normalized path that neither is empty nor climbs out"))
+        Ok(Self::new(normalize_arg(p)?).expect("a normalized path that neither is empty nor climbs out"))
     }
 
     pub fn as_str(&self) -> &str {
@@ -223,16 +231,6 @@ impl VaultPath {
         self.rel().extension() == Some("md")
     }
 
-    /// This path as a note argument means it (m0 §8): itself if it is a note, else with
-    /// `.md` added.
-    pub fn to_note(&self) -> VaultPath {
-        if self.is_note() {
-            self.clone()
-        } else {
-            Self::new(format!("{}.md", self.0)).expect("a suffix keeps a vault path")
-        }
-    }
-
     /// A note's name: the file name without `.md` (a concept's slug); any other file's
     /// full name.
     pub fn stem(&self) -> &str {
@@ -247,49 +245,34 @@ impl VaultPath {
         self.stem().parse().ok()
     }
 
-    /// The extension of a source file `sources/<type>/<slug>.<ext>` (m0 §6.4): `<type>`
-    /// and `<slug>` are slugs, `<ext>` lowercase ASCII letters and digits with at least
-    /// one letter (`pdf`, `mp3`, not `03762`); `None` for any other path.
-    pub fn source_ext(&self) -> Option<&str> {
-        SOURCE.captures(&self.0).map(|c| c.get(1).expect("the extension group").as_str())
-    }
-
-    /// Whether this is a source file (see [`VaultPath::source_ext`]).
-    pub fn is_source_file(&self) -> bool {
-        self.source_ext().is_some()
-    }
-
-    /// Whether this is a valid journal entry path (m0 §6.6): a file inside
-    /// `journal/<stream>/`, the stream a slug. Folders and file names below the stream
-    /// are the user's.
-    fn journal_ok(&self) -> bool {
+    /// Where this file is, parsed from its path with what the layout gives it, or the
+    /// path rule it breaks (m0 §3, §6.2, §6.4, §6.6): lint reports one; `new` and `mv`
+    /// refuse a destination that breaks one, with the same code. `Ok(None)` for a path
+    /// core never reads ([`VaultPath::kind`]).
+    pub fn place(&self) -> Result<Option<Place<'_>>, PathProblem> {
+        let Some(kind) = self.kind() else { return Ok(None) };
         let parts: Vec<&str> = self.components().collect();
-        parts.len() >= 3 && parts[0] == "journal" && parts[1].parse::<Slug>().is_ok()
-    }
-
-    /// The path rule this path breaks, if any. Lint reports it; `new` and `mv` refuse a
-    /// destination that breaks one, with the same code.
-    pub fn problem(&self) -> Option<PathProblem> {
-        if self.0.starts_with("sources/") && !self.is_source_file() {
-            return Some(PathProblem::SourcesLayout);
-        }
-        match self.kind() {
-            Some(Kind::Unknown) => Some(PathProblem::KindUnknown),
-            Some(Kind::Concept) => self.stem().parse::<Slug>().err().map(PathProblem::SlugFormat),
-            Some(Kind::Journal) if !self.journal_ok() => Some(PathProblem::JournalPath),
-            _ => None,
-        }
-    }
-
-    /// Where in `inbox/` this file is: directly in it, or under one of its folders.
-    /// `None` outside the inbox.
-    pub fn inbox_place(&self) -> Option<InboxPlace<'_>> {
-        let parts: Vec<&str> = self.components().collect();
-        match parts.as_slice() {
-            ["inbox", _] => Some(InboxPlace::Root),
-            ["inbox", folder, _, ..] => Some(InboxPlace::Folder(folder)),
-            _ => None,
-        }
+        Ok(Some(match (kind, parts.as_slice()) {
+            (Kind::Concept, [_, area, ..]) => {
+                Place::Concept { area, slug: self.stem().parse().map_err(PathProblem::SlugFormat)? }
+            }
+            (Kind::Area, [_, area, _]) => Place::Area { area },
+            (Kind::View, _) => Place::View,
+            (Kind::Journal, ["journal", stream, _, ..]) => {
+                Place::Journal { stream: stream.parse().map_err(|_| PathProblem::JournalPath)? }
+            }
+            (Kind::Journal, _) => return Err(PathProblem::JournalPath),
+            (Kind::Source, _) => {
+                let ext = SOURCE.captures(&self.0).ok_or(PathProblem::SourcesLayout)?;
+                Place::Source { ext: ext.get(1).expect("the extension group").as_str() }
+            }
+            (Kind::Inbox, ["inbox", folder, _, ..]) => Place::Inbox(InboxPlace::Folder(folder)),
+            (Kind::Inbox, _) => Place::Inbox(InboxPlace::Root),
+            (Kind::Rules, _) => Place::Rules,
+            (Kind::Asset, _) => Place::Asset,
+            (Kind::Unknown, _) => return Err(PathProblem::KindUnknown),
+            (Kind::Concept | Kind::Area, _) => unreachable!("`kind` matched the folder layout"),
+        }))
     }
 
     /// Why this path, which is not a concept path, cannot hold a concept: `new` and `mv`
@@ -305,6 +288,29 @@ impl VaultPath {
 /// Whether `s` holds a control character (a newline, a tab, …), which no vault path may.
 pub fn has_control(s: &str) -> bool {
     s.chars().any(char::is_control)
+}
+
+/// Where a validly placed vault file is (m0 §3), with what its path gives it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Place<'a> {
+    Concept {
+        area: &'a str,
+        slug: Slug,
+    },
+    Area {
+        area: &'a str,
+    },
+    View,
+    Journal {
+        stream: Slug,
+    },
+    /// A source file `sources/<type>/<slug>.<ext>`.
+    Source {
+        ext: &'a str,
+    },
+    Inbox(InboxPlace<'a>),
+    Rules,
+    Asset,
 }
 
 /// Where a file in `inbox/` is (m0 §3).
@@ -330,6 +336,11 @@ pub enum PathProblem {
 }
 
 impl PathProblem {
+    /// The refusal of a destination at `path` that breaks this rule (`new`, `mv`).
+    pub fn refusal(&self, path: &VaultPath) -> Refusal {
+        Refusal::refused(self.code(), format!("`{path}`: {self}"))
+    }
+
     pub fn code(&self) -> Code {
         match self {
             PathProblem::SourcesLayout => Code::SourcesLayout,
@@ -427,8 +438,6 @@ mod tests {
     #[test]
     fn notes() {
         assert!(vp("views/v.md").is_note() && !vp("views/.md").is_note() && !vp("a/x.png").is_note());
-        assert_eq!(vp("concepts/a/x").to_note(), vp("concepts/a/x.md"));
-        assert_eq!(vp("concepts/a/x.md").to_note(), vp("concepts/a/x.md"));
     }
 
     #[test]
@@ -482,42 +491,33 @@ mod tests {
     }
 
     #[test]
-    fn source_files() {
-        assert!(vp("sources/papers/dijkstra-1959.pdf").is_source_file());
-        assert!(vp("sources/clippings/heaps.md").is_source_file());
-        assert_eq!(vp("sources/papers/x.mp3").source_ext(), Some("mp3"));
+    fn places() {
+        let place = |p: &str| vp(p).place().map(|pl| pl.map(|pl| format!("{pl:?}")));
+        assert_eq!(place("concepts/a/bfs.md").unwrap().unwrap(), r#"Concept { area: "a", slug: Slug("bfs") }"#);
+        assert_eq!(place("sources/papers/x.mp3").unwrap().unwrap(), r#"Source { ext: "mp3" }"#);
+        assert_eq!(place("journal/life/2025-03-14 rent.md").unwrap().unwrap(), r#"Journal { stream: Slug("life") }"#);
+        assert_eq!(place("inbox/drafts/x.md").unwrap().unwrap(), r#"Inbox(Folder("drafts"))"#);
+        assert_eq!(place("plugins/learn/x.jsonl"), Ok(None), "not read by core");
+        for good in ["sources/papers/dijkstra-1959.pdf", "sources/clippings/heaps.md", "journal/life/a/b/notes.md"] {
+            assert!(place(good).is_ok(), "{good}");
+        }
         for bad in [
             "sources/Papers/x.pdf",
             "sources/papers/x",
             "sources/papers/X.pdf",
-            "sources/x.pdf",
             "sources/papers/p/p.pdf",
             "sources/papers/x.PDF",
             "sources/papers/vaswani.03762",
             "sources/docs/a.b c",
         ] {
-            assert!(!vp(bad).is_source_file(), "{bad}");
+            assert_eq!(vp(bad).place().unwrap_err(), PathProblem::SourcesLayout, "{bad}");
         }
-    }
-
-    #[test]
-    fn journal_paths() {
-        assert!(vp("journal/research/2025/03/25-03-14.md").journal_ok());
-        assert!(vp("journal/life/2025-03-14 rent.md").journal_ok(), "names below the stream are free");
-        assert!(vp("journal/life/a/b/notes.md").journal_ok());
-        assert!(!vp("journal/x.md").journal_ok(), "outside a stream");
-        assert!(!vp("journal/My Stuff/2025/03/25-03-14.md").journal_ok(), "the stream is a slug");
-        assert!(!vp("journal/Research/2025/03/25-03-14.md").journal_ok(), "the stream is a slug");
-    }
-
-    #[test]
-    fn problems() {
-        let code = |p: &str| vp(p).problem().map(|p| p.code());
+        let code = |p: &str| vp(p).place().err().map(|p| p.code());
         assert_eq!(code("sources/x.pdf"), Some(Code::SourcesLayout));
         assert_eq!(code("notes.md"), Some(Code::KindUnknown));
         assert_eq!(code("concepts/a/Bad Name.md"), Some(Code::SlugFormat));
-        assert_eq!(code("journal/x.md"), Some(Code::JournalPath));
-        assert_eq!(code("concepts/a/good.md"), None);
+        assert_eq!(code("journal/x.md"), Some(Code::JournalPath), "outside a stream");
+        assert_eq!(code("journal/My Stuff/2025/03/25-03-14.md"), Some(Code::JournalPath), "the stream is a slug");
         assert_eq!(code("views/anything.md"), None);
         assert_eq!(vp("concepts/a/AREA.md").why_not_concept(), "would be the area file, not a concept");
         assert_eq!(vp("views/x.md").why_not_concept(), "is not inside an area");

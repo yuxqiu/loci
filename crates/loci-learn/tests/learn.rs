@@ -111,6 +111,15 @@ fn log_commits_alone_and_validates() {
         assert_eq!(error_code(&env), code, "{input}");
     }
     assert_eq!(v.read("plugins/learn/reviews.jsonl").lines().count(), 1);
+
+    // A log whose last line lost its line break still takes a new line of its own.
+    let log = v.read("plugins/learn/reviews.jsonl");
+    v.write("plugins/learn/reviews.jsonl", log.trim_end());
+    let (code, env) = learn(&v, &["log"], &input);
+    assert_eq!(code, 0, "{env}");
+    assert_eq!(v.read("plugins/learn/reviews.jsonl").lines().count(), 2);
+    let (code, env) = learn(&v, &["state", "x"], "");
+    assert_eq!(code, 0, "the log still parses: {env}");
 }
 
 #[test]
@@ -130,7 +139,7 @@ fn state_kinds() {
     assert_eq!(env["data"]["estimate"]["kind"], "item");
     assert_eq!(env["data"]["estimate"]["grade"], "again");
     let (_, env) = learn(&v, &["state", "nope"], "");
-    assert_eq!(error_code(&env), "learn.unknown-concept");
+    assert_eq!(error_code(&env), "note.unknown");
 }
 
 #[test]

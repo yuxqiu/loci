@@ -98,7 +98,9 @@ enum OpenKind<'a> {
         dest: CowStr<'a>,
         image: bool,
     },
-    /// Inline markup (emphasis, a table cell), which builds nothing.
+    /// A table cell, which builds nothing.
+    Cell,
+    /// Other inline markup (emphasis), which builds nothing.
     Inline,
 }
 
@@ -128,6 +130,7 @@ impl<'a> Walker<'a> {
                 OpenKind::Other(vec![])
             }
             Tag::BlockQuote(_) | Tag::HtmlBlock | Tag::Table(_) | Tag::FootnoteDefinition(_) => OpenKind::Other(vec![]),
+            Tag::TableCell => OpenKind::Cell,
             Tag::Link { link_type, dest_url, .. } => OpenKind::Link { link_type, dest: dest_url, image: false },
             Tag::Image { link_type, dest_url, .. } => {
                 self.out.counts.images += 1;
@@ -194,7 +197,7 @@ impl<'a> Walker<'a> {
                 let label = inner.unwrap_or(span.end..span.end);
                 self.link(link_type, &dest, span, label, image);
             }
-            OpenKind::Inline => {}
+            OpenKind::Cell | OpenKind::Inline => {}
         }
     }
 
@@ -218,7 +221,8 @@ impl<'a> Walker<'a> {
             LinkType::Autolink | LinkType::Email => {}
             _ if URL_SCHEME.is_match(dest) => {}
             _ => {
-                let link = MarkdownLink { url: dest.to_string(), image, label: Spanned::new(Label, label) };
+                let in_table = self.stack.iter().any(|o| matches!(o.kind, OpenKind::Cell));
+                let link = MarkdownLink { url: dest.to_string(), image, label: Spanned::new(Label, label), in_table };
                 self.out.markdown_links.push(Spanned::new(link, span));
             }
         }

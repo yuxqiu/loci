@@ -3,7 +3,7 @@
 use loci_core::closure;
 use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::index::Index;
-use loci_core::path::VaultPath;
+use loci_core::path::Kind;
 use serde_json::json;
 
 use super::Ctx;
@@ -11,7 +11,10 @@ use super::Ctx;
 pub fn run(ctx: &Ctx, concept: &str, depth: Option<usize>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
-    let root = index.concept(&VaultPath::from_arg(concept)?, "closure.unknown")?;
+    let root = index.note_named(concept)?;
+    if root.kind != Kind::Concept {
+        return Err(Refusal::refused("note.kind", format!("`{}` is not a concept", root.path)));
+    }
     let c = closure::Closure::of(&index, root, depth);
     let mut diags = vec![];
     if c.cyclic {

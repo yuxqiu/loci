@@ -64,7 +64,7 @@ pub fn of_note(note: &Note) -> (Vec<Spanned<Card>>, Vec<Range<usize>>) {
     // Each item of a list at the top level of the section is a card; anything else
     // there is a format issue.
     let mut items = vec![];
-    for block in note.section_blocks(SECTION) {
+    for block in note.section_blocks(&found) {
         match &block.node {
             Block::List(list) => items.extend(list),
             _ => issues.push(block.span.clone()),
@@ -74,14 +74,12 @@ pub fn of_note(note: &Note) -> (Vec<Spanned<Card>>, Vec<Range<usize>>) {
     let mut cards = vec![];
     for item in items {
         let id = item.id.as_ref();
-        // The item's content, after its list marker, without its block id (cut by its
-        // byte range).
-        let content = item.marker.span.end..item.span.end;
-        let mut raw = note.text[content.clone()].to_string();
-        if let Some(id) = id {
-            let (start, end) = (id.span.start - content.start, id.span.end - content.start);
-            raw = format!("{}{}", raw[..start].trim_end(), &raw[end..]);
-        }
+        // The item's content, after its list marker, without its block id.
+        let (start, end) = (item.marker.span.end, item.span.end);
+        let raw = match id {
+            Some(id) => format!("{}{}", note.text[start..id.span.start].trim_end(), &note.text[id.span.end..end]),
+            None => note.text[start..end].to_string(),
+        };
         match split(&raw) {
             Some((question, answer)) => {
                 let card = Card {

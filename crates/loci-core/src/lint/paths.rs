@@ -4,11 +4,13 @@ use unicode_normalization::is_nfc;
 
 use super::{Code, Ctx};
 use crate::envelope::Diagnostic;
-use crate::path::InboxPlace;
+use crate::path::{InboxPlace, Place};
 
 pub(super) fn paths(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
-    for path in ctx.index.files() {
-        if let Some(problem) = path.problem() {
+    let vault = ctx.index.vault();
+    for path in vault.files() {
+        let place = path.place();
+        if let Err(problem) = &place {
             out.push(Diagnostic::error(problem.code(), problem.to_string()).at_path(path));
         }
         if !is_nfc(path.as_str()) {
@@ -21,10 +23,23 @@ pub(super) fn paths(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
                     .with_hint(format!("rename it, links following: `loci mv {to} {to}`")),
             );
         }
+        // A note `x.md` beside a file `x`: `[[x]]` names the file (m0 §5.3). Root files
+        // are named by no path link, so they cannot clash.
+        let clashes = |s: &&str| s.contains('/') && vault.resolve(s).is_some_and(|f| f != path);
+        if let Some(short) = path.as_str().strip_suffix(".md").filter(clashes) {
+            out.push(
+                Diagnostic::warning(
+                    Code::PathNameClash,
+                    format!("`{short}` is also a file, so `[[{short}]]` names it, not this note"),
+                )
+                .at_path(path)
+                .with_hint(format!("link this note as `[[{path}]]`, or rename one of them")),
+            );
+        }
         // Directly in `inbox/`, or directly in `inbox/journal/` (not in a stream).
-        let root_file = match path.inbox_place() {
-            Some(InboxPlace::Root) => true,
-            Some(InboxPlace::Folder("journal")) => path.components().count() == 3,
+        let root_file = match place {
+            Ok(Some(Place::Inbox(InboxPlace::Root))) => true,
+            Ok(Some(Place::Inbox(InboxPlace::Folder("journal")))) => path.components().count() == 3,
             _ => false,
         };
         if root_file {

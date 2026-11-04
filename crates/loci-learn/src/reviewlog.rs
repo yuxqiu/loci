@@ -1,6 +1,6 @@
 //! The review log `plugins/learn/reviews.jsonl` (learn-plugin §2.4, §3).
 
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 
 use jiff::Timestamp;
 use loci_core::envelope::Refusal;
@@ -161,11 +161,20 @@ impl ReviewLog<'_> {
         if !attrs.exists() {
             std::fs::write(&attrs, ATTRS_LINE)?;
         }
-        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(self.0.abs(&VaultPath::fixed(LOG)))?;
+        let log = self.0.abs(&VaultPath::fixed(LOG));
+        let mut f = std::fs::OpenOptions::new().create(true).read(true).append(true).open(log)?;
         let before = f.metadata()?.len();
+        // A last line without its line break (an edit by hand) gets one, so the new line
+        // does not join it.
+        let mut last = *b"\n";
+        if before > 0 {
+            f.seek(SeekFrom::End(-1))?;
+            f.read_exact(&mut last)?;
+        }
+        let lead = if last[0] == b'\n' { "" } else { "\n" };
         let json = serde_json::to_string(line).expect("a line always serialises");
         // One write, undone on failure, so a partial line never stays in the log.
-        if let Err(e) = f.write_all(format!("{json}\n").as_bytes()) {
+        if let Err(e) = f.write_all(format!("{lead}{json}\n").as_bytes()) {
             f.set_len(before)?;
             return Err(e);
         }
@@ -179,7 +188,7 @@ impl ReviewLog<'_> {
 
     /// Commits the log and its `.gitattributes` alone, as the user (§2.4). Returns the commit.
     pub fn commit(&self, command: &str) -> Result<String, String> {
-        self.0.repo().commit_paths(&format!("loci: learn {command}"), &[LOG, ATTRS])
+        self.0.repo().commit_paths(&format!("loci: learn {command}"), &[VaultPath::fixed(LOG), VaultPath::fixed(ATTRS)])
     }
 }
 

@@ -3,9 +3,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
+use std::path::Path;
 
 use crate::envelope::Refusal;
-use crate::id::Slug;
 use crate::index::Index;
 use crate::parse::{FmChange, Link, Names, Note, Spanned};
 use crate::path::Kind;
@@ -21,12 +21,12 @@ pub struct Change {
     /// Files deleted from disk.
     pub deleted: BTreeSet<VaultPath>,
     /// Every edited file, keyed by its final path.
-    pub writes: BTreeMap<VaultPath, Written>,
+    pub writes: BTreeMap<VaultPath, Edited>,
 }
 
 /// The new content of an edited file.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Written {
+pub struct Edited {
     pub text: String,
     /// How many edits made it.
     pub edits: usize,
@@ -36,7 +36,7 @@ pub struct Written {
 type Removed = BTreeSet<(VaultPath, usize)>;
 
 impl Change {
-    fn final_path(&self, path: &VaultPath) -> VaultPath {
+    pub(crate) fn final_path(&self, path: &VaultPath) -> VaultPath {
         self.moves.get(path).unwrap_or(path).clone()
     }
 
@@ -54,34 +54,43 @@ impl Change {
         let mut change = Change { moves, deleted: absorbed.into_keys().collect(), ..Change::default() };
         let (edits, removed) = link_edits(index, &targets, &change);
 
-        for (path, file_edits) in edits {
-            let note = index.parsed(&path).expect("edits are only made to readable notes");
-            let count = file_edits.len();
-            let text = splice::apply(&note.text, file_edits).map_err(|e| Refusal::internal("change.edit", e))?;
-            change.writes.insert(change.final_path(&path), Written { text, edits: count });
+        for (note, note_edits) in edits {
+            let count = note_edits.len();
+            let text = splice::apply(&note.text, note_edits).map_err(|e| Refusal::internal("change.edit", e))?;
+            change.writes.insert(change.final_path(&note.path), Edited { text, edits: count });
         }
 
         verify(index, &targets, &change, &removed, code)?;
         Ok(change)
     }
 
-    /// Applies a change: renames, writes via temp file + rename, then deletions.
+    /// Applies a change: writes staged, renames, writes put in place, then deletions.
+    /// Every write is staged in its final folder before anything changes, so one that
+    /// cannot be made (a read-only folder) fails with the vault untouched.
     pub fn apply(&self, vault: &Vault) -> std::io::Result<()> {
+        let mut staged = vec![];
+        for (path, edited) in &self.writes {
+            let dest = vault.abs(path);
+            let dir = dest.parent().expect("a vault file has a folder");
+            std::fs::create_dir_all(dir).map_err(at(dir))?;
+            staged.push((vault::stage(&dest, edited.text.as_bytes()).map_err(at(&dest))?, dest));
+        }
+
         for (old, new) in &self.moves {
             let dest = vault.abs(new);
-            if let Some(parent) = dest.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::rename(vault.abs(old), &dest)?;
+            let dir = dest.parent().expect("a vault file has a folder");
+            std::fs::create_dir_all(dir).map_err(at(dir))?;
+            std::fs::rename(vault.abs(old), &dest).map_err(at(&dest))?;
         }
 
         // Writes before deletions: a failed write leaves the absorbed note in place.
-        for (path, written) in &self.writes {
-            vault::write_atomic(&vault.abs(path), written.text.as_bytes())?;
+        for (tmp, dest) in staged {
+            vault::persist(tmp, &dest).map_err(at(&dest))?;
         }
 
         for path in &self.deleted {
-            std::fs::remove_file(vault.abs(path))?;
+            let path = vault.abs(path);
+            std::fs::remove_file(&path).map_err(at(&path))?;
         }
 
         // Remove directories left empty, up to the first that is not.
@@ -104,20 +113,22 @@ impl Change {
 /// delete, whose resolved target is a key of `targets` (old target path -> new target
 /// path). Prereqs are rewritten with their note's frontmatter (m0 §6.1); one that would
 /// name its own note (the absorbing note of a merge) is removed, and returned.
-fn link_edits(
-    index: &Index,
+fn link_edits<'i>(
+    index: &'i Index,
     targets: &BTreeMap<VaultPath, VaultPath>,
     change: &Change,
-) -> (BTreeMap<VaultPath, Vec<Edit>>, Removed) {
-    let mut edits: BTreeMap<VaultPath, Vec<Edit>> = BTreeMap::new();
+) -> (Vec<(&'i Note, Vec<Edit>)>, Removed) {
+    // Written targets name files in the tree after the move.
+    let tree = index.vault().after(change);
+    let mut edits = vec![];
     let mut removed = Removed::new();
-    for note in index.notes().filter(|n| n.kind != Kind::Source && !change.deleted.contains(&n.path)) {
-        let mut prereqs = vec![];
+    for note in relinked(index, change) {
+        let (mut note_edits, mut prereqs) = (vec![], vec![]);
         for (i, link) in note.links.iter().enumerate() {
-            let Some(new) = index.link_target(note, link).and_then(|t| targets.get(&t)) else { continue };
+            let Some(new) = index.link_target(note, link).and_then(|t| targets.get(t)) else { continue };
             let Some(slug) = link.prereq_slug() else {
-                if let Some(written) = rewrite(note, link, new) {
-                    edits.entry(note.path.clone()).or_default().push(Edit::replace(link.target.span.clone(), written));
+                if let Some(written) = rewrite(&tree, note, link, new) {
+                    note_edits.push(Edit::replace(link.target.span.clone(), written));
                 }
                 continue;
             };
@@ -128,31 +139,40 @@ fn link_edits(
             if *new == change.final_path(&note.path) {
                 prereqs.push(FmChange::RenamePrereq { from, to: None });
                 removed.insert((note.path.clone(), i));
-            } else if let Some(to) = new.stem().parse::<Slug>().ok().filter(|to| to != slug) {
+            } else if let Some(to) = new.slug().filter(|to| to != slug) {
                 prereqs.push(FmChange::RenamePrereq { from, to: Some(to) });
             }
         }
 
         if !prereqs.is_empty() {
-            let edit = note.rewrite_frontmatter(&prereqs);
-            edits.entry(note.path.clone()).or_default().push(edit);
+            note_edits.push(note.rewrite_frontmatter(&prereqs));
+        }
+        if !note_edits.is_empty() {
+            edits.push((note, note_edits));
         }
     }
 
     (edits, removed)
 }
 
-/// The new written target for a body link whose target moves to `new`, named the same
-/// way (a slug stays a slug, a path a path) with its fragment kept. A link into its own
-/// note follows the note. The fragment is not checked: one that no longer resolves
-/// still follows its note (lint reports it).
-fn rewrite(note: &Note, link: &Spanned<Link>, new: &VaultPath) -> Option<String> {
+/// The notes whose links a change rewrites and checks: outside `sources/`, and not
+/// deleted by it.
+fn relinked<'i>(index: &'i Index, change: &Change) -> impl Iterator<Item = &'i Note> {
+    index.notes().filter(|n| n.kind != Kind::Source && !change.deleted.contains(&n.path))
+}
+
+/// The new written target for a body link whose target moves to `new` in `tree`, named
+/// the same way (a slug stays a slug, a path a path) with its fragment kept. A link into
+/// its own note follows the note. The fragment is not checked: one that no longer
+/// resolves still follows its note (lint reports it).
+fn rewrite(tree: &Vault, note: &Note, link: &Spanned<Link>, new: &VaultPath) -> Option<String> {
     let mut written = match &link.target.names {
         Names::ThisNote => return None,
-        Names::Slug(_) | Names::Bare(_) => new.stem().to_string(),
-        // A note is linked without `.md`, any other file with its extension.
-        Names::Path(_) => new.as_str().strip_suffix(".md").unwrap_or(new.as_str()).to_string(),
-        Names::Escaping(_) => unreachable!("an escaping path resolves to nothing, so it never moves"),
+        // `[[b.md]]` stays as written when its concept keeps its slug.
+        Names::Slug(slug) if new.stem() == slug.as_str() => return None,
+        Names::Slug(_) => new.stem().to_string(),
+        Names::Path(_) => written(tree, new),
+        Names::Bare(_) | Names::Escaping(_) => unreachable!("it resolves to nothing, so it never moves"),
     };
     if let Some(f) = &link.target.fragment {
         written.push_str(&format!("#{f}"));
@@ -170,29 +190,12 @@ fn verify(
     removed: &Removed,
     code: &'static str,
 ) -> Result<(), Refusal> {
-    let after = rebuilt(index, change);
-    for note in index.notes().filter(|n| n.kind != Kind::Source && !change.deleted.contains(&n.path)) {
+    let tree = index.vault().after(change);
+    let after = Index::open(&tree);
+    for note in relinked(index, change) {
         verify_note(index, &after, targets, change, removed, note).map_err(|why| Refusal::refused(code, why))?;
     }
     Ok(())
-}
-
-/// The index of the tree `change` would leave: its moves and deletions done, its writes
-/// in place.
-fn rebuilt(index: &Index, change: &Change) -> Index {
-    let mut files: Vec<VaultPath> =
-        index.files().iter().filter(|f| !change.deleted.contains(*f)).map(|f| change.final_path(f)).collect();
-    files.sort();
-    let contents: BTreeMap<VaultPath, String> = index
-        .notes()
-        .filter(|n| !change.deleted.contains(&n.path))
-        .map(|n| {
-            let p = change.final_path(&n.path);
-            let text = change.writes.get(&p).map_or_else(|| n.text.clone(), |w| w.text.clone());
-            (p, text)
-        })
-        .collect();
-    Index::build(files, |p| contents[p].clone())
 }
 
 /// Why `note`'s links would break in `after`, if they would. Links are paired by
@@ -223,11 +226,27 @@ fn verify_note(
 
     for (old_link, new_link) in old_links.into_iter().zip(&new_note.links) {
         let Some(before) = index.link_target(note, old_link) else { continue };
-        let expected = targets.get(&before).cloned().unwrap_or(before);
-        if after.link_target(new_note, new_link).as_ref() != Some(&expected) {
+        let expected = targets.get(before).unwrap_or(before);
+        if after.link_target(new_note, new_link) != Some(expected) {
             let written = new_link.target.text(&new_note.text);
             return Err(format!("`{written}` in {new_path} would no longer resolve to {expected}"));
         }
     }
     Ok(())
+}
+
+/// The shortest written path that resolves to `path` in `vault` ([`Vault::resolve`]):
+/// a note's without `.md`, unless that names another file. It keeps a `/` (a path
+/// without one is a bare name, m0 §5.3): a root file keeps its full path, which names
+/// nothing, so verification refuses a change that moves a linked file to the root.
+pub(crate) fn written(vault: &Vault, path: &VaultPath) -> String {
+    match path.as_str().strip_suffix(".md").filter(|s| s.contains('/')) {
+        Some(short) if vault.resolve(short) == Some(path) => short.to_string(),
+        _ => path.to_string(),
+    }
+}
+
+/// An io error with the path it was about, for `map_err`.
+fn at(path: &Path) -> impl Fn(std::io::Error) -> std::io::Error + '_ {
+    move |e| std::io::Error::new(e.kind(), format!("{}: {e}", path.display()))
 }

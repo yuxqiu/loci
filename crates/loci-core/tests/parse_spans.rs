@@ -151,27 +151,18 @@ proptest! {
                     match &b.node {
                         Block::Heading(h) => check(&text, &h.content.span, &b.span, "heading content")?,
                         Block::Paragraph { id: Some(id) } => check(&text, &id.span, &b.span, "paragraph id")?,
-                        Block::List(items) => {
-                            for i in items {
-                                check(&text, &i.span, &b.span, "item")?;
-                            }
-                        }
-                        Block::Other(children) => {
-                            for c in children {
-                                check(&text, &c.span, &b.span, "nested block")?;
-                            }
-                        }
-                        Block::Paragraph { id: None } => {}
+                        // pulldown-cmark's container ranges need not hold their children's
+                        // (a list `2..8` with an item `2..9`), so children are checked
+                        // against the text, as nodes of their own.
+                        Block::List(_) | Block::Other(_) | Block::Paragraph { id: None } => {}
                     }
                 }
                 Node::Item(i) => {
+                    check(&text, &i.span, &all, "item")?;
                     check(&text, &i.lead.span, &i.span, "item lead")?;
                     check(&text, &i.marker.span, &i.span, "item marker")?;
                     if let Some(id) = &i.id {
                         check(&text, &id.span, &i.span, "item id")?;
-                    }
-                    for c in &i.children {
-                        check(&text, &c.span, &i.span, "item block")?;
                     }
                 }
             }

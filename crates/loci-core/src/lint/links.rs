@@ -6,10 +6,11 @@ use crate::id::Slug;
 use crate::index::{Dangling, Index, LinkError};
 use crate::parse::{FmChange, Link, LinkForm, MarkdownLink, Note, Spanned};
 use crate::path::VaultPath;
+use crate::vault::Vault;
 
 pub(super) fn links(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     for note in managed(ctx) {
-        out.extend(note.markdown_links.iter().map(|m| markdown_link(note, m)));
+        out.extend(note.markdown_links.iter().map(|m| markdown_link(ctx.index.vault(), note, m)));
         out.extend(note.links.iter().filter_map(|l| unresolved(ctx.index, note, l)));
     }
 }
@@ -42,24 +43,32 @@ fn relink_fix(note: &Note, link: &Spanned<Link>, slug: &Slug) -> Fix {
 
 /// `link.markdown` for a markdown link to a vault file, with the wikilink that replaces
 /// it as the fix.
-fn markdown_link(note: &Note, m: &Spanned<MarkdownLink>) -> Diagnostic {
-    // Notes are linked without `.md`; other files keep their extension.
-    let url = m.url.strip_prefix("./").unwrap_or(&m.url);
-    let target = if m.image { url } else { url.strip_suffix(".md").unwrap_or(url) };
+fn markdown_link(vault: &Vault, note: &Note, m: &Spanned<MarkdownLink>) -> Diagnostic {
+    // The shortest wikilink target for the file the URL names; as written if it names none.
+    let resolved = vault.resolve(m.path());
+    let target = resolved.map_or_else(|| m.path().to_string(), |path| crate::relink::written(vault, path));
     let bang = if m.image { "!" } else { "" };
     let wiki = format!("{bang}[[{target}]]");
+    // No path link names a root file (§5.3), so it has no wikilink to suggest.
+    let root = resolved.is_some() && !target.contains('/');
+    let (message, hint) = if root {
+        let hint = "no wikilink names a root file: move it into a folder (`loci mv`) or drop the link".to_string();
+        (format!("a vault target must use a wikilink, and `{target}` is a root file"), hint)
+    } else {
+        (format!("a vault target must use a wikilink: `{wiki}`"), format!("write {wiki}"))
+    };
+    let diag = Diagnostic::error(Code::LinkMarkdown, message).in_note(note, m.span.clone()).with_hint(hint);
 
-    // The link text becomes the label, unless it only repeats the target.
+    // The link text becomes the label, unless it only repeats the target. No fix for a
+    // URL that names no file as written (a percent-encoded one included), a root file,
+    // or a label a wikilink cannot hold (`]]`, or a final `]`).
     let label = m.label.value(&note.text).trim();
-    let fixed = if label.is_empty() || label == target { wiki.clone() } else { format!("{bang}[[{target}|{label}]]") };
-    // A percent-encoded URL (`a%20b.md`) names a file only once decoded: a guess.
-    let applicability = if url.contains('%') { Applicability::Unsafe } else { Applicability::Safe };
-    let fix = Fix::new(applicability, format!("write {fixed}")).edit(&note.path, m.span.clone(), fixed);
-
-    Diagnostic::error(Code::LinkMarkdown, format!("a vault target must use a wikilink: `{wiki}`"))
-        .in_note(note, m.span.clone())
-        .with_hint(format!("write {wiki}"))
-        .with_fix(fix)
+    if resolved.is_none() || root || label.contains("]]") || label.ends_with(']') {
+        return diag;
+    }
+    let pipe = if m.in_table { "\\|" } else { "|" };
+    let fixed = if label.is_empty() || label == target { wiki } else { format!("{bang}[[{target}{pipe}{label}]]") };
+    diag.with_fix(Fix::new(Applicability::Safe, format!("write {fixed}")).edit(&note.path, m.span.clone(), fixed))
 }
 
 /// The diagnostic for a link that does not resolve (§5.3, §5.4), if it does not.
@@ -93,7 +102,6 @@ fn unresolved(index: &Index, note: &Note, link: &Spanned<Link>) -> Option<Diagno
         }
 
         LinkError::Heading { note: target_note, heading } => {
-            let target_note = index.parsed(&target_note).expect("a heading is checked in a parsed note");
             at(Code::LinkDanglingHeading, format!("`{target}` has no heading `{heading}`"))
                 .with_hint(headings_hint(target_note))
         }

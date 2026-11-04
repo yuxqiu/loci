@@ -14,7 +14,7 @@ use concepts::CONCEPT_FIELDS;
 use disk::DISK_CODES;
 pub use disk::disk_rules;
 
-use crate::config::{Budgets, Config, Editions, UpdateId};
+use crate::config::{Budgets, Editions, UpdateId};
 use crate::envelope::{Diagnostic, sort_diagnostics};
 use crate::index::Index;
 use crate::parse::Note;
@@ -46,7 +46,7 @@ impl Codes {
 }
 
 /// The index rules, by category (one submodule each); the output is sorted. The rules
-/// that read file bytes or git are [`disk_rules`] ([`DISK_CODES`]).
+/// that compare with git's HEAD are [`disk_rules`] ([`DISK_CODES`]).
 const RULES: &[Rule] = &[
     // Paths.
     Rule {
@@ -56,6 +56,7 @@ const RULES: &[Rule] = &[
             Code::SlugFormat,
             Code::JournalPath,
             Code::PathNotNfc,
+            Code::PathNameClash,
             Code::InboxRootFile,
         ]),
         editions: Editions::ALWAYS,
@@ -125,13 +126,14 @@ pub fn update_ids() -> Vec<UpdateId> {
 /// What a rule sees: the index, the budgets, and the vault's edition (its `updates`
 /// mark).
 struct Ctx<'a> {
-    index: &'a Index,
+    index: &'a Index<'a>,
     budgets: &'a Budgets,
     mark: Option<UpdateId>,
 }
 
 /// The rules of the vault's edition over the index (§7.3), sorted.
-pub fn run(index: &Index, config: &Config) -> Vec<Diagnostic> {
+pub fn run(index: &Index) -> Vec<Diagnostic> {
+    let config = &index.vault().config;
     let ctx = Ctx { index, budgets: &config.budgets, mark: config.updates };
     let mut out = vec![];
     for rule in RULES.iter().filter(|r| r.editions.contains(ctx.mark)) {
@@ -147,7 +149,7 @@ pub fn run(index: &Index, config: &Config) -> Vec<Diagnostic> {
     out
 }
 
-/// The managed notes (§4.1), the notes most rules read.
+/// The managed notes (§3), the notes most rules read.
 fn managed<'a>(ctx: &'a Ctx) -> impl Iterator<Item = &'a Note> {
     ctx.index.notes().filter(|n| n.kind.is_managed())
 }
@@ -159,10 +161,7 @@ mod tests {
 
     fn lint(files: &[(&str, &str)]) -> Vec<(String, String)> {
         let index = crate::testing::index(files);
-        run(&index, &Config::parse("schema = 1\n").unwrap())
-            .into_iter()
-            .map(|d| (d.path().map_or_else(String::new, ToString::to_string), d.code))
-            .collect()
+        run(&index).into_iter().map(|d| (d.path().map_or_else(String::new, ToString::to_string), d.code)).collect()
     }
 
     #[test]
@@ -189,6 +188,15 @@ mod tests {
         let index = crate::testing::index(&files);
         let x = index.parsed(&VaultPath::new("concepts/a/x.md".into()).unwrap()).unwrap();
         assert_eq!(x.links[0].target.names, crate::parse::Names::Slug("café".parse().unwrap()));
+    }
+
+    #[test]
+    fn a_note_beside_a_file_of_its_short_name() {
+        let d = lint(&[("concepts/x/x.png", ""), ("concepts/x/x.png.md", "# X\n"), ("concepts/x/y.md", "# Y\n")]);
+        let clashes: Vec<_> = d.iter().filter(|(_, c)| c == "path.name-clash").map(|(p, _)| p.as_str()).collect();
+        assert_eq!(clashes, ["concepts/x/x.png.md"]);
+        let root = lint(&[("index", ""), ("index.md", "# I\n")]);
+        assert!(!root.iter().any(|(_, c)| c == "path.name-clash"), "no path link names a root file: {root:?}");
     }
 
     const OK: &str = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# A\n\nSee [[journal/r/2025/03/25-03-14]].\n";

@@ -18,14 +18,14 @@ use frontmatter::{frontmatter, frontmatter_links};
 
 pub use blocks::{Block, BlockId, IdBlock, Lead, ListItem, Marker, Node};
 pub use frontmatter::{ConceptField, FmChange, FmEntry, FmValue, Frontmatter, new_concept_frontmatter, prereq_slug};
-pub use links::{Fragment, Label, Link, LinkForm, MarkdownLink, Names, Target, heading_key};
+pub use links::{Fragment, Label, Link, LinkForm, MarkdownLink, Names, Target, bare_slug, heading_key};
 
 pub const BOM: &str = "\u{feff}";
 
 /// A value and the bytes of the note's text it was read from (after rustc's
-/// `Spanned`). A part whose value is its bytes is spanned with a marker type naming it
-/// (a link's [`Label`]), which implements [`Written`]; [`Spanned::text`] reads the
-/// bytes of any part.
+/// `Spanned`). A part whose value is read from its bytes is spanned with a marker type
+/// naming it (a link's [`Label`]), which implements [`Written`]; [`Spanned::text`] reads
+/// the bytes of any part.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Spanned<T> {
     pub node: T,
@@ -43,8 +43,9 @@ impl<T> Spanned<T> {
     }
 }
 
-/// A part whose value is its bytes as written (§4.7): a marker type. A value that
-/// differs from its bytes (decoded YAML, a normalized link name) is stored instead.
+/// A part whose value is read from its bytes as written (§4.7): all of them by default,
+/// a block id's without its `^`. A marker type implements it. A value that needs more
+/// than its bytes (decoded YAML, a normalized link name) is stored instead.
 pub trait Written {
     /// The value of a part written as `bytes`.
     fn value(bytes: &str) -> &str {
@@ -144,7 +145,7 @@ impl std::ops::Deref for Note {
 }
 
 impl Note {
-    /// The note's title (§9.3): the first H1's raw text, else the file stem.
+    /// The note's title (§4.7): the first H1's heading text, else the file stem.
     pub fn title(&self) -> &str {
         self.headings().find(|h| h.level == 1).map_or_else(|| self.path.stem(), |h| h.content.value(&self.text))
     }
@@ -203,10 +204,9 @@ impl Markdown {
         self.sections().filter(named).map(|(h, section)| (h.clone(), h.span.end..section.end)).collect()
     }
 
-    /// The top-level blocks of every H2 section whose text is `text`.
-    pub fn section_blocks(&self, text: &str) -> Vec<&Spanned<Block>> {
-        let sections: Vec<Range<usize>> = self.h2_sections(text).into_iter().map(|(_, r)| r).collect();
-        let inside = |r: &Range<usize>| sections.iter().any(|s| s.start <= r.start && r.end <= s.end);
+    /// The top-level blocks of `sections` ([`Markdown::h2_sections`]).
+    pub fn section_blocks(&self, sections: &[(Spanned<&Heading>, Range<usize>)]) -> Vec<&Spanned<Block>> {
+        let inside = |r: &Range<usize>| sections.iter().any(|(_, s)| s.start <= r.start && r.end <= s.end);
         self.body.iter().filter(|b| inside(&b.span)).collect()
     }
 

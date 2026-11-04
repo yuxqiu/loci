@@ -6,11 +6,11 @@
 
 use std::collections::BTreeMap;
 
-use loci_core::config::Config;
 use loci_core::index::Index;
 use loci_core::lint;
 use loci_core::path::VaultPath;
 use loci_core::splice::{self, Edit};
+use loci_core::vault::Vault;
 use loci_core::{merge, mv};
 use proptest::prelude::*;
 use proptest::sample::subsequence;
@@ -21,8 +21,9 @@ fn vp(s: &str) -> VaultPath {
     VaultPath::new(s.to_string()).unwrap()
 }
 
-fn build(files: &Files) -> Index {
-    Index::build(files.keys().map(|p| vp(p)).collect(), |p| files[p.as_str()].clone())
+fn in_memory(files: &Files) -> Vault {
+    let files: Vec<(&String, &String)> = files.iter().collect();
+    loci_core::testing::vault(&files)
 }
 
 const SLUGS: &[&str] = &["alpha", "beta", "gamma-ray", "delta", "二分查找", "排序", "검색", "かな"];
@@ -156,7 +157,8 @@ proptest! {
     fn mv_keeps_resolving_links_resolving(g in vault(), pick in any::<prop::sample::Index>(), rename in any::<bool>()) {
         let from = g.movable[pick.index(g.movable.len())].clone();
         let to = destination(&from, rename);
-        let before = build(&g.files);
+        let before_vault = in_memory(&g.files);
+        let before = Index::open(&before_vault);
         let plan = match mv::plan(&before, &vp(&from), &vp(&to), |_| Ok(false), |_| false) {
             Ok(p) => p,
             Err(e) => {
@@ -167,7 +169,8 @@ proptest! {
             }
         };
         let after_files = apply_plan(&g.files, &plan);
-        let after = build(&after_files);
+        let after_vault = in_memory(&after_files);
+        let after = Index::open(&after_vault);
         let map: BTreeMap<&str, &str> = plan.moves.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
         let mapped = |p: &str| map.get(p).map_or(p.to_string(), |n| n.to_string());
         for note in before.notes() {
@@ -178,15 +181,14 @@ proptest! {
                 let Ok(r) = before.resolve(note, old) else { continue };
                 let r2 = after.resolve(new_note, new);
                 prop_assert_eq!(
-                    r2.as_ref().map(|x| x.path().to_string()),
-                    Ok(mapped(r.path().as_str())),
+                    r2.as_ref().ok().map(|x| x.path().to_string()),
+                    Some(mapped(r.path().as_str())),
                     "mv {} {}: `{}` in {} -> `{}`\n{}", from, to, old.target.text(&note.text), note.path, new.target.text(&new_note.text), new_note.text
                 );
             }
         }
         // Lint finds no new link errors.
-        let config = Config::parse("schema = 1\n").unwrap();
-        let link_errors = |i: &Index| lint::run(i, &config)
+        let link_errors = |i: &Index| lint::run(i)
             .into_iter()
             .filter(|d| d.code.starts_with("link.") || d.code == "prereqs.cycle")
             .count();
@@ -195,13 +197,14 @@ proptest! {
 
     #[test]
     fn merge_sends_links_to_the_concept_kept(g in vault(), a in any::<prop::sample::Index>(), b in any::<prop::sample::Index>()) {
-        let before = build(&g.files);
+        let before_vault = in_memory(&g.files);
+        let before = Index::open(&before_vault);
         let concepts: Vec<VaultPath> = before.concepts().map(|n| n.path.clone()).collect();
         prop_assume!(concepts.len() >= 2);
         let from = concepts[a.index(concepts.len())].clone();
         let into = concepts[b.index(concepts.len())].clone();
         prop_assume!(from != into);
-        let plan = match merge::Merge::plan(&before, &from, &into) {
+        let plan = match merge::Merge::plan(&before, before.parsed(&from).unwrap(), before.parsed(&into).unwrap()) {
             Ok(p) => p,
             // Two concepts that share a slug cannot be named by it; any other refusal is not
             // legitimate on these vaults.
@@ -210,29 +213,30 @@ proptest! {
                 return Ok(());
             }
         };
-        let after = build(&apply_plan(&g.files, &plan.change));
+        let after_vault = in_memory(&apply_plan(&g.files, &plan.change));
+        let after = Index::open(&after_vault);
         prop_assert!(after.parsed(&from).is_none(), "the absorbed note is gone");
         for note in before.notes().filter(|n| n.path != from && n.path != into && n.kind != loci_core::path::Kind::Source) {
             let new_note = after.parsed(&note.path).expect("other notes stay");
             prop_assert_eq!(note.links.len(), new_note.links.len(), "{}", note.path);
             for (old, new) in note.links.iter().zip(&new_note.links) {
                 let Some(target) = before.link_target(note, old) else { continue };
-                let expected = if target == from { into.clone() } else { target };
+                let expected = if *target == from { &into } else { target };
                 prop_assert_eq!(after.link_target(new_note, new), Some(expected), "`{}` in {}", old.target.text(&note.text), note.path);
             }
         }
         // The concept kept names no absorbed note, and no prerequisite of itself.
         let kept = after.parsed(&into).expect("the concept kept stays");
-        prop_assert!(kept.links.iter().filter_map(|l| after.link_target(kept, l)).all(|t| t != from));
+        prop_assert!(kept.links.iter().filter_map(|l| after.link_target(kept, l)).all(|t| *t != from));
         prop_assert!(after.prereqs(kept).resolved.iter().all(|p| p.path != into));
     }
 
     #[test]
     fn lint_is_deterministic(g in vault()) {
-        let config = Config::parse("schema = 1\n").unwrap();
         let run = || {
-            let i = build(&g.files);
-            loci_testkit::redact_ulids(&serde_json::to_string(&lint::run(&i, &config)).unwrap())
+            let v = in_memory(&g.files);
+            let i = Index::open(&v);
+            loci_testkit::redact_ulids(&serde_json::to_string(&lint::run(&i)).unwrap())
         };
         prop_assert_eq!(run(), run());
     }

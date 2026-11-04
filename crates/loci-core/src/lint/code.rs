@@ -31,6 +31,7 @@ codes! {
     SlugFormat => "slug.format",
     JournalPath => "journal.path",
     PathNotNfc => "path.not-nfc",
+    PathNameClash => "path.name-clash",
     InboxRootFile => "inbox.root-file",
     FileBom => "file.bom",
     FmUnterminated => "fm.unterminated",

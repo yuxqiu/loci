@@ -38,7 +38,9 @@ impl<'a> Repo<'a> {
     }
 
     /// Commits `paths` alone with `message`, as the user; returns the commit.
-    pub fn commit_paths(&self, message: &str, paths: &[&str]) -> Result<String, String> {
+    pub fn commit_paths(&self, message: &str, paths: &[VaultPath]) -> Result<String, String> {
+        let paths: Vec<&str> = paths.iter().map(VaultPath::as_str).collect();
+        let paths = paths.as_slice();
         self.run(&[&["add", "--"], paths].concat())?;
         self.run(&[&["commit", "-q", "-m", message, "--"], paths].concat())?;
         self.head()

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use loci_core::config::UpdateId;
 use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::git;
-use loci_core::path::{InboxPlace, VaultPath};
+use loci_core::path::{InboxPlace, Place, VaultPath};
 use serde_json::json;
 
 use super::Ctx;
@@ -16,7 +16,7 @@ const LISTED: usize = 10;
 
 pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
-    let files = &vault.listing().files;
+    let files = vault.files();
     let mut out = Out::default();
 
     entry_point(files, &mut out);
@@ -99,10 +99,17 @@ impl Out {
 /// The inbox: counts by folder, and the files not yet committed, which block work (at
 /// most [`LISTED`] named), then the next step.
 fn inbox(files: &[VaultPath], changes: Option<&git::Changes>, out: &mut Out) -> serde_json::Value {
-    let inbox: Vec<&VaultPath> = files.iter().filter(|f| f.inbox_place().is_some()).collect();
+    let placed: Vec<(&VaultPath, InboxPlace)> = files
+        .iter()
+        .filter_map(|f| match f.place() {
+            Ok(Some(Place::Inbox(place))) => Some((f, place)),
+            _ => None,
+        })
+        .collect();
+    let inbox: Vec<&VaultPath> = placed.iter().map(|(f, _)| *f).collect();
     let mut by_place: BTreeMap<InboxPlace, usize> = BTreeMap::new();
-    for place in inbox.iter().filter_map(|f| f.inbox_place()) {
-        *by_place.entry(place).or_default() += 1;
+    for (_, place) in &placed {
+        *by_place.entry(*place).or_default() += 1;
     }
 
     let uncommitted: Option<Vec<&VaultPath>> = changes.map(|c| {

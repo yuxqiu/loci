@@ -8,15 +8,16 @@ use crate::envelope::Diagnostic;
 use crate::git;
 use crate::index::Index;
 use crate::parse::{self, Counts, Material};
-use crate::path::VaultPath;
+use crate::path::{Place, VaultPath};
 
 /// The codes of [`disk_rules`].
 pub(super) const DISK_CODES: &[Code] = &[Code::SourcesChanged, Code::MaterialDropped, Code::GitFailed];
 
 /// The rules that compare the working tree with HEAD (§7.3): `sources.changed` and
-/// `material-dropped`. Without a HEAD there is nothing to compare; a git failure is
-/// warning `git.failed`, and neither rule is checked. Unsorted; the caller merges them
-/// with [`super::run`]'s.
+/// `material-dropped`. Without a HEAD there is nothing to compare. A git failure is
+/// warning `git.failed`: when `git status` fails neither rule is checked; when reading
+/// HEAD fails, `material-dropped` is not. Unsorted; the caller merges them with
+/// [`super::run`]'s.
 pub fn disk_rules(index: &Index, repo: git::Repo) -> Vec<Diagnostic> {
     let mut out = vec![];
     let changes = match changes_since_head(repo) {
@@ -45,7 +46,7 @@ fn changes_since_head(repo: git::Repo) -> Result<Option<git::Changes>, String> {
 
 /// `sources.changed` (§6.4): a source's content differs from HEAD at the same path.
 fn sources_changed(changes: &git::Changes, out: &mut Vec<Diagnostic>) {
-    for p in changes.modified.iter().filter(|p| p.is_source_file()) {
+    for p in changes.modified.iter().filter(|p| matches!(p.place(), Ok(Some(Place::Source { .. })))) {
         out.push(
             Diagnostic::error(Code::SourcesChanged, format!("source `{p}` differs from its committed version"))
                 .at_path(p)
@@ -96,8 +97,8 @@ fn check_material(
     // Added: what changed and new notes gained since HEAD.
     let new_files = changes.added.iter().chain(&changes.untracked).map(|p| (p, false));
     let changed = changes.modified.iter().map(|p| (p, true)).chain(new_files);
-    for (p, in_head) in changed.filter(|(p, _)| p.is_note() && index.contains(p)) {
-        let now = index.parsed(p).expect("a listed `.md` file is parsed").counts;
+    for (p, note, in_head) in changed.filter_map(|(p, in_head)| Some((p, index.parsed(p)?, in_head))) {
+        let now = note.counts;
         let before = if in_head { head(p)? } else { Counts::default() };
         for m in Material::ALL {
             tally.entry(m).or_default().added += now[m].saturating_sub(before[m]);

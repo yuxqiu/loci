@@ -97,19 +97,60 @@ fn a_dry_run_writes_nothing_and_reports_the_same_fixes() {
 }
 
 #[test]
-fn fixes_that_make_the_vault_worse_are_refused() {
-    // The unsafe fix writes `[[views/my%20note]]`, which names no file.
+fn markdown_links_no_wikilink_can_hold_get_no_fix() {
+    // A root file is named by no path link (`[[index]]` is a bare name); a label ending
+    // in `]` would end the wikilink early.
+    let v = TestVault::with_files(
+        BIN,
+        &[
+            ("index.md", "# Home\n"),
+            ("views/w.md", "# W\n"),
+            ("views/v.md", "# V\n\n[home](index.md) [a [b]](views/w.md)\n"),
+        ],
+    );
+    let tree = v.tree();
+    let (code, env) = v.run(&["lint", "--fix"]);
+    assert_eq!((code, fixed_codes(&env)), (1, vec![]), "{env:#}");
+    assert_eq!(v.tree(), tree);
+    let root =
+        with_code(&env, "link.markdown").into_iter().find(|d| d["message"].as_str().unwrap().contains("index.md"));
+    let hint = root.expect("the root link's diagnostic")["hint"].as_str().unwrap().to_string();
+    assert!(hint.contains("move it into a folder") && !hint.contains("[["), "no wikilink suggested: {hint}");
+}
+
+#[test]
+fn a_markdown_link_naming_no_file_as_written_gets_no_fix() {
+    // `views/my%20note.md` names a file only once decoded, and wikilinks are not decoded.
     let v = TestVault::with_files(
         BIN,
         &[("views/my note.md", "# My note\n"), ("views/v.md", "# V\n\n[x](views/my%20note.md)\n")],
     );
     let tree = v.tree();
-    let (code, env) = v.run(&["lint", "--fix"]);
-    assert_eq!((code, fixed_codes(&env)), (1, vec![]), "an unsafe fix is not applied by default");
     let (code, env) = v.run(&["lint", "--fix", "--unsafe-fixes"]);
-    assert_eq!((code, error_code(&env)), (1, "lint.fix-verify"), "{env:#}");
-    assert!(error_message(&env).contains("`link.dangling`"), "{env:#}");
+    assert_eq!((code, fixed_codes(&env)), (1, vec![]), "{env:#}");
     assert_eq!(v.tree(), tree);
+}
+
+#[test]
+fn a_markdown_link_in_a_table_keeps_its_cell() {
+    let table = "# V\n\n| a | b |\n|---|---|\n| [see](views/w.md) | z |\n";
+    let v = TestVault::with_files(BIN, &[("views/w.md", "# W\n"), ("views/v.md", table)]);
+    let (code, env) = v.run(&["lint", "--fix"]);
+    assert_eq!((code, fixed_codes(&env)), (0, vec!["link.markdown".to_string()]), "{env:#}");
+    assert!(v.read("views/v.md").contains("| [[views/w\\|see]] | z |"), "{}", v.read("views/v.md"));
+    let (_, env) = v.run(&["links", "views/v"]);
+    assert_eq!(env["data"]["outgoing"][0]["target"], "views/w.md", "{env:#}");
+}
+
+#[test]
+fn a_markdown_link_to_no_file_blocks_no_other_fix() {
+    let v = TestVault::with_files(
+        BIN,
+        &[("views/w.md", "# W\n"), ("views/v.md", "# V\n\n[ok](views/w.md) and [gone](views/nope.md)\n")],
+    );
+    let (code, env) = v.run(&["lint", "--fix"]);
+    assert_eq!((code, fixed_codes(&env)), (1, vec!["link.markdown".to_string()]), "{env:#}");
+    assert_eq!(v.read("views/v.md"), "# V\n\n[[views/w|ok]] and [gone](views/nope.md)\n");
 }
 
 #[test]

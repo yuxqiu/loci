@@ -1,4 +1,4 @@
-//! The body as a tree of blocks (§4.6), and block ids: a `^id` ending a list item's
+//! The body as a tree of blocks (§4.7), and block ids (§4.6): a `^id` ending a list item's
 //! lead (nested items too) or a paragraph.
 
 use std::ops::Range;

@@ -1,4 +1,4 @@
-# Spec (draft, not built): vault updates
+# Spec: vault updates
 
 Status: implemented (D176); the contract is m0 §9.11. The idea comes from
 mattabate/life-distributable's `ADDENDA.md`; the state and growth rules follow
@@ -23,7 +23,7 @@ loci ships an append-only list of updates, compiled into the binary like the
 framework rules (`share/loci/updates.md`):
 
 ```markdown
-## u0003 · 2026-11-02 · Agents read the framework rules from `loci rules`
+## u0002 · 2026-11-02 · Agents read the framework rules from `loci rules`
 
 - **Offer:** `loci status` no longer prints the framework rules. Replace
   `AGENTS.md` with the new stub so agents read them at the start of a session.

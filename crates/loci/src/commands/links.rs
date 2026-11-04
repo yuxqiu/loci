@@ -11,16 +11,19 @@ use super::Ctx;
 pub fn run(ctx: &Ctx, target: &str) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
-    let target = VaultPath::from_arg(target)?;
-
-    // A note or concept, else any other vault file (an image, a source file).
-    let path = match index.note(&target, "links.unknown") {
-        Ok(n) => n.path.clone(),
-        Err(_) if index.contains(&target) => target,
-        Err(r) => return Err(r),
+    // A note argument, else any vault file (an image, a root note) by its exact path.
+    let (path, note) = match index.note_named(target) {
+        Ok(note) => (note.path.clone(), Some(note)),
+        Err(r) => {
+            let file = VaultPath::from_arg(target)?;
+            if !index.vault().contains(&file) {
+                return Err(r);
+            }
+            let note = index.parsed(&file);
+            (file, note)
+        }
     };
 
-    let note = index.parsed(&path);
     let mut human = String::new();
     let outgoing = outgoing(&index, &path, note, &mut human);
     let incoming = incoming(&index, &path, &mut human);
@@ -39,7 +42,7 @@ fn outgoing(index: &Index, path: &VaultPath, note: Option<&Note>, human: &mut St
     for link in &note.links {
         let (line, raw) = (line_col(&note.text, link.span.start).0, link.target.text(&note.text));
         let target = index.link_target(note, link);
-        let to = target.as_ref().map_or("(unresolved)", VaultPath::as_str);
+        let to = target.map_or("(unresolved)", VaultPath::as_str);
         human.push_str(&format!("  {line}: {raw} -> {to}{}\n", form_note(link.form)));
         rows.push(json!({"line": line, "form": link.form, "raw": raw, "target": target}));
     }

@@ -6,14 +6,14 @@ use std::ops::Range;
 
 use serde::Serialize;
 
-use crate::config::Config;
 use crate::envelope::{Applicability, Diagnostic, Fix, FixEdit, Refusal};
 use crate::index::Index;
 use crate::lint::{self, Code};
 use crate::parse::{FmChange, Note};
 use crate::path::VaultPath;
-use crate::relink::{Change, Written};
+use crate::relink::{Change, Edited};
 use crate::splice::{self, Edit};
+use crate::vault::Vault;
 
 /// At most this many passes (ESLint's limit); a fix that keeps applying stops here.
 pub const PASSES: usize = 10;
@@ -67,36 +67,48 @@ impl Plan {
     /// verifies that no error code gained diagnostics and that every link that resolved
     /// still reaches the same file. Refuses (`lint.fix-verify`) when the check fails;
     /// nothing is written either way.
-    pub fn new(index: &Index, config: &Config, opts: &Options) -> Result<Plan, Refusal> {
-        Self::with_passes(index, config, opts, PASSES)
+    pub fn new(index: &Index, opts: &Options) -> Result<Plan, Refusal> {
+        Self::with_passes(index, opts, PASSES)
     }
 
     /// [`Plan::new`] with at most `passes` passes.
-    fn with_passes(index: &Index, config: &Config, opts: &Options, passes: usize) -> Result<Plan, Refusal> {
-        let mut notes: BTreeMap<VaultPath, Written> =
-            index.notes().map(|n| (n.path.clone(), Written { text: n.text.clone(), edits: 0 })).collect();
-        let before = lint::run(index, config);
+    fn with_passes(index: &Index, opts: &Options, passes: usize) -> Result<Plan, Refusal> {
+        let mut notes: BTreeMap<VaultPath, Edited> =
+            index.notes().map(|n| (n.path.clone(), Edited { text: n.text.clone(), edits: 0 })).collect();
+        let was = lint::run(index);
         let mut applied = vec![];
-        let mut current = index.clone();
-        let mut diags = before.clone();
-        for _ in 0..passes {
-            let done = apply_pass(&current, &mut notes, &diags, opts)?;
+        let mut passes_left = passes;
+        // The tree as fixed by the passes so far, once one applied a fix.
+        let mut fixed: Option<Vault> = None;
+        loop {
+            let tree;
+            let (current, diags) = match &fixed {
+                None => (index, was.clone()),
+                Some(vault) => {
+                    tree = Index::open(vault);
+                    let diags = lint::run(&tree);
+                    (&tree, diags)
+                }
+            };
+            let done = if passes_left == 0 {
+                vec![]
+            } else {
+                passes_left -= 1;
+                apply_pass(current, &mut notes, &diags, opts)?
+            };
             if done.is_empty() {
-                break;
+                verify(index, &was, current, &diags)?;
+                let changed = |p: &VaultPath, e: &Edited| index.parsed(p).is_some_and(|n| n.text != e.text);
+                let writes = notes.into_iter().filter(|(p, e)| changed(p, e)).collect();
+                // A pass with any fix to apply applies one, so fixes are left only when
+                // the passes ran out.
+                let unapplied = diags.iter().filter(|d| opts.pick(d).is_some()).count();
+                let change = Change { writes, ..Change::default() };
+                return Ok(Plan { change, applied, remaining: diags, unapplied });
             }
             applied.extend(done);
-            current = Index::build(index.files().to_vec(), |p| notes[p].text.clone());
-            diags = lint::run(&current, config);
+            fixed = Some(index.vault().after(&Change { writes: notes.clone(), ..Change::default() }));
         }
-
-        verify(index, &before, &current, &diags)?;
-        let changed = |p: &VaultPath, w: &Written| index.parsed(p).is_some_and(|n| n.text != w.text);
-        let change = Change { writes: notes.into_iter().filter(|(p, w)| changed(p, w)).collect(), ..Change::default() };
-
-        // A pass with any fix to apply applies one, so fixes are left only when the passes
-        // ran out.
-        let unapplied = diags.iter().filter(|d| opts.pick(d).is_some()).count();
-        Ok(Plan { change, applied, remaining: diags, unapplied })
     }
 }
 
@@ -106,7 +118,7 @@ impl Plan {
 /// them. Returns what it applied.
 fn apply_pass(
     index: &Index,
-    notes: &mut BTreeMap<VaultPath, Written>,
+    notes: &mut BTreeMap<VaultPath, Edited>,
     diags: &[Diagnostic],
     opts: &Options,
 ) -> Result<Vec<Applied>, Refusal> {
@@ -171,16 +183,16 @@ impl<'a> Pass<'a> {
     }
 
     /// Applies the pass to `notes`, counting its edits.
-    fn apply(mut self, notes: &mut BTreeMap<VaultPath, Written>) -> Result<(), Refusal> {
+    fn apply(mut self, notes: &mut BTreeMap<VaultPath, Edited>) -> Result<(), Refusal> {
+        // A note's frontmatter changes are one rewrite, so one edit.
         for (p, (note, cs)) in std::mem::take(&mut self.frontmatter) {
-            notes.get_mut(&p).expect("only notes are edited").edits += cs.len();
             self.text.entry(p).or_default().push(note.rewrite_frontmatter(&cs));
         }
 
         for (p, file_edits) in self.text {
-            let written = notes.get_mut(&p).expect("only notes are edited");
-            written.edits += file_edits.len();
-            written.text = splice::apply(&written.text, file_edits).map_err(|e| Refusal::internal("lint.fix", e))?;
+            let edited = notes.get_mut(&p).expect("only notes are edited");
+            edited.edits += file_edits.len();
+            edited.text = splice::apply(&edited.text, file_edits).map_err(|e| Refusal::internal("lint.fix", e))?;
         }
         Ok(())
     }
@@ -234,8 +246,12 @@ fn verify(before: &Index, was: &[Diagnostic], after: &Index, now: &[Diagnostic])
         return Err(refuse(format!("the fixes would raise the `{code}` errors from {w} to {n}")));
     }
 
-    let targets = |idx: &Index, n: &crate::parse::Note| -> Vec<VaultPath> {
-        n.links.iter().filter_map(|l| idx.link_target(n, l)).collect()
+    // Markdown links count too: a fix that turns one into a wikilink keeps its target,
+    // and one that loses it is caught.
+    let targets = |idx: &Index, n: &Note| -> Vec<VaultPath> {
+        let links = n.links.iter().filter_map(|l| idx.link_target(n, l));
+        let markdown = n.markdown_links.iter().filter_map(|m| idx.vault().resolve(m.path()));
+        links.chain(markdown).cloned().collect()
     };
 
     for note in before.notes() {
@@ -259,17 +275,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_frontmatter_rewrite_is_one_edit() {
+        let index = crate::testing::index(&[
+            ("concepts/a/x.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# X\n"),
+            ("concepts/a/y.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TW\nprereqs:\n  - [[x]]\n---\n# Y\n"),
+        ]);
+        let plan = Plan::new(&index, &Options { unsafe_fixes: false, only: None }).unwrap();
+        assert_eq!(
+            plan.change.writes.get("concepts/a/y.md").map(|w| w.edits),
+            Some(1),
+            "{:?} {:?}",
+            plan.applied,
+            plan.remaining
+        );
+    }
+
+    #[test]
+    fn verification_refuses_a_fix_that_loses_a_link() {
+        let w = ("views/w.md", "# W\n");
+        let before = crate::testing::index(&[w, ("views/v.md", "# V\n\n[[views/w]] [w](views/w.md)\n")]);
+        for v in ["# V\n\n[[views/w]] gone\n", "# V\n\ngone [w](views/w.md)\n"] {
+            let after = crate::testing::index(&[w, ("views/v.md", v)]);
+            let refused = verify(&before, &[], &after, &[]).unwrap_err();
+            assert!(refused.error.message.contains("would no longer reach views/w.md"), "{v:?}: {refused:?}");
+        }
+        let kept = crate::testing::index(&[w, ("views/v.md", "# V\n\n[[views/w]] [[views/w|w]]\n")]);
+        assert!(verify(&before, &[], &kept, &[]).is_ok(), "a markdown link become a wikilink keeps its target");
+    }
+
+    #[test]
     fn fixes_left_when_the_passes_run_out_are_counted() {
         // Two adjacent markdown links: their fixes touch, so one applies per pass.
         let index = crate::testing::index(&[
             ("concepts/a/x.md", "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# X\n"),
             ("views/v.md", "# V\n\n[x](concepts/a/x.md)[x](concepts/a/x.md)\n"),
         ]);
-        let config = Config::parse("schema = 1\n").unwrap();
         let opts = Options { unsafe_fixes: false, only: Some(Code::LinkMarkdown) };
-        let one = Plan::with_passes(&index, &config, &opts, 1).unwrap();
+        let one = Plan::with_passes(&index, &opts, 1).unwrap();
         assert_eq!((one.applied.len(), one.unapplied), (1, 1));
-        let all = Plan::new(&index, &config, &opts).unwrap();
+        let all = Plan::new(&index, &opts).unwrap();
         assert_eq!((all.applied.len(), all.unapplied), (2, 0));
     }
 }

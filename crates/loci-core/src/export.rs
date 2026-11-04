@@ -210,7 +210,7 @@ fn append(doc: &mut String, title: Option<&(u8, String)>, edited: &str) {
 /// What rewriting a unit needs: the index, where each included note is, the units'
 /// anchors, and the images collected so far.
 struct Assembly<'a> {
-    index: &'a Index,
+    index: &'a Index<'a>,
     unit_of: BTreeMap<&'a VaultPath, usize>,
     anchors: Vec<Anchors>,
     assets: Assets,

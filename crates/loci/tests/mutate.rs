@@ -42,6 +42,24 @@ fn mv_rename_rewrites_links() {
     assert_snapshot!(v.tree());
 }
 
+#[cfg(unix)]
+#[test]
+fn a_write_that_cannot_be_made_changes_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let v = TestVault::with_files(
+        BIN,
+        &[("concepts/a/x.md", concept(IDS[0], "", "# X\n")), ("views/ro/v.md", "# V\n\n[[x]]\n".into())],
+    );
+    let ro = v.root.join("views/ro");
+    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let before = v.tree();
+    let (exit, env) = v.run(&["mv", "concepts/a/x.md", "concepts/a/y.md"]);
+    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!((exit, error_code(&env)), (3, "io"), "{env:#}");
+    assert!(error_message(&env).contains("views/ro"), "the error names the path: {env:#}");
+    assert_eq!(v.tree(), before, "nothing was moved");
+}
+
 #[test]
 fn mv_rename_rewrites_path_links() {
     let v = TestVault::committed(BIN, "mv-rename");
@@ -255,7 +273,7 @@ fn block_ids_any_managed_note_and_refusals() {
 
     let before = v.tree();
     let (code, env) = block_ids(&v, "sources/docs/guide.md", "Cards");
-    assert_eq!((code, error_code(&env)), (1, "block-ids.kind"));
+    assert_eq!((code, error_code(&env)), (1, "note.kind"));
     let (code, env) = block_ids(&v, "concepts/a/cards.md", "Nope");
     assert_eq!((code, error_code(&env)), (1, "block-ids.no-section"));
     // Like every note argument, `.md` is optional and a concept slug works.

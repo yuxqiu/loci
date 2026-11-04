@@ -22,7 +22,7 @@ impl Linted {
     /// Lints the vault: core rules, disk rules and every installed plugin's.
     pub fn of(vault: &Vault) -> Self {
         let index = Index::open(vault);
-        let mut diagnostics = lint::run(&index, &vault.config);
+        let mut diagnostics = lint::run(&index);
         diagnostics.extend(lint::disk_rules(&index, vault.repo()));
         let installed = plugins();
         for p in &installed {
@@ -32,7 +32,7 @@ impl Linted {
             }
         }
         sort_diagnostics(&mut diagnostics);
-        Linted { files: index.files().len(), plugins: installed.into_iter().map(|p| p.name).collect(), diagnostics }
+        Linted { files: vault.files().len(), plugins: installed.into_iter().map(|p| p.name).collect(), diagnostics }
     }
 
     /// The `data` of `loci lint` (m0 §9.2).
@@ -109,7 +109,7 @@ fn fix_preconditions(vault: &Vault, args: &FixArgs) -> Result<Option<lint::Code>
 fn fix_vault(ctx: &Ctx, vault: &Vault, args: &FixArgs, only: Option<lint::Code>) -> Result<Report, Refusal> {
     let index = Index::open(vault);
     let opts = fix::Options { unsafe_fixes: args.unsafe_fixes, only };
-    let plan = fix::Plan::new(&index, &vault.config, &opts)?;
+    let plan = fix::Plan::new(&index, &opts)?;
     let mut human: String = plan
         .applied
         .iter()
@@ -118,7 +118,7 @@ fn fix_vault(ctx: &Ctx, vault: &Vault, args: &FixArgs, only: Option<lint::Code>)
     let linted = if args.dry_run {
         human.push_str(&super::plan_lines(&plan.change));
         // The core index rules after the fixes; nothing was written to run the rest on.
-        Linted { files: index.files().len(), plugins: vec![], diagnostics: plan.remaining }
+        Linted { files: index.vault().files().len(), plugins: vec![], diagnostics: plan.remaining }
     } else {
         plan.change.apply(vault).map_err(Refusal::io)?;
         Linted::of(&ctx.vault()?)

@@ -1,5 +1,8 @@
 //! `loci block-ids` (m0 §9.9): assign ULID block ids to the top-level blocks of a section.
 
+use std::collections::BTreeSet;
+
+use crate::envelope::Refusal;
 use crate::id::Ulid;
 use crate::parse::{Block, Note};
 use crate::splice::{self, Edit};
@@ -11,13 +14,19 @@ pub struct Assigned {
     pub id: Ulid,
 }
 
-/// Computes the new text and the assigned ids. Returns `None` when no section matches.
-pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> Ulid) -> Option<(String, Vec<Assigned>)> {
-    if note.h2_sections(heading).is_empty() {
-        return None;
+/// Computes the new text and the assigned ids. Returns `None` when no section matches;
+/// refuses (`block-ids.changed`) ids that would change the blocks they mark.
+pub fn assign(
+    note: &Note,
+    section: &str,
+    mut new_id: impl FnMut() -> Ulid,
+) -> Result<Option<(String, Vec<Assigned>)>, Refusal> {
+    let sections = note.h2_sections(section);
+    if sections.is_empty() {
+        return Ok(None);
     }
 
-    let blocks = note.section_blocks(heading);
+    let blocks = note.section_blocks(&sections);
     let text = &note.text;
 
     // Where each new id goes: the end of the leading text of an item without one (an
@@ -44,7 +53,21 @@ pub fn assign(note: &Note, heading: &str, mut new_id: impl FnMut() -> Ulid) -> O
     }
 
     let out = splice::apply(text, edits).expect("insertions at distinct block ends never overlap");
-    Some((out, assigned))
+    refuse_changed(note, &out, &assigned, section)?;
+    Ok(Some((out, assigned)))
+}
+
+/// An id must not change what it marks (a paragraph's last line `*` becomes a list item
+/// once `^id` follows it): `out` has `note`'s blocks, each assigned id a block id.
+fn refuse_changed(note: &Note, out: &str, assigned: &[Assigned], section: &str) -> Result<(), Refusal> {
+    let after = crate::parse::markdown(out.to_string());
+    let ids: BTreeSet<&str> = after.block_ids().map(|b| b.id.value(&after.text)).collect();
+    let marked = assigned.iter().all(|a| ids.contains(a.id.to_string().as_str()));
+    if marked && after.descendants().count() == note.descendants().count() {
+        return Ok(());
+    }
+    let message = format!("block ids in `## {section}` would change its blocks; add them by hand");
+    Err(Refusal::refused("block-ids.changed", message))
 }
 
 #[cfg(test)]
@@ -65,13 +88,23 @@ mod tests {
             k += 1;
             id(k)
         })
+        .unwrap()
         .unwrap();
-        let (again, more) = assign(&crate::testing::concept(&out), "Cards", || unreachable!("no new target")).unwrap();
+        let again = assign(&crate::testing::concept(&out), "Cards", || unreachable!("no new target"));
+        let (again, more) = again.unwrap().unwrap();
         assert_eq!((again.as_str(), more.len()), (out.as_str(), 0), "assigning is idempotent");
         for i in 1..=assigned.len() {
             out = out.replace(&id(i).to_string(), &format!("ID{i}"));
         }
         (out, assigned)
+    }
+
+    #[test]
+    fn ids_that_would_change_the_blocks_are_refused() {
+        for t in ["# T\n\n## Cards\n\nSteps follow\n*\n", "# T\n\n## Cards\n\n- [ ]\nAnswer text\n"] {
+            let refused = assign(&crate::testing::concept(t), "Cards", || id(1)).unwrap_err();
+            assert_eq!(refused.code(), "block-ids.changed", "{t:?}");
+        }
     }
 
     #[test]
@@ -119,6 +152,6 @@ mod tests {
     #[test]
     fn missing_section() {
         let n = crate::testing::concept("# T\n");
-        assert!(assign(&n, "Cards", || unreachable!("no section")).is_none());
+        assert!(assign(&n, "Cards", || unreachable!("no section")).unwrap().is_none());
     }
 }

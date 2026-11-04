@@ -8,6 +8,7 @@ use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::id::Ulid;
 use loci_core::index::Index;
 use loci_core::parse::{Note, Spanned};
+use loci_core::path::Kind;
 use loci_core::plugin::Skill;
 use loci_core::vault::Vault;
 use serde_json::json;
@@ -100,10 +101,12 @@ pub fn log(vault: &Vault, mut stdin: impl Read) -> Result<Report, Refusal> {
 
 pub fn state(vault: &Vault, arg: &str) -> Result<Report, Refusal> {
     let index = Index::open(vault);
-    let arg = loci_core::path::VaultPath::from_arg(arg)?;
-    let note = index.concept(&arg, "learn.unknown-concept")?;
+    let note = index.note_named(arg)?;
+    if note.kind != Kind::Concept {
+        return Err(Refusal::refused("note.kind", format!("`{}` is not a concept", note.path)));
+    }
     let Some(concept) = note.id() else {
-        return Err(Refusal::refused("learn.unknown-concept", format!("`{arg}` has no valid id")));
+        return Err(Refusal::refused("learn.unknown-concept", format!("`{}` has no valid id", note.path)));
     };
     let config = Config::load(vault)?;
     let lines = ReviewLog(vault).read()?;

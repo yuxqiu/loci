@@ -8,6 +8,7 @@ use relative_path::RelativePath;
 use crate::config::{self, Config};
 use crate::envelope::Refusal;
 use crate::path::VaultPath;
+use crate::relink::Change;
 
 /// Where the vault is (m0 §8, global options): the folder `--vault` gives, or the
 /// nearest folder holding `loci.toml` from a folder up. Both absolute.
@@ -38,14 +39,18 @@ impl VaultDir {
 pub struct Vault {
     root: PathBuf,
     pub config: Config,
-    /// The vault's files, listed once when it is opened.
-    listing: Listing,
+    /// Every file core reads (m0 §3): the files git sees (tracked, or untracked and not
+    /// ignored), minus `plugins/` and paths core never reads, listed once at open;
+    /// sorted, each once.
+    files: Vec<VaultPath>,
+    /// The text of each note among `files`.
+    texts: BTreeMap<VaultPath, String>,
 }
 
 impl Vault {
     /// Opens the vault `at` names. The root must be the root of a git work tree.
     /// Refuses with `vault.not-found`, `vault.not-git`, `file.symlink`, `file.unreadable`,
-    /// `git.failed` or `config.invalid` (m0 §8).
+    /// `git` (exit 3) or `config.invalid` (m0 §8).
     pub fn open(at: &VaultDir) -> Result<Self, Refusal> {
         let not_found = |m: String| Refusal::refused("vault.not-found", m);
         let root = match at {
@@ -76,11 +81,36 @@ impl Vault {
         // loci never reads or writes through a symlink, and reads every file it lists
         // (m0 §3). Checked here, once, so that no command has to: a vault breaking either
         // is refused before any command runs.
-        let listing = walk(&root)?;
+        let (files, texts) = walk(&root)?;
         let invalid = |m: String| Refusal::refused("config.invalid", m);
         let text = std::fs::read_to_string(root.join(config::FILE)).map_err(|e| invalid(e.to_string()))?;
         let config = Config::parse(&text).map_err(invalid)?;
-        Ok(Self { root, config, listing })
+        Ok(Self::of(root, config, files, texts))
+    }
+
+    /// The tree `change` would leave, in memory: its moves and deletions done, its
+    /// writes in place. Nothing is written.
+    pub fn after(&self, change: &Change) -> Vault {
+        let kept = |p: &&VaultPath| !change.deleted.contains(*p);
+        let mut files: Vec<VaultPath> = self.files.iter().filter(kept).map(|p| change.final_path(p)).collect();
+        files.sort();
+        let text = |(p, t): (&VaultPath, &String)| {
+            let p = change.final_path(p);
+            let t = change.writes.get(&p).map_or_else(|| t.clone(), |w| w.text.clone());
+            (p, t)
+        };
+        let texts = self.texts.iter().filter(|(p, _)| kept(p)).map(text).collect();
+        Self::of(self.root.clone(), self.config.clone(), files, texts)
+    }
+
+    /// The vault of `files` (sorted, each once) and the notes' `texts`.
+    pub(crate) fn of(
+        root: PathBuf,
+        config: Config,
+        files: Vec<VaultPath>,
+        texts: BTreeMap<VaultPath, String>,
+    ) -> Vault {
+        Vault { root, config, files, texts }
     }
 
     /// The vault's git work tree.
@@ -99,20 +129,41 @@ impl Vault {
         &self.root
     }
 
-    /// Every file core reads (m0 §3): the files git sees (tracked, or untracked and not
-    /// ignored), minus `plugins/` and paths core never reads, as listed at open.
-    pub fn listing(&self) -> &Listing {
-        &self.listing
+    /// Writes `bytes` to vault path `rel` atomically (a temporary sibling, then a
+    /// rename), creating its folders. A symlink on the way is refused (`file.symlink`):
+    /// loci never writes through one (m0 §3), and folders git ignores were not checked
+    /// when the vault was opened.
+    pub fn write(&self, rel: &VaultPath, bytes: &[u8]) -> Result<(), Refusal> {
+        if let Some(link) = symlink_on_path(&self.root, rel.as_str()) {
+            let message = format!("`{link}` is a symlink, which loci does not write through");
+            return Err(Refusal::refused("file.symlink", message));
+        }
+        let path = self.abs(rel);
+        std::fs::create_dir_all(path.parent().expect("a vault file has a folder")).map_err(Refusal::io)?;
+        write_atomic(&path, bytes).map_err(Refusal::io)
     }
-}
 
-/// The vault's files, as `walk` lists them.
-#[derive(Debug, Clone, Default)]
-pub struct Listing {
-    /// Vault-relative `/` paths, sorted by bytes.
-    pub files: Vec<VaultPath>,
-    /// The text of every `.md` file in `files`, by path.
-    pub markdown: BTreeMap<VaultPath, String>,
+    /// Every file core reads, sorted.
+    pub fn files(&self) -> &[VaultPath] {
+        &self.files
+    }
+
+    /// The text of `note`, one of the vault's notes.
+    pub(crate) fn text(&self, note: &VaultPath) -> &str {
+        &self.texts[note]
+    }
+
+    /// Whether `path` is one of the vault's files.
+    pub fn contains(&self, path: &VaultPath) -> bool {
+        self.files.binary_search(path).is_ok()
+    }
+
+    /// What a written path names (m0 §5.3): the file at exactly that path, else the note
+    /// at that path with `.md` added.
+    pub fn resolve(&self, written: &str) -> Option<&VaultPath> {
+        let file = |path: &str| self.files.binary_search_by(|f| f.as_str().cmp(path)).ok().map(|i| &self.files[i]);
+        file(written).or_else(|| file(&format!("{written}.md")))
+    }
 }
 
 /// The first symlink on the way to the listed path `name` (a folder above it, or the
@@ -137,7 +188,7 @@ fn abs(root: &Path, rel: &VaultPath) -> PathBuf {
 }
 
 /// Whether vault path `rel` is a regular file (not a symlink, a folder or missing).
-pub fn is_regular_file(root: &Path, rel: &VaultPath) -> bool {
+pub(crate) fn is_regular_file(root: &Path, rel: &VaultPath) -> bool {
     std::fs::symlink_metadata(abs(root, rel)).is_ok_and(|m| m.is_file())
 }
 
@@ -147,7 +198,7 @@ pub fn is_regular_file(root: &Path, rel: &VaultPath) -> bool {
 /// listed path is, or lies under, a symlink (`file.symlink`), and one in which any file
 /// core reads cannot be listed, read, or decoded as UTF-8, or in which any name git
 /// lists, anywhere, is not UTF-8 (`file.unreadable`): loci never runs on a guess.
-fn walk(root: &Path) -> Result<Listing, Refusal> {
+fn walk(root: &Path) -> Result<(Vec<VaultPath>, BTreeMap<VaultPath, String>), Refusal> {
     let listed = crate::git::Repo::new(root).ls_files(None).map_err(Refusal::git)?;
 
     // Git skips what it cannot read (a directory without permission) with a warning.
@@ -157,7 +208,7 @@ fn walk(root: &Path) -> Result<Listing, Refusal> {
     // Every listed name, `plugins/` and files gone from disk included, must be UTF-8.
     unreadable.extend(listed.not_utf8.iter().map(|n| format!("`{n}` has a name that is not UTF-8")));
 
-    let mut out = Listing::default();
+    let (mut files, mut texts) = (vec![], BTreeMap::new());
     let mut symlinks = vec![];
     for name in listed.names {
         // Shown escaped, so the message stays one line.
@@ -175,19 +226,19 @@ fn walk(root: &Path) -> Result<Listing, Refusal> {
             Entry::Skipped => {}
             Entry::Unreadable(why) => unreadable.push(format!("`{rel}` {why}")),
             Entry::Note(text) => {
-                out.markdown.insert(rel.clone(), text);
-                out.files.push(rel);
+                texts.insert(rel.clone(), text);
+                files.push(rel);
             }
-            Entry::File => out.files.push(rel),
+            Entry::File => files.push(rel),
         }
     }
 
     refuse_unsafe(symlinks, unreadable)?;
-    out.files.sort();
+    files.sort();
 
     // An unmerged file is listed once per conflict stage.
-    out.files.dedup();
-    Ok(out)
+    files.dedup();
+    Ok((files, texts))
 }
 
 /// Refuses the vault when a listed path is under a symlink (`file.symlink`), or when a
@@ -273,13 +324,27 @@ fn listed(header: &str, items: &[String]) -> String {
 }
 
 /// Writes a file via a temporary sibling and a rename, so readers never see a partial file.
-pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+/// A file it replaces keeps its permissions.
+fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    persist(stage(path, bytes)?, path)
+}
+
+/// `bytes` in a uniquely named file in `path`'s folder, synced, not yet in its place
+/// ([`persist`]).
+pub(crate) fn stage(path: &Path, bytes: &[u8]) -> std::io::Result<tempfile::NamedTempFile> {
     use std::io::Write;
-    // A uniquely named file in the same folder, synced before it replaces `path`.
     let mut tmp = tempfile::NamedTempFile::new_in(path.parent().expect("an absolute file path has a folder"))?;
     tmp.write_all(bytes)?;
     tmp.as_file().sync_all()?;
-    tmp.persist(path).map(|_| ()).map_err(|e| e.error)
+    Ok(tmp)
+}
+
+/// Puts a staged file in place of `path`; a file it replaces keeps its permissions.
+pub(crate) fn persist(tmp: tempfile::NamedTempFile, path: &Path) -> std::io::Result<()> {
+    if let Ok(meta) = std::fs::metadata(path) {
+        tmp.as_file().set_permissions(meta.permissions())?;
+    }
+    tmp.persist(path).map(drop).map_err(|e| e.error)
 }
 
 /// Copies the directory `from` to `to`, recursively, leaving out the entries of `from`
@@ -295,4 +360,45 @@ pub fn copy_dir(from: &Path, to: &Path, skip: &[&str]) -> std::io::Result<()> {
         if entry.file_type()?.is_dir() { copy_dir(&src, &dst, &[])? } else { std::fs::copy(&src, &dst).map(|_| ())? }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn written_paths_resolve_exactly_then_with_md() {
+        let v =
+            crate::testing::vault(&[("a.md", ""), ("a.md.md", ""), ("x.png", ""), ("x.png.md", ""), ("n/b.md", "")]);
+        let resolve = |w: &str| v.resolve(w).map(VaultPath::as_str);
+        assert_eq!(resolve("n/b"), Some("n/b.md"), "a note without `.md`");
+        assert_eq!(resolve("a"), Some("a.md"));
+        assert_eq!(resolve("a.md"), Some("a.md"), "an exact path first");
+        assert_eq!(resolve("a.md.md"), Some("a.md.md"));
+        assert_eq!(resolve("x.png"), Some("x.png"));
+        assert_eq!(resolve("x.png.md"), Some("x.png.md"));
+        assert_eq!(resolve("nope"), None);
+        // Each written form resolves back to its file.
+        for f in v.files() {
+            assert_eq!(v.resolve(&crate::relink::written(&v, f)), Some(f), "{f}");
+        }
+        let written = |p: &str| crate::relink::written(&v, &VaultPath::new(p.into()).unwrap());
+        assert_eq!(
+            (written("n/b.md"), written("a.md.md"), written("x.png.md")),
+            ("n/b".into(), "a.md.md".into(), "x.png.md".into())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_rewritten_file_keeps_its_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("v.md");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).unwrap();
+        write_atomic(&path, b"new").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!((std::fs::read_to_string(&path).unwrap(), mode), ("new".into(), 0o664));
+    }
 }

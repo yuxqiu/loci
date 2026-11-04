@@ -60,7 +60,7 @@ fn merge_refusals_write_nothing() {
     let (code, env) = v.run(&["merge", "bfs", "bfs"]);
     assert_eq!((code, error_code(&env)), (1, "merge.same"));
     let (code, env) = v.run(&["merge", "views/plan.md", "bfs"]);
-    assert_eq!((code, error_code(&env)), (1, "merge.not-concept"));
+    assert_eq!((code, error_code(&env)), (1, "note.kind"));
     assert_eq!(v.tree(), before);
 }
 
@@ -86,7 +86,7 @@ fn closure_orders_prerequisites_first() {
     assert_eq!(human, "- [[base]]\n- [[mid]]\n");
 
     let (code, env) = v.run(&["closure", "missing"]);
-    assert_eq!((code, error_code(&env)), (1, "closure.unknown"));
+    assert_eq!((code, error_code(&env)), (1, "note.unknown"));
     // A concept path is accepted in the same forms as elsewhere (`./`, `.md`).
     let (code, env) = v.run(&["closure", "./concepts/g/top.md"]);
     assert_eq!(code, 0, "{env:#}");
@@ -219,9 +219,9 @@ fn export_collects_links_and_assets() {
 fn export_refusals() {
     let v = vault(&[("areas/g/AREA.md", "# G\n".into())]);
     let (code, env) = v.run(&["export", "nothing"]);
-    assert_eq!((code, error_code(&env)), (1, "export.unknown"));
+    assert_eq!((code, error_code(&env)), (1, "note.unknown"));
     let (code, env) = v.run(&["export", "areas/g/AREA.md"]);
-    assert_eq!((code, error_code(&env)), (1, "export.kind"));
+    assert_eq!((code, error_code(&env)), (1, "note.kind"));
 }
 
 /// HTML is rendered by loci itself and needs no network: every `#anchor` link points at
@@ -250,6 +250,27 @@ fn export_html_is_rendered_in_process() {
         assert!(!page.contains("http"), "nothing from the network: {page}");
     }
     assert!(!v.exists("assets"), "no images, no assets folder");
+}
+
+#[test]
+fn export_does_not_write_through_a_symlink() {
+    // `.loci/` is gitignored, so `Vault::open` does not see the link.
+    let v = vault(&[("views/plan.md", "# Plan\n".to_string()), (".gitignore", ".loci/\n".to_string())]);
+    let elsewhere = v.tmp.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::create_dir_all(v.root.join(".loci")).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, v.root.join(".loci/export")).unwrap();
+    let (code, env) = v.run(&["export", "views/plan"]);
+    assert_eq!((code, error_code(&env)), (1, "file.symlink"), "{env:#}");
+    assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none(), "nothing written through the link");
+}
+
+#[test]
+fn links_of_a_root_note_named_like_a_slug() {
+    let v = vault(&[("index.md", "# Home\n\n[[views/w]]\n".to_string()), ("views/w.md", "# W\n".to_string())]);
+    let (code, env) = v.run(&["links", "index.md"]);
+    assert_eq!(code, 0, "{env:#}");
+    assert_eq!(env["data"]["outgoing"][0]["target"], "views/w.md", "{env:#}");
 }
 
 #[test]
@@ -332,5 +353,5 @@ fn links_lists_outgoing_and_incoming() {
     assert_eq!(env["data"]["outgoing"], json!([]));
 
     let (code, env) = v.run(&["links", "views/nothing"]);
-    assert_eq!((code, error_code(&env)), (1, "links.unknown"));
+    assert_eq!((code, error_code(&env)), (1, "note.unknown"));
 }

@@ -40,7 +40,7 @@ pub struct Label;
 
 impl Written for Label {}
 
-/// How a target names a note or file (§5.2, §5.3): normalised (`.md` dropped, NFC).
+/// How a target names a note or file (§5.2, §5.3), in NFC.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Names {
     /// `[[#heading]]`: the linking note itself.
@@ -52,7 +52,7 @@ pub enum Names {
     /// `[[concepts/a/bfs]]`: any vault file, by path.
     Path(String),
     /// `[[../x]]`, `[[/x]]`: a path that climbs out or starts at the root, so it names
-    /// nothing (`link.path-form`, §5.2).
+    /// nothing (`link.path-form`, §5.3).
     Escaping(String),
 }
 
@@ -119,6 +119,15 @@ pub struct MarkdownLink {
     pub image: bool,
     /// The link text (an image's alt text); empty when there is none.
     pub label: Spanned<Label>,
+    /// In a table cell, where a wikilink's `|` is written `\|`.
+    pub in_table: bool,
+}
+
+impl MarkdownLink {
+    /// The URL as a written vault path, a leading `./` dropped.
+    pub fn path(&self) -> &str {
+        self.url.strip_prefix("./").unwrap_or(&self.url)
+    }
 }
 
 /// The wikilink (`[[target|label]]`) or embed (`![[…]]`) written at `range` of `text`
@@ -146,6 +155,12 @@ pub(super) fn prereq(span: Range<usize>, slug: Slug) -> Spanned<Link> {
     Spanned::new(Link { form: LinkForm::Prereq, target, label: None }, span)
 }
 
+/// The slug a bare name (no `/`) names (§5.3): the concept whose file name it is,
+/// exactly (`bfs.md`) or with `.md` added (`bfs`).
+pub fn bare_slug(name: &str) -> Option<Slug> {
+    name.strip_suffix(".md").unwrap_or(name).parse().ok()
+}
+
 /// The target `written` at byte `start` (§5.2): what it names and its fragment. `None`
 /// for an empty one (`[[]]`).
 fn read_target(written: &str, start: usize) -> Option<Spanned<Target>> {
@@ -154,13 +169,13 @@ fn read_target(written: &str, start: usize) -> Option<Spanned<Target>> {
         Some((name, frag)) => (name, Some(Fragment::parse(frag))),
         None => (s, None),
     };
-    let name = crate::path::nfc(name.strip_suffix(".md").unwrap_or(name));
+    let name = crate::path::nfc(name);
     let names = match name {
         _ if name.is_empty() && fragment.is_none() => return None,
         _ if name.is_empty() => Names::ThisNote,
         _ if name.starts_with('/') || name.split('/').any(|s| s == "..") => Names::Escaping(name),
         _ if name.contains('/') => Names::Path(name),
-        _ => name.parse().map_or(Names::Bare(name), Names::Slug),
+        _ => bare_slug(&name).map_or(Names::Bare(name), Names::Slug),
     };
     Some(Spanned::new(Target { names, fragment }, start..start + written.len()))
 }
@@ -174,8 +189,11 @@ mod tests {
     #[test]
     fn targets() {
         let slug = |n: &str| Names::Slug(n.parse().unwrap());
-        let t = read_target(" a.md#H ", 0).unwrap();
+        let t = read_target(" a#H ", 0).unwrap();
         assert_eq!((t.node.names, t.node.fragment), (slug("a"), Some(Fragment::Heading("H".into()))));
+        assert_eq!(read_target("a.md", 0).unwrap().names, slug("a"), "the concept file `a.md`");
+        assert_eq!(read_target("a.md.md", 0).unwrap().names, Names::Bare("a.md.md".into()), "no concept's file name");
+        assert_eq!(read_target("x/a.md", 0).unwrap().names, Names::Path("x/a.md".into()), "kept as written");
         assert_eq!(read_target("a#^b1", 0).unwrap().fragment, Some(Fragment::Block("b1".into())));
         assert_eq!(read_target("#h", 0).unwrap().names, Names::ThisNote);
         assert_eq!(read_target("x/y.png", 0).unwrap().names, Names::Path("x/y.png".into()));

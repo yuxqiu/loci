@@ -20,6 +20,10 @@ toml_edit = "0.25.17"
 tempfile = "3.27.0"
 relative-path = "2.0.3"
 
+[features]
+# The `testing` module, for other crates' tests.
+testing = []
+
 [dev-dependencies]
 insta = "1.49.0"
 proptest = "1.12.0"

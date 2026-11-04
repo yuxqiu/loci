@@ -4,8 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::envelope::Refusal;
 use crate::index::Index;
-use crate::path::{Kind, VaultPath};
+use crate::path::{Kind, Place, VaultPath};
 use crate::relink::Change;
+use crate::vault::Vault;
 
 /// Computes the move of `from` to `to` without writing: `from` as stored
 /// ([`stored_name`]). `ignored` tells whether a vault path is gitignored, and `exists`
@@ -51,10 +52,11 @@ fn refuse_ends(
 /// Every file the move renames, old path -> new path: `from` itself, or every file
 /// under folder `from`.
 fn moves(index: &Index, from: &VaultPath, to: &VaultPath) -> Result<BTreeMap<VaultPath, VaultPath>, Refusal> {
-    if index.contains(from) {
+    if index.vault().contains(from) {
         return Ok(BTreeMap::from([(from.clone(), to.clone())]));
     }
     let moves: BTreeMap<VaultPath, VaultPath> = index
+        .vault()
         .files()
         .iter()
         .filter(|f| f.starts_with_folder(from))
@@ -67,12 +69,14 @@ fn moves(index: &Index, from: &VaultPath, to: &VaultPath) -> Result<BTreeMap<Vau
 }
 
 /// Every moved file stays what it is, and its new path follows the path rules lint
-/// checks (`VaultPath::problem`).
+/// checks ([`VaultPath::place`]).
 fn refuse_changed_kinds(moves: &BTreeMap<VaultPath, VaultPath>) -> Result<(), Refusal> {
     // A source can be renamed, keeping its extension, but not moved out of `sources/`.
-    if let Some((_, new)) =
-        moves.iter().find(|(old, new)| old.source_ext().is_some_and(|ext| new.source_ext() != Some(ext)))
-    {
+    let ext = |p: &VaultPath| match p.place() {
+        Ok(Some(Place::Source { ext })) => Some(ext.to_string()),
+        _ => None,
+    };
+    if let Some((_, new)) = moves.iter().find(|(old, new)| ext(old).is_some_and(|e| ext(new) != Some(e))) {
         return Err(Refusal::refused(
             "mv.source-file",
             format!("`{new}` is not a `sources/<type>/<slug>.<ext>` file with the same extension"),
@@ -95,10 +99,9 @@ fn refuse_changed_kinds(moves: &BTreeMap<VaultPath, VaultPath>) -> Result<(), Re
 
     // The path rules come before the case advice below, so it never leads to a name
     // lint rejects.
-    if let Some((new, problem)) = moves.values().find_map(|n| n.problem().map(|p| (n, p))) {
-        return Err(Refusal::refused(problem.code(), format!("`{new}`: {problem}")));
+    for new in moves.values() {
+        new.place().map_err(|problem| problem.refusal(new))?;
     }
-
     Ok(())
 }
 
@@ -109,8 +112,8 @@ fn refuse_unsafe_destination(
     to: &VaultPath,
     exists: &impl Fn(&VaultPath) -> bool,
 ) -> Result<(), Refusal> {
-    refuse_case_twin(index, to, Some(from))?;
-    if exists(to) || index.has_entry(to) {
+    refuse_case_twin(index.vault(), to, Some(from))?;
+    if exists(to) || has_entry(index.vault(), to) {
         return Err(Refusal::refused("mv.exists", format!("`{to}` already exists")));
     }
 
@@ -123,8 +126,8 @@ fn refuse_unsafe_destination(
 /// (macOS) it is the existing file or folder, and git with `core.ignorecase` keeps the
 /// existing spelling, so rewritten links would dangle; on other systems it makes twin
 /// folders.
-pub fn refuse_case_twin(index: &Index, to: &VaultPath, source: Option<&VaultPath>) -> Result<(), Refusal> {
-    let Some((existing, asked)) = index.case_twin(to) else { return Ok(()) };
+pub fn refuse_case_twin(vault: &Vault, to: &VaultPath, source: Option<&VaultPath>) -> Result<(), Refusal> {
+    let Some((existing, asked)) = case_twin(vault, to) else { return Ok(()) };
     // `git mv -f` fits only a case-only rename of the source itself; for anyone else's
     // name it would make the twin, or on macOS overwrite the other file.
     let what_to_do = match source {
@@ -162,8 +165,8 @@ fn refuse_lost_files(
 /// that stays nor with another moved file.
 fn refuse_slug_collisions(index: &Index, moves: &BTreeMap<VaultPath, VaultPath>) -> Result<(), Refusal> {
     let mut new_slugs = BTreeSet::new();
-    for new in moves.values().filter(|n| n.kind() == Some(Kind::Concept)) {
-        let slug = new.slug().expect("`problem` refused a concept whose stem is no slug");
+    for new in moves.values() {
+        let Ok(Some(Place::Concept { slug, .. })) = new.place() else { continue };
         let taken = index.concepts_named(slug.as_str()).iter().any(|p| !moves.contains_key(p));
         if taken || !new_slugs.insert(slug.clone()) {
             return Err(Refusal::refused("mv.collision", format!("slug `{slug}` is already used")));
@@ -176,11 +179,12 @@ fn refuse_slug_collisions(index: &Index, moves: &BTreeMap<VaultPath, VaultPath>)
 /// one stored file or folder whose name has `from` as its NFC form (`path.not-nfc`), so
 /// that `mv` can fix it. Two stored spellings are ambiguous.
 pub fn stored_name(index: &Index, from: &VaultPath) -> Result<VaultPath, Refusal> {
-    if index.has_entry(from) {
+    if has_entry(index.vault(), from) {
         return Ok(from.clone());
     }
     let depth = from.components().count();
     let spellings: BTreeSet<VaultPath> = index
+        .vault()
         .files()
         .iter()
         .filter(|f| {
@@ -194,6 +198,28 @@ pub fn stored_name(index: &Index, from: &VaultPath) -> Result<VaultPath, Refusal
         1 => Ok(spellings.into_iter().next().expect("one spelling")),
         _ => Err(Refusal::refused("mv.from", format!("`{from}` names several stored spellings; rename one with git"))),
     }
+}
+
+/// Whether the vault has a file at `path`, or a folder (files under `path/`).
+fn has_entry(vault: &Vault, path: &VaultPath) -> bool {
+    vault.files().iter().any(|f| f == path || f.starts_with_folder(path))
+}
+
+/// The first folder or file on the way to `path` whose name differs from an existing
+/// one only in letter case, as (existing, asked) (m0 §9.5). A name that exists
+/// exactly is no twin. `new` and `mv` refuse one ([`refuse_case_twin`]).
+fn case_twin(vault: &Vault, path: &VaultPath) -> Option<(VaultPath, VaultPath)> {
+    (1..=path.components().count()).find_map(|k| {
+        let asked = path.head(k).expect("`k` is at most the number of segments");
+        if has_entry(vault, &asked) {
+            return None;
+        }
+        vault.files().iter().find_map(|f| {
+            let existing = f.head(k)?;
+            (existing != asked && existing.as_str().to_lowercase() == asked.as_str().to_lowercase())
+                .then(|| (existing, asked.clone()))
+        })
+    })
 }
 
 #[cfg(test)]
@@ -217,6 +243,13 @@ mod tests {
             p.writes["views/w.md"].text,
             "[[depth-first#Typo]] [[concepts/a/depth-first#^nope]] [[depth-first]]\n"
         );
+    }
+
+    #[test]
+    fn a_link_by_file_name_stays_when_the_slug_does() {
+        let i = crate::testing::index(&[("concepts/a/b.md", C), ("views/v.md", "[[b.md]] [[concepts/a/b]]\n")]);
+        let p = plan(&i, &vp("concepts/a/b.md"), &vp("concepts/c/b.md"), |_| Ok(false), |_| false).unwrap();
+        assert_eq!(p.writes["views/v.md"].text, "[[b.md]] [[concepts/c/b]]\n");
     }
 
     #[test]

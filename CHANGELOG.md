@@ -8,6 +8,8 @@ them under its version.
 
 ### Added
 
+- `path.name-clash` (warning): a note `x.md` in a folder beside a file `x`, which
+  `[[x]]` names.
 - `loci lint --fix`: applies the fixes that keep the meaning (a missing id, a
   markdown link to a vault file, an unquoted prereq, a byte-order mark, a name not in
   NFC), checks that nothing got worse, then writes. `--unsafe-fixes` adds likely
@@ -20,7 +22,8 @@ them under its version.
   with its fix, which `loci lint --fix --only update.<id>` applies. Once the update is
   handled, what is left is an ordinary lint error.
 - `loci mv --dry-run` and `loci merge --dry-run` report the change without writing.
-- `loci links <note>`: a note's links and the links pointing at it.
+- `loci links <note>` (or any vault file by its path): a note's links and the links
+  pointing at it.
 - `loci done`: agents finish every task with it. It lints, then records the agent's
   result as a local git ref (`refs/loci/agent/<commit>`), so the `improve` skill
   can see exactly what you changed afterwards. `loci status` counts the records.
@@ -31,6 +34,22 @@ them under its version.
 
 ### Changed
 
+- A note argument that names no note is `note.unknown`, and a note of the wrong kind
+  `note.kind`, in every command (replacing `closure.unknown`, `export.unknown`,
+  `links.unknown`, `export.kind`, `block-ids.kind`, `merge.not-concept`, and
+  `learn.unknown-concept` for `learn state`'s argument).
+- Path links name the file at exactly that path, else the note with `.md` added, so
+  every file is reachable by its full path (`[[x.png]]` beside a note `x.png.md`); a
+  bare link names a concept by its file name, with or without `.md`. Note arguments
+  read the same way.
+- `link.markdown`'s fix escapes the `|` inside a table, and is offered only when the
+  URL names a vault file in a folder and the link text can be a wikilink label;
+  `lint --fix` refuses a fix that loses a link.
+- Rewritten files keep their permissions, `mv` and `merge` stage every write before
+  renaming anything, `loci export` refuses a symlink in `.loci/export/`
+  (`file.symlink`), `loci block-ids` refuses ids that would change the blocks they mark
+  (`block-ids.changed`), and `loci learn log` starts a new line after a log line that
+  lost its line break.
 - `lint --json` shows a frontmatter fix as the change it makes (`{"path",
   "frontmatter": {"rename-prereq": {"from": "queu", "to": "queue"}}}`), not as a
   rewritten block, and `lint --fix` applies all of a note's frontmatter fixes at once.

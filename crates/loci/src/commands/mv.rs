@@ -3,7 +3,7 @@
 use loci_core::envelope::{Refusal, Report};
 use loci_core::git;
 use loci_core::index::Index;
-use loci_core::path::VaultPath;
+use loci_core::path::{Place, VaultPath};
 
 use loci_core::mv;
 use loci_core::relink::Change;
@@ -70,7 +70,7 @@ fn refuse_partial_folder(vault: &Vault, from: &VaultPath, plan: &Change) -> Resu
 /// carry the edit past lint as a plain rename.
 fn refuse_changed_source(vault: &Vault, plan: &Change) -> Result<(), Refusal> {
     let changed = vault.repo().status().map_err(Refusal::git)?.modified;
-    match plan.moves.keys().find(|p| p.is_source_file() && changed.contains(p)) {
+    match plan.moves.keys().find(|p| matches!(p.place(), Ok(Some(Place::Source { .. }))) && changed.contains(p)) {
         None => Ok(()),
         Some(p) => Err(Refusal::refused(
             "mv.source-changed",
