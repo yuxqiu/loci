@@ -84,13 +84,13 @@ impl Plan {
             let reindexed = fixed.as_ref().map(Index::open);
             let current = reindexed.as_ref().unwrap_or(index);
             let diags = reindexed.as_ref().map_or_else(|| was.clone(), lint::run);
-            let done = if passes_left == 0 {
+            let this_pass = if passes_left == 0 {
                 vec![]
             } else {
                 passes_left -= 1;
                 apply_pass(current, &mut notes, &diags, opts)?
             };
-            if done.is_empty() {
+            if this_pass.is_empty() {
                 verify(index, &was, current, &diags)?;
                 let changed = |p: &VaultPath, e: &Edited| index.note_at(p).is_some_and(|n| n.text != e.text);
                 let writes = notes.into_iter().filter(|(p, e)| changed(p, e)).collect();
@@ -100,7 +100,7 @@ impl Plan {
                 let change = Change { writes, ..Change::default() };
                 return Ok(Plan { change, applied, remaining: diags, unapplied });
             }
-            applied.extend(done);
+            applied.extend(this_pass);
             fixed = Some(index.vault().after(&Change { writes: notes.clone(), ..Change::default() }));
         }
     }

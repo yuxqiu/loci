@@ -239,12 +239,6 @@ impl VaultPath {
         name.expect("a vault path ends in a name")
     }
 
-    /// The slug a concept file names: its stem, if that is a slug (§6.2; an upper-case
-    /// stem is none).
-    pub fn slug(&self) -> Option<Slug> {
-        self.stem().parse().ok()
-    }
-
     /// Where this file is, parsed from its path with what the layout gives it, or the
     /// path rule it breaks (m0 §3, §6.2, §6.4, §6.6): lint reports one; `new` and `mv`
     /// refuse a destination that breaks one, with the same code. `Ok(None)` for a path

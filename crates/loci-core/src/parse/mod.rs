@@ -77,7 +77,7 @@ impl<T> std::ops::Deref for Spanned<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Heading {
     pub level: u8,
-    /// The heading text (§4.6).
+    /// The heading's content as written; its §4.6 heading text is `links::one_line` of it.
     pub content: Spanned<HeadingText>,
     /// A setext heading (text over a `===` or `---` underline), not an ATX one.
     pub setext: bool,

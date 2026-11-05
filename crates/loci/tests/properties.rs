@@ -206,7 +206,7 @@ proptest! {
             // Two concepts that share a slug cannot be named by it; any other refusal is not
             // legitimate on these vaults.
             Err(e) => {
-                prop_assert!(before.concepts_named(&from.slug().unwrap()).len() > 1, "merge {} {}: {}", from, into, e.error.message);
+                prop_assert!(before.concepts_named(&from.stem().parse().unwrap()).len() > 1, "merge {} {}: {}", from, into, e.error.message);
                 return Ok(());
             }
         };

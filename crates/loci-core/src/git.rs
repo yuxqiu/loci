@@ -39,19 +39,43 @@ impl<'a> Repo<'a> {
         self.run(&["add", "-N", "--", path.as_str()]).map(drop)
     }
 
-    /// Commits `paths` alone with `message`, as the user; returns the commit. When the
-    /// commit fails (a hook refuses it), `paths` are unstaged again.
+    /// Commits `paths` alone with `message`, as the user; returns the commit. When adding
+    /// or committing fails (an ignored path, a hook refusing the commit), `paths` are
+    /// unstaged again: git adds what it may before refusing.
     pub fn commit_paths(&self, message: &str, paths: &[VaultPath]) -> Result<String, String> {
         let paths: Vec<&str> = paths.iter().map(VaultPath::as_str).collect();
         let paths = paths.as_slice();
-        self.run(&[&["add", "--"], paths].concat())?;
-        if let Err(e) = self.run(&[&["commit", "-q", "-m", message, "--"], paths].concat()) {
+        let committed = self
+            .run(&[&["add", "--"], paths].concat())
+            .and_then(|_| self.run(&[&["commit", "-q", "-m", message, "--"], paths].concat()));
+        if let Err(e) = committed {
             return Err(match self.run(&[&["reset", "-q", "--"], paths].concat()) {
                 Ok(_) => e,
                 Err(r) => format!("{e}; unstaging the paths also failed: {r}"),
             });
         }
         self.head()
+    }
+
+    /// Makes `to/.git` a repository of its own with this one's history, HEAD and index,
+    /// so that commits in a copy of the work tree at `to` stay there. It copies the
+    /// repository's folder (in a linked worktree or a submodule, `.git` is only a file
+    /// naming it, shared with the copy), then a linked worktree's own folder (HEAD,
+    /// index, split index) over it, without `NOT_COPIED`; the copy's work tree is `to`.
+    pub fn copy_to(&self, to: &Path) -> Result<(), String> {
+        let git_path = |arg: &str| -> Result<PathBuf, String> {
+            path_line(self.run(&["rev-parse", "--path-format=absolute", arg])?, arg).map(PathBuf::from)
+        };
+        let (common, own) = (git_path("--git-common-dir")?, git_path("--git-dir")?);
+        let dot_git = to.join(".git");
+        for dir in if own == common { vec![common] } else { vec![common, own] } {
+            crate::vault::copy_dir(&dir, &dot_git, &NOT_COPIED).map_err(|e| e.to_string())?;
+        }
+        // A submodule's config names its work tree. The file by name, so no repository
+        // lookup (`GIT_DIR`) can redirect the write.
+        let mut set = Command::new("git");
+        set.arg("config").arg("--file").arg(dot_git.join("config")).arg("core.worktree").arg(to);
+        stdout(&mut set, "config core.worktree").map(drop)
     }
 
     /// The id of the commit `HEAD` names.
@@ -164,12 +188,9 @@ impl<'a> Repo<'a> {
     /// in HEAD's tree (a deletion may be only there). Together these are every name git
     /// reports without `--ignored` (m0 §3); ignored files loci never names.
     pub(crate) fn ls_files(&self) -> Result<LsFiles, String> {
-        let out =
-            checked(self.git().args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]), "ls-files")?;
+        let out = checked(self.git().args(LS_FILES), "ls-files")?;
         let (paths, mut bad_names) = names(nul_separated(&out.stdout));
-        if self.has_head()? {
-            bad_names.extend(names(nul_separated(&self.run(&["ls-tree", "-r", "-z", "--name-only", "HEAD"])?)).1);
-        }
+        bad_names.extend(names(nul_separated(&self.head_names()?)).1);
         let stderr = String::from_utf8_lossy(&out.stderr);
         let warnings = stderr.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect();
         Ok(LsFiles { paths, bad_names, warnings })
@@ -180,15 +201,15 @@ impl<'a> Repo<'a> {
     pub fn ls_folder(&self, folder: &VaultPath) -> Result<Vec<VaultPath>, String> {
         // A vault path, never a pattern: `*` or `?` in a folder name is literal.
         let pathspec = format!(":(literal){folder}");
-        vault_paths(nul_separated(&self.run(&[
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "--",
-            &pathspec,
-        ])?))
+        vault_paths(nul_separated(&self.run(&[&LS_FILES[..], &["--", &pathspec]].concat())?))
+    }
+
+    /// The names in HEAD's tree, NUL-separated; none without a commit.
+    fn head_names(&self) -> Result<Vec<u8>, String> {
+        if !self.has_head()? {
+            return Ok(vec![]);
+        }
+        self.run(&["ls-tree", "-r", "-z", "--name-only", "HEAD"])
     }
 
     /// Whether the repository has a commit.
@@ -232,13 +253,7 @@ impl<'a> Repo<'a> {
             "--ignore-submodules=all",
         ])?;
         let (changed, untracked) = parse_status(&out)?;
-        let head_files: BTreeSet<VaultPath> = if self.has_head()? {
-            vault_paths(nul_separated(&self.run(&["ls-tree", "-r", "-z", "--name-only", "HEAD"])?))?
-                .into_iter()
-                .collect()
-        } else {
-            BTreeSet::new()
-        };
+        let head_files: BTreeSet<VaultPath> = vault_paths(nul_separated(&self.head_names()?))?.into_iter().collect();
 
         let mut ch = Changes { untracked, ..Changes::default() };
         for path in changed {
@@ -258,6 +273,13 @@ impl<'a> Repo<'a> {
 /// `what`.
 fn output(cmd: &mut Command, what: &str) -> Result<Output, String> {
     cmd.stdin(Stdio::null()).output().map_err(|e| format!("git {what}: {e}"))
+}
+
+/// The environment variables that point git at a repository other than the one it
+/// would find (`git rev-parse --local-env-vars`: `GIT_DIR`, `GIT_INDEX_FILE`, …).
+pub fn location_vars() -> Result<Vec<String>, String> {
+    let out = stdout(Command::new("git").args(["rev-parse", "--local-env-vars"]), "rev-parse --local-env-vars")?;
+    Ok(String::from_utf8_lossy(&out).lines().map(str::to_string).collect())
 }
 
 /// The error for a git command that ran and failed: `what` and git's stderr.
@@ -289,6 +311,14 @@ fn unix_seconds(t: SystemTime) -> u64 {
 fn trimmed(out: Vec<u8>) -> String {
     String::from_utf8_lossy(&out).trim().to_string()
 }
+
+/// What [`Repo::copy_to`] leaves out of a git folder: the linked worktrees, the files
+/// that link a worktree's own folder back to its repository, and the socket git's
+/// fsmonitor daemon listens on (a socket cannot be copied).
+const NOT_COPIED: [&str; 5] = ["worktrees", "commondir", "gitdir", "locked", "fsmonitor--daemon.ipc"];
+
+/// Every path git sees in the work tree: tracked, and untracked but not ignored.
+const LS_FILES: [&str; 5] = ["ls-files", "-z", "--cached", "--others", "--exclude-standard"];
 
 /// The first line of a record's commit message; the agent's notes follow, one
 /// `- <note>` line each.

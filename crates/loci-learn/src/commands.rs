@@ -90,12 +90,12 @@ pub fn log(vault: &Vault, mut stdin: impl Read) -> Result<Report, Refusal> {
     let index = Index::open(vault);
     let all = cards::all(&index);
     check_exists(&line, &all, &index)?;
-    let before = log.append(&line).map_err(Refusal::io)?;
+    let before = log.append(&line)?;
     match log.commit("log") {
         Ok(sha) => Ok(Report::ok(json!({"line": line, "commit": sha}), format!("logged {sha}\n"))),
         Err(e) => Err(match log.truncate(before) {
             Ok(()) => Refusal::git(e),
-            Err(t) => Refusal::git(format!("{e}; removing the uncommitted line also failed: {t}")),
+            Err(t) => Refusal::git(format!("{e}; removing the uncommitted line also failed: {}", t.error.message)),
         }),
     }
 }
@@ -137,7 +137,7 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
     let commit = if reviewed > 0 { Some(log.commit("review").map_err(uncommitted)?) } else { None };
     if let Err(e) = stopped {
         let committed = commit.map_or(String::new(), |sha| format!(" ({reviewed} grades committed in {sha})"));
-        return Err(Refusal::io(format!("the session stopped: {e}{committed}")));
+        return Err(Refusal::io(format!("the session stopped: {}{committed}", e.error.message)));
     }
 
     let due_left = session.len() - reviewed;
@@ -148,7 +148,7 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
 /// Asks for a grade on each card of `session` and appends it to the log. Returns how
 /// many it appended, and how it stopped: at the end, on `q` or end of input (`Ok`), or
 /// on an I/O error.
-fn grade_cards(session: &[(Ulid, &Spanned<Card>)], log: ReviewLog) -> (usize, Result<(), String>) {
+fn grade_cards(session: &[(Ulid, &Spanned<Card>)], log: ReviewLog) -> (usize, Result<(), Refusal>) {
     let (mut input, mut err) = (std::io::stdin().lock(), std::io::stderr());
     let mut appended = 0;
     for (i, &(id, card)) in session.iter().enumerate() {
@@ -156,7 +156,7 @@ fn grade_cards(session: &[(Ulid, &Spanned<Card>)], log: ReviewLog) -> (usize, Re
         let grade = match ask(card, &progress, &mut input, &mut err) {
             Ok(Some(grade)) => grade,
             Ok(None) => break,
-            Err(e) => return (appended, Err(format!("the terminal: {e}"))),
+            Err(e) => return (appended, Err(Refusal::io(format!("the terminal: {e}")))),
         };
         let line = Line { t: Timestamp::now(), subject: Subject::Card(id), grade };
         if let Err(e) = log.append(&line) {

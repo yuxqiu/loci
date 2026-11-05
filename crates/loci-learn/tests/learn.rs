@@ -137,6 +137,16 @@ fn a_failed_commit_leaves_nothing_staged() {
 }
 
 #[test]
+fn a_failed_add_leaves_nothing_staged() {
+    // git adds the paths it may before refusing an ignored one.
+    let v =
+        vault(&[("concepts/a/x.md", &concept(CONCEPT, &format!("- q :: a ^{ID1}\n"))), (".gitignore", "*.jsonl\n")]);
+    let (code, env) = learn(&v, &["log"], &format!(r#"{{"card":"{ID1}","grade":"hard"}}"#));
+    assert_eq!((code, error_code(&env)), (3, "git"), "{env}");
+    assert_eq!(v.git(&["diff", "--cached", "--name-only"]), "", "nothing is left staged");
+}
+
+#[test]
 fn a_failed_append_names_the_file() {
     use std::os::unix::fs::PermissionsExt;
     let v = vault(&[("concepts/a/x.md", &concept(CONCEPT, &format!("- q :: a ^{ID1}\n")))]);

@@ -37,9 +37,12 @@ them under its version.
 - `loci closure --depth N` orders the concepts at depth N after their prerequisites
   and reports a cycle through them (`prereqs.cycle`); they were listed as if they had
   no prerequisites.
-- A `loci` command whose stdout is closed early (`loci lint | head`) keeps its exit
-  code instead of crashing; a plugin killed by a signal gets a `plugin.failed` error
+- A `loci` command whose stdout or stderr is closed early (`loci lint 2>&1 | head`)
+  keeps its exit code instead of crashing; a plugin killed by a signal gets a `plugin.failed` error
   (with `--json`, an envelope) instead of no output.
+- `loci bench` gives each copy of the vault a repository of its own, also when the
+  vault is a linked worktree or a submodule, whose agent commits used to land in the
+  vault's repository.
 - `loci bench` shows the agent's stderr and reports each case's `agent_exit` (`null`
   on timeout or a signal), so an agent that fails to start is visible.
 - `loci done` warns (`done.record`) in a repository with no commit yet, where it
@@ -49,7 +52,10 @@ them under its version.
   deleted and the deletion staged; such a change used to be left out of `loci
   status` and of `lint --fix`'s dirty-tree check. Such names are shown escaped
   (`"n\xe9.md"`).
-- `loci learn` I/O errors name the file or folder that failed.
+- `loci learn` I/O errors name the file or folder that failed. A `learn` command whose
+  `git add` fails (an ignored log) leaves nothing staged.
+- `loci export` percent-encodes an image's file name in its link, so a name with
+  spaces, brackets, `%` or `?` stays an image of that file.
 - A vault with a sparse index opens; git's hints are no longer read as warnings that
   refuse it.
 - `loci new --title` refuses a blank title or one with a line break (`new.title`), and

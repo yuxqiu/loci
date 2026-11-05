@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use loci_core::envelope::{Refusal, Report};
+use loci_core::git::Repo;
 use loci_core::path::VaultPath;
 use serde::Deserialize;
 use serde_json::json;
@@ -35,16 +36,18 @@ fn median(xs: &mut [f64]) -> f64 {
     xs[xs.len() / 2]
 }
 
-/// Runs `command` through `sh -c` with `question` on stdin and loci's stderr as its
-/// own; returns its exit code (`None` when killed by a signal) and stdout, or `None` on
-/// timeout. Failing to start or talk to `sh` is an error.
-fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::Result<Option<(Option<i32>, Vec<u8>)>> {
-    let mut child = Command::new("sh")
-        .args(["-c", command])
-        .current_dir(cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()?;
+/// How an agent run ended.
+enum Ran {
+    /// It ran past the timeout, or left stdout open that long.
+    TimedOut,
+    /// It exited with `code` (`None` when killed by a signal) and wrote `stdout`.
+    Exited { code: Option<i32>, stdout: Vec<u8> },
+}
+
+/// Runs `agent` ([`sh`]) with `question` on stdin and loci's stderr as its own.
+/// Failing to start or talk to `sh` is an error.
+fn run_agent(mut agent: Command, question: &str) -> std::io::Result<Ran> {
+    let mut child = agent.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
 
     // Stdout is drained on its own thread so that an agent printing more than a pipe
     // buffer does not block before it exits.
@@ -66,15 +69,26 @@ fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::R
     let Some(status) = child.wait_timeout(AGENT_TIMEOUT)? else {
         child.kill()?;
         child.wait()?;
-        return Ok(None);
+        return Ok(Ran::TimedOut);
     };
 
     // A process the agent left running may hold stdout open, so the wait is bounded too.
     match output.recv_timeout(AGENT_TIMEOUT.saturating_sub(start.elapsed())) {
-        Ok(out) => Ok(Some((status.code(), out?))),
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(None),
+        Ok(out) => Ok(Ran::Exited { code: status.code(), stdout: out? }),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(Ran::TimedOut),
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("the stdout reader always sends"),
     }
+}
+
+/// `sh -c command` in `cwd`, a copy of the vault, without `git_vars`, the variables
+/// that would point git elsewhere: git there finds the copy's repository.
+fn sh(command: &str, cwd: &Path, git_vars: &[String]) -> Command {
+    let mut c = Command::new("sh");
+    c.args(["-c", command]).current_dir(cwd);
+    for var in git_vars {
+        c.env_remove(var);
+    }
+    c
 }
 
 pub fn run(ctx: &Ctx, agent: &str, cases_file: Option<&Path>) -> Result<Report, Refusal> {
@@ -102,11 +116,12 @@ pub fn run(ctx: &Ctx, agent: &str, cases_file: Option<&Path>) -> Result<Report, 
         return Err(Refusal::refused("bench.none", format!("`{shown}` has no cases")));
     }
 
+    let git_vars = loci_core::git::location_vars().map_err(Refusal::git)?;
     let (mut passes, mut times, mut results) = (0usize, vec![], vec![]);
     for case in &cases {
         let start = Instant::now();
         let (pass, agent_exit) =
-            run_case(vault.root(), agent, case).map_err(|e| Refusal::internal("bench.agent", e))?;
+            run_case(vault.root(), agent, case, &git_vars).map_err(|e| Refusal::internal("bench.agent", e))?;
         times.push(start.elapsed().as_secs_f64());
         passes += usize::from(pass);
         results.push(json!({"q": case.q, "pass": pass, "agent_exit": agent_exit}));
@@ -123,22 +138,21 @@ pub fn run(ctx: &Ctx, agent: &str, cases_file: Option<&Path>) -> Result<Report, 
 /// never sees the cases and no case sees another's edits; the copy is deleted after.
 /// Returns whether the case passed and the agent's exit code (`None` when it timed out
 /// or was killed by a signal).
-fn run_case(root: &Path, agent: &str, case: &Case) -> Result<(bool, Option<i32>), String> {
+fn run_case(root: &Path, agent: &str, case: &Case, git_vars: &[String]) -> Result<(bool, Option<i32>), String> {
     let work =
         tempfile::Builder::new().prefix("loci-bench-").tempdir().map_err(|e| format!("a temporary folder: {e}"))?;
     let copy = work.path().join("vault");
-    vault::copy_dir(root, &copy, &["bench"]).map_err(|e| format!("copying the vault: {e}"))?;
-    let Some((agent_exit, reply)) =
-        run_agent(agent, &case.q, &copy).map_err(|e| format!("cannot run the agent through `sh`: {e}"))?
-    else {
+    vault::copy_dir(root, &copy, &["bench", ".git"]).map_err(|e| format!("copying the vault: {e}"))?;
+    Repo::new(root).copy_to(&copy).map_err(|e| format!("copying the repository: {e}"))?;
+    let ran = run_agent(sh(agent, &copy, git_vars), &case.q)
+        .map_err(|e| format!("cannot run the agent through `sh`: {e}"))?;
+    let Ran::Exited { code: agent_exit, stdout: reply } = ran else {
         return Ok((false, None));
     };
 
     let output = work.path().join("output.txt");
     std::fs::write(&output, reply).map_err(|e| format!("writing the agent's reply: {e}"))?;
-    let status = Command::new("sh")
-        .args(["-c", &case.check])
-        .current_dir(&copy)
+    let status = sh(&case.check, &copy, git_vars)
         .env("LOCI_BENCH_OUTPUT", &output)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

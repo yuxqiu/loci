@@ -7,8 +7,8 @@ use std::io::ErrorKind;
 use crate::envelope::Refusal;
 use crate::index::Index;
 use crate::parse::{FmChange, Link, Names, Note, Spanned};
-use crate::path::Kind;
 use crate::path::VaultPath;
+use crate::path::{Kind, Place};
 use crate::splice::{self, Edit};
 use crate::vault::{self, Vault};
 
@@ -163,7 +163,9 @@ fn link_edits<'i>(
                 // A prereq names its concept by slug; one moved to a name that is no slug
                 // cannot be named, so the prereq stays and verification refuses the change.
                 Some(slug) => {
-                    if let Some(to) = new.slug().filter(|to| to != slug) {
+                    if let Ok(Some(Place::Concept { slug: to })) = new.place()
+                        && to != *slug
+                    {
                         prereqs.push(FmChange::RenamePrereq { from: slug.clone(), to: Some(to) });
                     }
                 }

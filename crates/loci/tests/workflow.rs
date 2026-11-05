@@ -372,3 +372,14 @@ fn closed_stdout_is_no_crash() {
     drop(child.stdout.take());
     assert_eq!(child.wait().unwrap().code(), Some(0));
 }
+
+#[test]
+fn closed_stderr_is_no_crash() {
+    // `loci lint 2>&1 | head` closes the pipe the diagnostics and a refusal go to.
+    let v = TestVault::committed(BIN, "agent-workflow");
+    let mut c = v.command();
+    let mut child =
+        c.args(["mv", "concepts/none.md", "concepts/other.md"]).stderr(std::process::Stdio::piped()).spawn().unwrap();
+    drop(child.stderr.take());
+    assert_eq!(child.wait().unwrap().code(), Some(1));
+}

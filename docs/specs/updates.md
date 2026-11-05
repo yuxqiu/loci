@@ -102,8 +102,9 @@ newest id, and a vault sees only the entries after its mark.
   The procedure lives in the command's output, so neither the framework rules nor a
   skill carries it: an agent meets it exactly when updates are waiting.
 - **`loci updates --handled <id>`** records that every entry up to and including
-  `<id>` is handled, by setting the key. It refuses an id that is below the oldest
-  waiting one (`updates.order`), so none is skipped silently.
+  `<id>` is handled, by setting the key. It refuses an id this loci does not know
+  (`updates.unknown`) and one already handled (`updates.order`), so the mark never
+  moves back.
 
 ## 6. The procedure (printed by `loci updates`)
 

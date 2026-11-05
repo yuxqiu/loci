@@ -271,7 +271,7 @@ impl Assembly<'_> {
             Some(Resolved::File(p)) if link.form == LinkForm::Embed && is_image(p) => {
                 let name = self.assets.name(p);
                 let alt = label.filter(|l| !is_size(l)).unwrap_or_else(|| escape(&name));
-                return format!("![{alt}]({ASSETS}/{name})");
+                return format!("![{alt}]({ASSETS}/{})", percent_encoded(&name));
             }
             Some(Resolved::File(p)) => return label.unwrap_or_else(|| escape(p.as_str())),
             Some(Resolved::Note(n, _)) => n,
@@ -293,6 +293,21 @@ impl Assembly<'_> {
             None => text,
         }
     }
+}
+
+/// `s` with every byte but RFC 3986's unreserved characters as `%XX`: a markdown link
+/// destination that holds no space, and a URL that names the file, not a query or an
+/// encoded name.
+fn percent_encoded(s: &str) -> String {
+    s.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+                char::from(b).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
 }
 
 /// `s` as markdown that reads as `s`: a backslash before each ASCII punctuation
@@ -420,6 +435,24 @@ mod tests {
 
     fn export(i: &Index, root: &str, depth: usize) -> Export {
         Export::of(i, i.note_at(&vp(root)).unwrap(), depth)
+    }
+
+    #[test]
+    fn image_destinations_name_the_file_as_a_url() {
+        let name = "a <b> (1)\\&copy;%20?.png";
+        let i = crate::testing::index(&[
+            ("views/v.md", format!("# V\n\n![[views/{name}]]\n").as_str()),
+            (format!("views/{name}").as_str(), ""),
+        ]);
+        let md = export(&i, "views/v.md", 0).markdown;
+        let dests: Vec<_> = pulldown_cmark::Parser::new(&md)
+            .filter_map(|e| match e {
+                pulldown_cmark::Event::Start(pulldown_cmark::Tag::Image { dest_url, .. }) => Some(dest_url.to_string()),
+                _ => None,
+            })
+            .collect();
+        // Percent-encoded, so a browser loads this file, not `a <b> (1)\&copy; ?.png` or `a <b> (1)\&copy;%20`.
+        assert_eq!(dests, ["assets/a%20%3Cb%3E%20%281%29%5C%26copy%3B%2520%3F.png"], "{md}");
     }
 
     #[test]

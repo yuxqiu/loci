@@ -160,47 +160,47 @@ impl<'a> ReviewLog<'a> {
 
     /// Appends one line, creating `plugins/learn/` and its `.gitattributes` first if needed.
     /// Returns the file length before the append, for rollback. An error names the file.
-    pub fn append(&self, line: &Line) -> Result<u64, String> {
+    pub fn append(&self, line: &Line) -> Result<u64, Refusal> {
         let dir = self.0.abs(&VaultPath::fixed(DIR));
-        std::fs::create_dir_all(&dir).map_err(at(&dir))?;
+        std::fs::create_dir_all(&dir).map_err(Refusal::io_at(&dir))?;
         let attrs = self.0.abs(&VaultPath::fixed(ATTRS));
         if !attrs.exists() {
-            std::fs::write(&attrs, ATTRS_LINE).map_err(at(&attrs))?;
+            std::fs::write(&attrs, ATTRS_LINE).map_err(Refusal::io_at(&attrs))?;
         }
         let log = self.0.abs(&VaultPath::fixed(LOG));
-        let mut f = std::fs::OpenOptions::new().create(true).read(true).append(true).open(&log).map_err(at(&log))?;
-        let before = f.metadata().map_err(at(&log))?.len();
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .append(true)
+            .open(&log)
+            .map_err(Refusal::io_at(&log))?;
+        let before = f.metadata().map_err(Refusal::io_at(&log))?.len();
         // A last line without its line break (an edit by hand) gets one, so the new line
         // does not join it.
         let mut last = *b"\n";
         if before > 0 {
-            f.seek(SeekFrom::End(-1)).and_then(|_| f.read_exact(&mut last)).map_err(at(&log))?;
+            f.seek(SeekFrom::End(-1)).and_then(|_| f.read_exact(&mut last)).map_err(Refusal::io_at(&log))?;
         }
         let lead = if last[0] == b'\n' { "" } else { "\n" };
         let json = serde_json::to_string(line).expect("a line always serialises");
         // One write, undone on failure, so a partial line never stays in the log.
         if let Err(e) = f.write_all(format!("{lead}{json}\n").as_bytes()) {
-            f.set_len(before).map_err(at(&log))?;
-            return Err(at(&log)(e));
+            f.set_len(before).map_err(Refusal::io_at(&log))?;
+            return Err(Refusal::io_at(&log)(e));
         }
         Ok(before)
     }
 
     /// Truncates the log back to `len` bytes (undoing an append). An error names the file.
-    pub fn truncate(&self, len: u64) -> Result<(), String> {
+    pub fn truncate(&self, len: u64) -> Result<(), Refusal> {
         let log = self.0.abs(&VaultPath::fixed(LOG));
-        std::fs::OpenOptions::new().write(true).open(&log).and_then(|f| f.set_len(len)).map_err(at(&log))
+        std::fs::OpenOptions::new().write(true).open(&log).and_then(|f| f.set_len(len)).map_err(Refusal::io_at(&log))
     }
 
     /// Commits the log and its `.gitattributes` alone, as the user (§2.4). Returns the commit.
     pub fn commit(&self, command: &str) -> Result<String, String> {
         self.0.repo().commit_paths(&format!("loci: learn {command}"), &[VaultPath::fixed(LOG), VaultPath::fixed(ATTRS)])
     }
-}
-
-/// An I/O error at `path`, as a message naming it.
-fn at(path: &std::path::Path) -> impl Fn(std::io::Error) -> String + '_ {
-    move |e| format!("{}: {e}", path.display())
 }
 
 #[cfg(test)]

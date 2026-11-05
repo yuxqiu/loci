@@ -192,6 +192,56 @@ fn bench_runs_the_agent_on_every_case() {
 }
 
 #[test]
+fn bench_gives_the_copy_a_repository_of_its_own() {
+    let v = vault(&[("views/plan.md", "# Plan\n".into())]);
+    for tool in ["sh", "grep"] {
+        std::os::unix::fs::symlink(find_on_path(tool), v.bin().join(tool)).unwrap();
+    }
+    // The copy has the vault's HEAD and index; the agent commits there.
+    let cases = r#"{"q": "x", "check": "grep -q staged.md staged.txt && git log -1 --format=%s | grep -q agent"}"#;
+    let agent =
+        "git diff --cached --name-only > staged.txt && git rm -q views/plan.md && git add -A && git commit -qm agent";
+    let bench = |root: &std::path::Path, git_dir: Option<&std::path::Path>| {
+        std::fs::write(root.join("bench/cases.jsonl"), cases).unwrap();
+        std::fs::write(root.join("views/staged.md"), "# Staged\n").unwrap();
+        v.git(&["-C", root.to_str().unwrap(), "add", "views/staged.md"]);
+        let head = v.git(&["-C", root.to_str().unwrap(), "rev-parse", "HEAD"]);
+        let mut c = v.command();
+        c.current_dir(root).args(["--json", "bench", agent]);
+        if let Some(git_dir) = git_dir {
+            c.env("GIT_DIR", git_dir);
+        }
+        let (code, env) = v.run_command(c, "");
+        assert_eq!((code, &env["data"]["results"][0]["pass"]), (0, &json!(true)), "{env:#}");
+        assert_eq!(
+            v.git(&["-C", root.to_str().unwrap(), "rev-parse", "HEAD"]),
+            head,
+            "the vault's branch is untouched"
+        );
+        let status = v.git(&["-C", root.to_str().unwrap(), "status", "--porcelain", "--", "views"]);
+        assert_eq!(status, "A  views/staged.md\n", "the vault's index and files are untouched");
+    };
+    std::fs::create_dir(v.root.join("bench")).unwrap();
+
+    // A linked worktree's `.git` is a file naming the repository it shares; its split
+    // index keeps a shared part beside it.
+    let wt = v.tmp.path().join("wt");
+    v.git(&["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "wt"]);
+    v.git(&["-C", wt.to_str().unwrap(), "update-index", "--split-index"]);
+    // git's fsmonitor daemon listens on a socket in each work tree's git folder.
+    let socket = |dir: &str| std::os::unix::net::UnixListener::bind(v.root.join(dir).join("fsmonitor--daemon.ipc"));
+    let _sockets = (socket(".git").unwrap(), socket(".git/worktrees/wt").unwrap());
+    std::fs::create_dir(wt.join("bench")).unwrap();
+    bench(&wt, None);
+
+    // A repository may name its work tree in its config (as a submodule's does), and
+    // loci may run with `GIT_DIR` set (from a git hook).
+    v.git(&["config", "core.worktree", v.root.to_str().unwrap()]);
+    bench(&v.root, Some(&v.root.join(".git")));
+    assert_eq!(v.git(&["config", "core.worktree"]).trim(), v.root.to_str().unwrap(), "the vault's config is untouched");
+}
+
+#[test]
 fn export_collects_links_and_assets() {
     let v = vault(&[
         (
@@ -218,7 +268,7 @@ fn export_collects_links_and_assets() {
     assert!(md.contains("Relax edges.") && !md.contains("Not exported."), "only the linked section:\n{md}");
     assert!(md.contains("](#"), "links to included notes become anchors:\n{md}");
     assert!(md.contains("see Graph."), "a note two links away is plain text:\n{md}");
-    assert!(md.contains("![](assets/grid.png)") || md.contains("](assets/grid.png)"), "{md}");
+    assert!(md.contains("](assets/grid.png)"), "{md}");
 
     // Depth 2 pulls graph in.
     let (_, env) = v.run(&["export", "views/study", "--depth", "2"]);

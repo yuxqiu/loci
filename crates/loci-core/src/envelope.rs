@@ -346,8 +346,8 @@ impl Report {
 
     /// Prints the report: the envelope on stdout with `json`; otherwise the human text
     /// on stdout and diagnostics and the error on stderr (m0 §8). Returns the exit code.
-    /// A reader that closed stdout early (`| head`) wanted no more of it: the work is
-    /// done, so the exit code stands; any other failure to write is `Internal`.
+    /// A reader that closed stdout or stderr early (`| head`) wanted no more of it: the
+    /// work is done, so the exit code stands; any other failure to write is `Internal`.
     pub fn print(&self, json: bool, version: &str, command: &str) -> Exit {
         let stdout = if json {
             let env = self.envelope(version, command);
@@ -364,11 +364,14 @@ impl Report {
             return Exit::Internal;
         }
         if !json {
-            for d in &self.diagnostics {
-                eprintln!("{d}");
-            }
+            let mut stderr: String = self.diagnostics.iter().map(|d| format!("{d}\n")).collect();
             if let Err(r) = &self.result {
-                eprintln!("{r}");
+                stderr += &format!("{r}\n");
+            }
+            if let Err(e) = std::io::stderr().lock().write_all(stderr.as_bytes())
+                && e.kind() != std::io::ErrorKind::BrokenPipe
+            {
+                return Exit::Internal;
             }
         }
         self.exit()
