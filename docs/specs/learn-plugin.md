@@ -143,7 +143,7 @@ was computed from (§4.2), in timestamp order; empty for `unknown`.
    1. the due cards (§4.1), by due time ascending, ties by card id bytes;
    2. new cards (cards with no line), by note path bytes, then by position in the
       note, at most `new_per_day` minus the number of cards whose first line has
-      today's UTC date.
+      today's UTC date (cards deleted since included).
 4. Runs a terminal loop over the selection: show the question, wait, reveal the
    answer, read a self-grade (`again`, `hard`, `good` or `easy`, or `1`–`4`); `q` or
    the end of input ends the session early (step 6 still runs).
@@ -155,8 +155,9 @@ was computed from (§4.2), in timestamp order; empty for `unknown`.
    `null`, and the command exits 0. An interrupted session (Ctrl-C) loses no grade:
    each was appended at once, and the next `log` or `review` commits the whole log.
 
-`data`: `{"reviewed", "new", "due_left", "commit"}`; `due_left` counts the session's
-cards not graded, new ones included.
+`data`: `{"reviewed", "new", "due_left", "commit"}`; `new` counts the session's new
+cards, graded or not; `due_left` counts the session's cards not graded, new ones
+included.
 
 ## 3. The review log
 

@@ -129,11 +129,11 @@ impl Input {
 pub struct ReviewLog<'a>(&'a Vault);
 
 impl<'a> ReviewLog<'a> {
-    /// The log of `vault`. Refuses a symlink on the way to the log, its `.gitattributes`
-    /// or the config (`file.symlink`): loci never reads or writes through one (m0 §3),
-    /// and an ignored one escaped the vault's walk.
+    /// The log of `vault`. Refuses a symlink on the way to the log or its
+    /// `.gitattributes` (`file.symlink`): loci never reads or writes through one (m0 §3),
+    /// and the vault's walk skips ignored paths, so it may not have refused one there.
     pub fn open(vault: &'a Vault) -> Result<Self, Refusal> {
-        [LOG, ATTRS, crate::config::PATH].into_iter().try_for_each(|p| vault.refuse_symlink(&VaultPath::fixed(p)))?;
+        [LOG, ATTRS].into_iter().try_for_each(|p| vault.refuse_symlink(&VaultPath::fixed(p)))?;
         Ok(Self(vault))
     }
 

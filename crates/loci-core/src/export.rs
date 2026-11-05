@@ -271,12 +271,14 @@ impl Assembly<'_> {
     /// label, heading or title is markdown and goes in as written; a target, path or file
     /// name is literal and goes in escaped ([`escape`]).
     fn link_replacement(&mut self, note: &Note, link: &Spanned<Link>, resolved: Option<Resolved<'_>>) -> String {
+        // An embed's size (m0 §5.4) is no text; its alt text is.
         let label = link.label.as_ref().map(|l| l.value(&note.text).to_string());
+        let label = label.filter(|l| link.form != LinkForm::Embed || !is_size(l));
         let linked = match resolved {
             None => return label.unwrap_or_else(|| escape(link.target.text(&note.text))),
             Some(Resolved::File(p)) if link.form == LinkForm::Embed && is_image(p) => {
                 let name = self.assets.name(p);
-                let alt = label.filter(|l| !is_size(l)).unwrap_or_else(|| escape(&name));
+                let alt = label.unwrap_or_else(|| escape(&name));
                 return format!("![{alt}]({ASSETS}/{})", percent_encoded(&name));
             }
             Some(Resolved::File(p)) => return label.unwrap_or_else(|| escape(p.as_str())),
@@ -459,6 +461,16 @@ mod tests {
             .collect();
         // Percent-encoded, so a browser loads this file, not `a <b> (1)\&copy; ?.png` or `a <b> (1)\&copy;%20`.
         assert_eq!(dests, ["assets/a%20%3Cb%3E%20%281%29%5C%26copy%3B%2520%3F.png"], "{md}");
+    }
+
+    #[test]
+    fn an_embed_size_is_no_link_text() {
+        let i = crate::testing::index(&[
+            ("views/v.md", "# V\n\n![[views/d.pdf|300]] and ![[views/w|300x200]]\n"),
+            ("views/d.pdf", ""),
+            ("views/w.md", "# W\n"),
+        ]);
+        assert_eq!(export(&i, "views/v.md", 0).markdown, "# V\n\nviews\\/d\\.pdf and W\n");
     }
 
     #[test]

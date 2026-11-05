@@ -29,6 +29,12 @@ impl FmValue {
         let [Spanned { node: FmValue::List(items), .. }] = items.as_slice() else { return false };
         matches!(items.as_slice(), [Spanned { node: FmValue::Str(value), .. }] if value.parse::<Slug>().is_ok())
     }
+
+    /// Whether this whole `prereqs` value is one prereq outside a list: an unquoted
+    /// `[[slug]]` (a list holding a list holding the slug) or a string `"[[slug]]"`.
+    pub fn is_lone_prereq(&self) -> bool {
+        self.is_unquoted_prereq() || matches!(self, FmValue::Str(value) if prereq_slug(value).is_some())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,7 +117,7 @@ pub(super) fn frontmatter_links(fm: &Frontmatter) -> Vec<Spanned<Link>> {
 }
 
 /// The slug a `prereqs` item `[[<slug>]]` names, normalised as a link's (§5.2).
-pub(crate) fn prereq_slug(item: &str) -> Option<Slug> {
+fn prereq_slug(item: &str) -> Option<Slug> {
     crate::path::nfc(item.strip_prefix("[[")?.strip_suffix("]]")?).parse().ok()
 }
 
@@ -146,7 +152,7 @@ pub enum FmChange {
     SetId(Ulid),
     RemoveField(ConceptField),
     /// Quotes every unquoted `[[slug]]` in `prereqs` (YAML reads one as a list holding
-    /// a list holding the slug).
+    /// a list holding the slug), and puts a lone prereq in a list.
     QuotePrereqs,
     /// Renames prereq `from` to `to`, or removes it; a `prereqs` list left empty loses
     /// its key.
@@ -197,7 +203,7 @@ impl Note {
             let reach = self.frontmatter_reach();
             match &self.frontmatter {
                 None => return Edit::replace(span, ""),
-                Some(_) if frontmatter(&self.text[reach.end..], 0).is_none() => {
+                Some(_) if !self.text[reach.end..].split_inclusive('\n').next().is_some_and(fence) => {
                     return Edit::replace(reach, "");
                 }
                 Some(_) => "---\n---\n".to_string(),
@@ -256,18 +262,32 @@ fn set_id(map: &mut Mapping, id: Ulid) {
     }
 }
 
-/// Quotes every unquoted `[[slug]]` in `prereqs` (the parsed form is
-/// [`FmValue::is_unquoted_prereq`]'s).
+/// Quotes every unquoted `[[slug]]` in `prereqs`, and puts a lone prereq in a list (the
+/// parsed forms are [`FmValue::is_unquoted_prereq`]'s and [`FmValue::is_lone_prereq`]'s).
 fn quote_prereqs(map: &mut Mapping) {
-    let Some(Yaml::Sequence(items)) = map.get_mut(&string_node(ConceptField::Prereqs.key())) else { return };
+    let Some(value) = map.get_mut(&string_node(ConceptField::Prereqs.key())) else { return };
+    let lone = match &*value {
+        Yaml::Value(Scalar::String(s)) => prereq_slug(s),
+        v => unquoted_slug(v),
+    };
+    if let Some(slug) = lone {
+        *value = Yaml::Sequence(vec![prereq_item(&slug)]);
+        return;
+    }
+    let Yaml::Sequence(items) = value else { return };
     for item in items {
-        let Yaml::Sequence(outer) = item else { continue };
-        let [Yaml::Sequence(inner)] = outer.as_slice() else { continue };
-        let [Yaml::Value(Scalar::String(slug))] = inner.as_slice() else { continue };
-        if let Ok(slug) = slug.parse::<Slug>() {
+        if let Some(slug) = unquoted_slug(item) {
             *item = prereq_item(&slug);
         }
     }
+}
+
+/// The slug of an unquoted `[[slug]]`: a list holding a list holding the slug.
+fn unquoted_slug(value: &Yaml) -> Option<Slug> {
+    let Yaml::Sequence(outer) = value else { return None };
+    let [Yaml::Sequence(inner)] = outer.as_slice() else { return None };
+    let [Yaml::Value(Scalar::String(slug))] = inner.as_slice() else { return None };
+    slug.parse().ok()
 }
 
 /// Renames or removes the `prereqs` items named in `renames` (slug -> new slug, or

@@ -48,7 +48,42 @@ pub fn apply(original: &str, mut edits: Vec<Edit>) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 128, ..ProptestConfig::default() })]
+
+        #[test]
+        fn splice_identity_and_one_pass(
+            text in "[a-z \\n二分é]{0,40}",
+            cuts in prop::collection::vec((any::<prop::sample::Index>(), any::<prop::sample::Index>(), "[x世\\n]{0,3}"), 0..6),
+        ) {
+            prop_assert_eq!(apply(&text, vec![]).unwrap(), text.clone());
+            let bounds: Vec<usize> = (0..=text.len()).filter(|i| text.is_char_boundary(*i)).collect();
+            // Non-overlapping edits with distinct starts, as (start, end, new).
+            let mut points: Vec<usize> = cuts.iter().flat_map(|(a, b, _)| [a.index(bounds.len()), b.index(bounds.len())]).collect();
+            points.sort();
+            points.dedup();
+            // Consecutive pairs of sorted, distinct boundaries: strictly increasing starts,
+            // possibly adjacent edits, a zero-length insert when a pair is incomplete.
+            let mut edits = vec![];
+            for (k, (_, _, new)) in cuts.iter().enumerate() {
+                let Some(&s) = points.get(k * 2) else { break };
+                let e = points.get(k * 2 + 1).copied().unwrap_or(s);
+                edits.push(Edit::replace(bounds[s]..bounds[e], new.clone()));
+            }
+            let one = apply(&text, edits.clone()).unwrap();
+            let mut seq = text.clone();
+            let mut from_end = edits;
+            from_end.sort_by_key(|e| std::cmp::Reverse(e.range.start));
+            for e in from_end {
+                seq = apply(&seq, vec![e]).unwrap();
+            }
+            prop_assert_eq!(one, seq);
+        }
+    }
 
     #[test]
     fn replace_and_insert() {

@@ -84,7 +84,7 @@ enum Cmd {
         #[command(subcommand)]
         action: SkillCmd,
     },
-    /// Assign ULID block ids to the top-level blocks of a section.
+    /// Assign ULID block ids to the paragraphs and list items at the top level of a section.
     #[command(name = "block-ids")]
     BlockIds {
         /// A note path (`.md` optional) or a concept slug.

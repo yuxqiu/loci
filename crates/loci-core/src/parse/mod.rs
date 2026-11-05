@@ -17,8 +17,9 @@ mod frontmatter;
 mod links;
 
 use body::walk_body;
-use frontmatter::{frontmatter, frontmatter_links, prereq_slug};
+use frontmatter::{frontmatter, frontmatter_links};
 
+pub(crate) use blocks::is_block_id;
 pub use blocks::{Block, BlockId, IdBlock, Lead, ListItem, Marker, Node};
 pub use frontmatter::{ConceptField, FmChange, FmEntry, FmValue, Frontmatter, new_concept_frontmatter};
 pub use links::{Fragment, Label, Link, LinkForm, MarkdownLink, Names, Target, atx_closing};
@@ -226,12 +227,13 @@ impl Markdown {
 
     /// What in `prereqs` is no prereq link (§6.1): the items that are not, or the whole
     /// value when it is no list. An item is a link exactly when the parser read one
-    /// from it.
+    /// from it (a `prereqs` link spans its item).
     pub fn bad_prereqs(&self) -> Vec<&Spanned<FmValue>> {
         match self.fm(ConceptField::Prereqs.key()) {
             None => vec![],
             Some(Spanned { node: FmValue::List(items), .. }) => {
-                items.iter().filter(|i| !matches!(&i.node, FmValue::Str(item) if prereq_slug(item).is_some())).collect()
+                let links: Vec<_> = self.links.iter().filter(|l| l.form == LinkForm::Prereq).map(|l| &l.span).collect();
+                items.iter().filter(|i| !links.contains(&&i.span)).collect()
             }
             Some(value) => vec![value],
         }

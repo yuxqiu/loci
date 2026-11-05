@@ -62,9 +62,9 @@ pub fn discover(path_var: Option<&std::ffi::OsStr>, core_commands: &[&str]) -> V
     let Some(path_var) = path_var else { return vec![] };
     for dir in std::env::split_paths(path_var) {
         let Ok(entries) = std::fs::read_dir(&dir) else { continue };
-        let mut names: Vec<_> = entries.flatten().collect();
-        names.sort_by_key(|e| e.file_name());
-        for entry in names {
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
             let file_name = entry.file_name();
             let Some(name) = file_name.to_str().and_then(|n| n.strip_prefix("loci-")) else { continue };
             if !NAME.is_match(name) || core_commands.contains(&name) || found.contains_key(name) {

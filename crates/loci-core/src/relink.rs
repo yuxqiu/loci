@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::ErrorKind;
 
 use crate::envelope::Refusal;
+use crate::id::Slug;
 use crate::index::Index;
 use crate::parse::{FmChange, Link, Names, Note, Spanned};
 use crate::path::VaultPath;
@@ -138,7 +139,8 @@ fn remove_empty_folders<'p>(vault: &Vault, paths: impl Iterator<Item = &'p Vault
 /// The edits for every link, in files outside `sources/` that `change` does not
 /// delete, whose resolved target is a key of `targets` (old target path -> new target
 /// path). Prereqs are rewritten with their note's frontmatter (m0 §6.1); one that would
-/// name its own note (the absorbing note of a merge) is removed, and returned.
+/// name its own note (the absorbing note of a merge), or one the note already names, is
+/// removed, and returned.
 fn link_edits<'i>(
     index: &'i Index,
     targets: &BTreeMap<VaultPath, VaultPath>,
@@ -150,6 +152,7 @@ fn link_edits<'i>(
     let mut removed = Removed::new();
     for note in relinked(index, change) {
         let (mut note_edits, mut prereqs) = (vec![], vec![]);
+        let named: BTreeSet<&Slug> = note.links.iter().filter_map(|l| l.prereq_slug()).collect();
         for (i, link) in note.links.iter().enumerate() {
             let Some(new) = index.link_target(note, link).and_then(|t| targets.get(t)) else { continue };
             match link.prereq_slug() {
@@ -162,11 +165,18 @@ fn link_edits<'i>(
                 }
                 // A prereq names its concept by slug; one moved to a name that is no slug
                 // cannot be named, so the prereq stays and verification refuses the change.
+                // One renamed to a slug the note already names goes.
                 Some(slug) => {
                     if let Ok(Some(Place::Concept { slug: to })) = new.place()
                         && to != *slug
                     {
-                        prereqs.push(FmChange::RenamePrereq { from: slug.clone(), to: Some(to) });
+                        let to = if named.contains(&to) {
+                            removed.insert((note.path.clone(), i));
+                            None
+                        } else {
+                            Some(to)
+                        };
+                        prereqs.push(FmChange::RenamePrereq { from: slug.clone(), to });
                     }
                 }
             }

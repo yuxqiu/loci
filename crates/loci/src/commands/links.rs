@@ -61,24 +61,25 @@ fn incoming(index: &Index, path: &VaultPath, human: &mut String) -> Vec<Value> {
     rows
 }
 
-/// Mentions without a link: of `note` in other notes, and of concepts in `note`.
+/// Mentions without a link, both ways: of `note` in other notes (`unlinked_in`), and of
+/// concepts in `note` (`unlinked_out`).
 fn unlinked(index: &Index, note: &Note, human: &mut String) -> (Vec<Value>, Vec<Value>) {
     human.push_str(&format!("unlinked mentions of {}:\n", note.path));
-    let mut mentions_of = vec![];
+    let mut unlinked_in = vec![];
     for (other, r) in index.unlinked_mentions_of(note) {
         let (line, text) = line_text(other, r.start);
         human.push_str(&format!("  {}:{line}: {text}\n", other.path));
-        mentions_of.push(json!({"path": other.path, "line": line, "text": text}));
+        unlinked_in.push(json!({"path": other.path, "line": line, "text": text}));
     }
 
     human.push_str(&format!("unlinked mentions in {}:\n", note.path));
-    let mut mentions_in = vec![];
+    let mut unlinked_out = vec![];
     for (concept, r) in index.unlinked_mentions_in(note) {
         let (line, words) = (line_col(&note.text, r.start).0, &note.text[r]);
         human.push_str(&format!("  {line}: {words} -> [[{}]]\n", concept.path.stem()));
-        mentions_in.push(json!({"line": line, "text": words, "concept": concept.path}));
+        unlinked_out.push(json!({"line": line, "text": words, "concept": concept.path}));
     }
-    (mentions_of, mentions_in)
+    (unlinked_in, unlinked_out)
 }
 
 /// The 1-based line of byte offset `at` in `note`, and that line, trimmed.

@@ -182,6 +182,12 @@ impl Markdown {
 /// A `^id` ending a text.
 static BLOCK_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:^|\s)(\^\w+)\s*$").unwrap());
 
+/// Whether `id` (without `^`) has the form of a block id (§4.6), as [`BLOCK_ID`] reads one.
+pub(crate) fn is_block_id(id: &str) -> bool {
+    static ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\w+$").unwrap());
+    ID.is_match(id)
+}
+
 /// Sets each block id (§4.6): the `^id` ending a paragraph or an item's lead. Nothing in
 /// a block quote or a footnote has one (as in Obsidian, no part of a quotation does).
 pub(super) fn assign_ids(text: &str, blocks: &mut [Spanned<Block>]) {

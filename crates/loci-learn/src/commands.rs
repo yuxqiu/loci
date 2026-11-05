@@ -30,7 +30,7 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
     let index = Index::open(vault);
     let mut diags = vec![];
     let mut count = 0;
-    let mut by_id: BTreeMap<Ulid, Vec<(&Note, Spanned<Card>)>> = BTreeMap::new();
+    let mut by_id: BTreeMap<Ulid, Vec<(&Note, std::ops::Range<usize>)>> = BTreeMap::new();
     for note in index.concepts() {
         let (cards, issues) = cards::of_note(note);
         for span in issues {
@@ -52,7 +52,7 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
                         .in_note(note, c.span.clone())
                         .with_hint(format!("delete the id and run `{fix_hint}`")),
                 ),
-                CardId::Valid(id) => by_id.entry(*id).or_default().push((note, c.clone())),
+                CardId::Valid(id) => by_id.entry(*id).or_default().push((note, c.span.clone())),
             }
         }
     }
@@ -60,7 +60,7 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
     for (id, cs) in by_id.iter().filter(|(_, cs)| cs.len() > 1) {
         let others: Vec<&str> = cs[1..].iter().map(|(n, _)| n.path.as_str()).collect();
         let msg = format!("card id `^{id}` is used by {}", others.join(", "));
-        diags.push(Diagnostic::error("learn.id-duplicate", msg).in_note(cs[0].0, cs[0].1.span.clone()));
+        diags.push(Diagnostic::error("learn.id-duplicate", msg).in_note(cs[0].0, cs[0].1.clone()));
     }
 
     let errors = diags.len();

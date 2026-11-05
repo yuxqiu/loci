@@ -106,14 +106,30 @@ fn unresolved(index: &Index, note: &Note, link: &Spanned<Link>) -> Option<Diagno
                 .with_hint(headings_hint(target_note))
         }
 
-        LinkError::Fragment { fragment: Fragment::Block(id), .. } => {
-            at(Code::LinkDanglingBlock, format!("`{target}` has no block `^{id}`")).with_hint(
-                "the block was removed or its id changed; link the note, or another block by the `^id` that ends it",
-            )
+        LinkError::Fragment { note: target_note, fragment: Fragment::Block(id) } => {
+            at(Code::LinkDanglingBlock, format!("`{target}` has no block `^{id}`"))
+                .with_hint(block_hint(target_note, &id))
         }
     };
 
     Some(diag)
+}
+
+/// The hint for a link to a missing block `^id` of `note`: an id with other characters
+/// (`^step-1`) can end a line yet mark no block (§4.6), and then the hint says so.
+fn block_hint(note: &Note, id: &str) -> String {
+    let needle = format!("^{id}");
+    let ends_line = |l: &str| {
+        l.trim_end().strip_suffix(&needle).is_some_and(|rest| rest.is_empty() || rest.ends_with(char::is_whitespace))
+    };
+    if !crate::parse::is_block_id(id) && note.text.lines().any(ends_line) {
+        format!(
+            "`^{id}` is in `{}` but is no block id: ids are letters, digits and `_`; rename it there and here",
+            note.path
+        )
+    } else {
+        "the block was removed or its id changed; link the note, or another block by the `^id` that ends it".to_string()
+    }
 }
 
 /// What `link` names, for messages: its slug or path, or the linking note's own name.

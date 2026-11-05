@@ -26,7 +26,7 @@ pub fn run(ctx: &Ctx, path: &str, title: Option<&str>) -> Result<Report, Refusal
             format!("the title {t:?} is blank or spans lines; an H1 is one line"),
         ));
     }
-    let slug = refuse_destination(&vault, &path)?;
+    let slug = free_slug(&vault, &path)?;
 
     let id = Ulid::generate();
     let text = skeleton(id, title.unwrap_or(slug.as_str()));
@@ -58,7 +58,7 @@ fn skeleton(id: Ulid, title: &str) -> String {
 /// a concept path that follows the path rules, with no symlink on the way, free on disk,
 /// and passing the destination checks `mv` makes too (m0 §9.5): no case twin, not
 /// ignored, no slug in use.
-fn refuse_destination(vault: &Vault, path: &VaultPath) -> Result<Slug, Refusal> {
+fn free_slug(vault: &Vault, path: &VaultPath) -> Result<Slug, Refusal> {
     let slug = match path.place() {
         Ok(Some(Place::Concept { slug })) => slug,
         Err(problem) if path.kind() == Some(Kind::Concept) => return Err(problem.refusal(path)),

@@ -188,6 +188,40 @@ mod tests {
     }
 
     #[test]
+    fn a_lone_prereq_gets_the_quoting_fix() {
+        for lone in ["[[x]]", "\"[[x]]\""] {
+            let note = format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nprereqs: {lone}\n---\n# Y\n");
+            let index = crate::testing::index(&[("concepts/a/y.md", note.as_str()), ("concepts/a/x.md", "")]);
+            let diags = run(&index);
+            let d: Vec<_> = diags.iter().filter(|d| d.code == "fm.field-type").collect();
+            assert_eq!(d.len(), 1, "{lone}: {diags:?}");
+            assert_eq!(d[0].fixes.len(), 1, "{lone}: {diags:?}");
+            assert_eq!(d[0].fixes[0].message, "put it in a list", "{lone}");
+            let fixed =
+                crate::fix::Plan::new(&index, &crate::fix::Options { unsafe_fixes: false, only: None }).unwrap();
+            let text = &fixed.change.writes[&vp("concepts/a/y.md")].text;
+            assert!(text.contains("prereqs:\n  - \"[[x]]\"\n"), "{lone}: {text}");
+        }
+    }
+
+    #[test]
+    fn a_block_link_to_an_id_that_is_no_block_id_says_so() {
+        // `^quo` is a valid id, but nothing in a quote has one (§4.6): the block is gone.
+        let files = [
+            ("views/v.md", "# V\n\nStep one ^step-1\n\nStep two ^step-2a\n\n> quoted ^quo\n\n- item\n\n^list-1\n"),
+            ("views/w.md", "# W\n\n[[views/v#^step-1]] [[views/v#^step-2]] [[views/v#^quo]] [[views/v#^list-1]]\n"),
+        ];
+        let index = crate::testing::index(&files);
+        let hints: Vec<String> =
+            run(&index).iter().filter(|d| d.code == "link.dangling-block").map(|d| d.hint.clone().unwrap()).collect();
+        assert_eq!(hints.len(), 4, "{hints:?}");
+        assert!(hints[0].contains("`^step-1` is in `views/v.md` but is no block id"), "{hints:?}");
+        assert!(hints[1].contains("removed"), "`^step-2a` is another id: {hints:?}");
+        assert!(hints[2].contains("removed"), "`^quo` is a valid id: {hints:?}");
+        assert!(hints[3].contains("is no block id"), "an id on its own line: {hints:?}");
+    }
+
+    #[test]
     fn a_note_beside_a_file_of_its_short_name() {
         let d = lint(&[("concepts/x/x.png", ""), ("concepts/x/x.png.md", "# X\n"), ("concepts/x/y.md", "# Y\n")]);
         let clashes: Vec<_> = d.iter().filter(|(_, c)| c == "path.name-clash").map(|(p, _)| p.as_str()).collect();

@@ -1,4 +1,5 @@
-//! `loci block-ids` (m0 §9.9): assign ULID block ids to the top-level blocks of a section.
+//! `loci block-ids` (m0 §9.9): assign ULID block ids to the paragraphs and list
+//! items at the top level of a section.
 
 use std::collections::BTreeSet;
 

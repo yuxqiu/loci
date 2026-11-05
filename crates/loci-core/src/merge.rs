@@ -41,4 +41,19 @@ mod tests {
             &plan(&i, note(&i, "concepts/a/y.md"), note(&i, "concepts/a/c.md")).unwrap().writes["concepts/a/c.md"].text;
         assert!(d.contains("prereqs:\n  - \"[[w]]\"\n"), "{d}");
     }
+
+    #[test]
+    fn a_prereq_on_both_concepts_is_kept_once() {
+        let id = |n: &str| format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0T{n}\n---\n# {n}\n");
+        let c = "---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TC\nprereqs: [\"[[w]]\", \"[[y]]\", \"[[z]]\"]\n---\n# C\n";
+        let i = crate::testing::index(&[
+            ("concepts/a/w.md", id("W")),
+            ("concepts/a/y.md", id("Y")),
+            ("concepts/a/z.md", id("Z")),
+            ("concepts/a/c.md", c.into()),
+        ]);
+        let d =
+            &plan(&i, note(&i, "concepts/a/w.md"), note(&i, "concepts/a/y.md")).unwrap().writes["concepts/a/c.md"].text;
+        assert!(d.contains("prereqs:\n  - \"[[y]]\"\n  - \"[[z]]\"\n---"), "{d}");
+    }
 }

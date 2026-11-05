@@ -5,7 +5,7 @@ use loci_core::path::VaultPath;
 use loci_core::vault::Vault;
 use serde::Deserialize;
 
-pub(crate) const PATH: &str = "plugins/learn/config.toml";
+const PATH: &str = "plugins/learn/config.toml";
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -31,8 +31,9 @@ impl Config {
     }
 
     /// Reads the vault's config, or the defaults if the file is absent. An invalid
-    /// file is `learn.config`.
+    /// file is `learn.config`; a symlink on the way to it is `file.symlink` (m0 §3).
     pub fn load(vault: &Vault) -> Result<Self, Refusal> {
+        vault.refuse_symlink(&VaultPath::fixed(PATH))?;
         let path = vault.abs(&VaultPath::fixed(PATH));
         match std::fs::read_to_string(&path) {
             Ok(text) => Self::parse(&text).map_err(|e| Refusal::refused("learn.config", e)),

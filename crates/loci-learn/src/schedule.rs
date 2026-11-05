@@ -26,7 +26,7 @@ pub struct CardState {
 
 impl Scheduler {
     pub fn new(desired_retention: f32) -> Self {
-        let fsrs = FSRS::new(&[]).expect("the default FSRS parameters are valid");
+        let fsrs = FSRS::new(&fsrs::DEFAULT_PARAMETERS).expect("the default FSRS parameters are valid");
         Self { fsrs, desired_retention }
     }
 

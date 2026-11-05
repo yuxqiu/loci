@@ -73,16 +73,19 @@ fn id_field(note: &Note) -> Option<Diagnostic> {
     }
 }
 
-/// `prereqs`: a list of strings `[[slug]]`. An unquoted `[[slug]]` gets a fix quoting
-/// every such item of the note.
+/// `prereqs`: a list of strings `[[slug]]`. An unquoted `[[slug]]`, or a lone prereq
+/// outside a list, gets a fix quoting every such item of the note.
 fn prereqs_field(note: &Note) -> Vec<Diagnostic> {
-    let wrong = |span| {
-        wrong_type(note, ConceptField::Prereqs, "a list of `\"[[slug]]\"`", span).with_hint("write \"[[slug]]\"")
+    let lone = note.fm(ConceptField::Prereqs.key()).is_some_and(|v| v.is_lone_prereq());
+    let (hint, label) = if lone {
+        ("write a list: `prereqs: [\"[[slug]]\"]`", "put it in a list")
+    } else {
+        ("write \"[[slug]]\"", "quote it")
     };
-    let quote = || Fix::new(Applicability::Safe, "quote it").frontmatter(&note.path, FmChange::QuotePrereqs);
+    let fix = || Fix::new(Applicability::Safe, label).frontmatter(&note.path, FmChange::QuotePrereqs);
     let diagnostic = |v: &Spanned<FmValue>| {
-        let d = wrong(v.span.clone());
-        if v.is_unquoted_prereq() { d.with_fix(quote()) } else { d }
+        let d = wrong_type(note, ConceptField::Prereqs, "a list of `\"[[slug]]\"`", v.span.clone()).with_hint(hint);
+        if lone || v.is_unquoted_prereq() { d.with_fix(fix()) } else { d }
     };
     note.bad_prereqs().into_iter().map(diagnostic).collect()
 }

@@ -37,6 +37,14 @@ them under its version.
 
 ### Changed
 
+- `loci lint --fix` also fixes a lone prereq outside a list (`prereqs: [[x]]` or
+  `prereqs: "[[x]]"`), rewriting it as `["[[x]]"]`.
+- `link.dangling-block` says when the target holds the id but it is no block id
+  (`^step-1`: ids are letters, digits and `_`), instead of "the block was removed".
+- `loci merge` no longer leaves a note with the same prereq twice when it named both
+  concepts as prerequisites.
+- `loci export` no longer uses an embed's size (`![[x.pdf|300]]`) as the text of a
+  link it writes; the file name or note title stands instead.
 - `loci learn state` and `loci learn review` no longer crash when a very low
   `desired_retention` gives a card an interval of tens of thousands of years; the
   card is due at the last representable time.

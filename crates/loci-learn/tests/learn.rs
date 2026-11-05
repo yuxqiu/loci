@@ -175,6 +175,20 @@ fn the_log_is_not_written_through_a_symlink() {
 }
 
 #[test]
+fn the_config_is_not_read_through_a_symlink() {
+    let v = vault(&[("concepts/a/x.md", &concept(CONCEPT, &format!("- q :: a ^{ID1}\n")))]);
+    let outside = v.root.parent().unwrap().join("outside.toml");
+    std::fs::write(&outside, "new_per_day = 1\n").unwrap();
+    std::fs::create_dir_all(v.root.join("plugins/learn")).unwrap();
+    std::os::unix::fs::symlink(&outside, v.root.join("plugins/learn/config.toml")).unwrap();
+    std::fs::write(v.root.join(".git/info/exclude"), "/plugins/learn/config.toml\n").unwrap();
+    for args in [&["state", "x"][..], &["review"]] {
+        let (code, env) = learn(&v, args, "");
+        assert_eq!((code, error_code(&env)), (1, "file.symlink"), "{args:?}: {env}");
+    }
+}
+
+#[test]
 fn state_kinds() {
     let v = vault(&[
         ("concepts/a/x.md", &concept(CONCEPT, &format!("- q :: a ^{ID1}\n- q2 :: a ^{ID2}\n"))),
