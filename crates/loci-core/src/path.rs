@@ -47,13 +47,13 @@ impl fmt::Display for Kind {
 }
 
 impl Kind {
-    /// The formed notes, written to be read (concepts, area files, views, journal
-    /// entries), as opposed to sources, inbox drafts and rule files.
+    /// Whether notes of this kind are formed: written to be read (concepts, area files,
+    /// views, journal entries), as opposed to sources, inbox drafts and rule files.
     pub fn is_formed(self) -> bool {
         matches!(self, Kind::Concept | Kind::Area | Kind::View | Kind::Journal)
     }
 
-    /// The managed kinds (m0 §3): C, A, V, J, R.
+    /// Whether this kind is managed (m0 §3): C, A, V, J, R.
     pub fn is_managed(self) -> bool {
         matches!(self, Kind::Concept | Kind::Area | Kind::View | Kind::Journal | Kind::Rules)
     }

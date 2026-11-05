@@ -31,14 +31,13 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
     let note = index.note_named(target)?.of_kind(|k| matches!(k, Kind::View | Kind::Concept), "a view or a concept")?;
-    let path = note.path.clone();
 
     let doc = export::Export::of(&index, note, depth);
     let text = match format {
         Format::Md => doc.markdown.clone(),
         Format::Html => html(&doc, &note.title()).map_err(|m| Refusal::internal("export.html", m))?,
     };
-    let out_path = write_out(&vault, &doc, &path, format, output.map(|o| ctx.cwd.join(o)), text)?;
+    let out_path = write_out(&vault, &doc, &note.path, format, output.map(|o| ctx.cwd.join(o)), text)?;
     let data = json!({
         "output": out_path,
         "notes": doc.notes,

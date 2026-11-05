@@ -199,6 +199,8 @@ Each card's state comes from the `fsrs` crate 6.6.x with its default parameters
 - **Due time:** the time of the last line plus `next_interval(Some(stability),
   desired_retention, rating)` days, with `desired_retention` from `config.toml`.
   This is when the card's predicted retrievability falls to `desired_retention`.
+  The interval has no bound (a low `desired_retention` makes it any length); a due
+  time past the last representable one (year 9999) is that last one.
 - **Retrievability** at time t: `current_retrievability(state, days_elapsed,
   FSRS6_DEFAULT_DECAY)`.
 

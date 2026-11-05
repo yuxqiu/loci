@@ -23,7 +23,8 @@ pub fn plan(
     refuse_ends(from, to, &ignored)?;
     let moves = moves(index, from, to)?;
     refuse_changed_kinds(&moves)?;
-    refuse_unsafe_destination(index, from, to, &exists)?;
+    let vault = index.vault();
+    refuse_taken(vault, to, Some(from), &|p| exists(p) || has_entry(vault, p), "mv.exists")?;
     refuse_lost_files(&moves, &ignored, &exists)?;
     refuse_slug_collisions(index, &moves)?;
 
@@ -97,40 +98,41 @@ fn refuse_changed_kinds(moves: &BTreeMap<VaultPath, VaultPath>) -> Result<(), Re
         return Err(Refusal::refused("mv.no-area", format!("`{new}` {}", new.why_not_concept())));
     }
 
-    // Checked before `refuse_unsafe_destination`, so its case advice never suggests a
-    // name lint rejects.
+    // Checked before `refuse_taken`, so its case advice never suggests a name lint
+    // rejects.
     for new in moves.values() {
         new.place().map_err(|problem| problem.refusal(new))?;
     }
     Ok(())
 }
 
-/// `to` neither exists, nor lies under a file, nor differs from an existing name only
-/// in letter case.
-fn refuse_unsafe_destination(
-    index: &Index,
-    from: &VaultPath,
+/// Destination `to` (for `mv`, moving `source`; for `new`, none) neither differs from
+/// an existing name only in letter case, nor is `taken`, nor lies under a file. `code`
+/// is the command's refusal for the last two (`mv.exists`, `new.exists`).
+pub fn refuse_taken(
+    vault: &Vault,
     to: &VaultPath,
-    exists: &impl Fn(&VaultPath) -> bool,
+    source: Option<&VaultPath>,
+    taken: &impl Fn(&VaultPath) -> bool,
+    code: &str,
 ) -> Result<(), Refusal> {
-    refuse_case_twin(index.vault(), to, Some(from))?;
-    if exists(to) || has_entry(index.vault(), to) {
-        return Err(Refusal::refused("mv.exists", format!("`{to}` already exists")));
+    refuse_case_twin(vault, to, source)?;
+    if taken(to) {
+        return Err(Refusal::refused(code, format!("`{to}` already exists")));
     }
-    if let Some(file) = file_above(index.vault(), to) {
-        return Err(Refusal::refused("mv.exists", format!("`{file}` is a file, not a folder")));
+    if let Some(file) = file_above(vault, to) {
+        return Err(Refusal::refused(code, format!("`{file}` is a file, not a folder")));
     }
 
     Ok(())
 }
 
 /// Refuses destination `to` when it differs only in letter case from an existing file or
-/// folder on its path (`path.case-twin`), for `mv` (moving `source`) and `new` (no
-/// source). Such a twin cannot be used safely: on a case-insensitive file system
-/// (macOS) it is the existing file or folder, and git with `core.ignorecase` keeps the
-/// existing spelling, so rewritten links would dangle; on other systems it makes twin
-/// folders.
-pub fn refuse_case_twin(vault: &Vault, to: &VaultPath, source: Option<&VaultPath>) -> Result<(), Refusal> {
+/// folder on its path (`path.case-twin`). Such a twin cannot be used safely: on a
+/// case-insensitive file system (macOS) it is the existing file or folder, and git with
+/// `core.ignorecase` keeps the existing spelling, so rewritten links would dangle; on
+/// other systems it makes twin folders.
+fn refuse_case_twin(vault: &Vault, to: &VaultPath, source: Option<&VaultPath>) -> Result<(), Refusal> {
     let Some((existing, asked)) = case_twin(vault, to) else { return Ok(()) };
     // `git mv -f` fits only a case-only rename of the source itself; for anyone else's
     // name it would make the twin, or on macOS overwrite the other file.
@@ -206,7 +208,7 @@ pub fn stored_name(index: &Index, from: &VaultPath) -> Result<VaultPath, Refusal
 
 /// The first folder on the way to `path` that is a file (a vault file, or anything on
 /// disk but a folder), so nothing can be made under it.
-pub fn file_above(vault: &Vault, path: &VaultPath) -> Option<VaultPath> {
+fn file_above(vault: &Vault, path: &VaultPath) -> Option<VaultPath> {
     (1..path.components().count())
         .filter_map(|k| path.head(k))
         .find(|p| vault.contains(p) || vault.abs(p).symlink_metadata().is_ok_and(|m| !m.is_dir()))
@@ -219,7 +221,7 @@ fn has_entry(vault: &Vault, path: &VaultPath) -> bool {
 
 /// The first folder or file on the way to `path` whose name differs from an existing
 /// one only in letter case, as (existing, asked) (m0 §9.5). A name that exists
-/// exactly is no twin. `new` and `mv` refuse one ([`refuse_case_twin`]).
+/// exactly is no twin.
 fn case_twin(vault: &Vault, path: &VaultPath) -> Option<(VaultPath, VaultPath)> {
     (1..=path.components().count()).find_map(|k| {
         let asked = path.head(k).expect("`k` is at most the number of segments");

@@ -424,11 +424,10 @@ Learn plugin commands: `loci learn lint`, `skills`, `log`, `state`,
 ### 7.1 Core and plugins
 
 - **Crates.** The repository is a Cargo workspace:
-  - `loci-core`: a library holding the vault model, the parser with byte spans, link
-    resolution, splice editing, git helpers, and the `--json` and lint-diagnostic
-    types;
+  - `loci-core`: the library behind every command (its contents: m0 §2.1);
   - `loci`: the core CLI;
-  - one crate per plugin, starting with `loci-learn`.
+  - one crate per plugin, starting with `loci-learn`;
+  - `loci-testkit`: test helpers, a dev-only dependency.
 
   Core never depends on a plugin.
 - **Dispatch.** `loci <name> …`, when `<name>` is not a core command, runs
@@ -515,7 +514,7 @@ and its benchmark cases stay in the vault.
 | fixture vaults (`tests/fixtures/`) | duplicate filenames; heading links into a dissolved note; same-named images resolved by root path; notes without an H1; `#` lines and hashtags inside code; CJK text |
 | golden (insta snapshots in `crates/*/tests/snapshots/`) | a fixture plus a command, compared with the expected tree and JSON |
 | property (proptest) | `mv` keeps every resolving link resolving; `merge` sends links to the kept concept; `lint` output is deterministic; splice identity and one-pass equivalence; every parsed span lies in the text, and a frontmatter rewrite keeps its meaning |
-| scale | a generated vault of 10k–100k notes, timing `lint`, `status` and replay |
+| scale (planned, not yet written) | a generated vault of 10k–100k notes, timing `lint`, `status` and replay |
 | agent evals (`evals/`) | a generated sample vault (39 neutral concepts so far; thousands needed to tell rule variants apart), suites of `loci bench` cases with shell checks, rule variants, and dated results; run on demand with a real agent (`evals/README.md`) |
 | procedures | skills run on fixed inputs with a real agent: lint passes, concepts cite their sources, no duplicates are created, and the learn closure stops at the boundary |
 

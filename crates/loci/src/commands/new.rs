@@ -66,14 +66,7 @@ fn refuse_destination(vault: &Vault, path: &VaultPath) -> Result<Slug, Refusal> 
     };
 
     vault.refuse_symlink(path)?;
-    if vault.exists(path) {
-        return Err(Refusal::refused("new.exists", format!("`{path}` already exists")));
-    }
-    if let Some(file) = loci_core::mv::file_above(vault, path) {
-        return Err(Refusal::refused("new.exists", format!("`{file}` is a file, not a folder")));
-    }
-
-    loci_core::mv::refuse_case_twin(vault, path, None)?;
+    loci_core::mv::refuse_taken(vault, path, None, &|p| vault.exists(p), "new.exists")?;
 
     if vault.repo().is_ignored(path).map_err(Refusal::git)? {
         return Err(Refusal::refused("path.ignored", format!("`{path}` is ignored by git")));

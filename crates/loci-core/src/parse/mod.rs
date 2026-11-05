@@ -76,10 +76,17 @@ impl<T> std::ops::Deref for Spanned<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Heading {
     pub level: u8,
-    /// The heading's content as written; its §4.6 heading text is `links::one_line` of it.
+    /// The heading's content as written; [`Heading::heading_text`] is its §4.6 heading text.
     pub content: Spanned<HeadingText>,
     /// A setext heading (text over a `===` or `---` underline), not an ATX one.
     pub setext: bool,
+}
+
+impl Heading {
+    /// Its §4.6 heading text: its content read on one line, from `text`, the note it is in.
+    pub fn heading_text<'t>(&self, text: &'t str) -> Cow<'t, str> {
+        one_line(self.content.value(text))
+    }
 }
 
 /// A heading's content as written, line endings kept, without the ATX `#` markers and
@@ -158,9 +165,7 @@ impl Note {
     /// The note's title (§4.7): the first H1's heading text, on one line, else the file
     /// stem.
     pub fn title(&self) -> Cow<'_, str> {
-        self.headings()
-            .find(|h| h.level == 1)
-            .map_or_else(|| self.path.stem().into(), |h| one_line(h.content.value(&self.text)))
+        self.headings().find(|h| h.level == 1).map_or_else(|| self.path.stem().into(), |h| h.heading_text(&self.text))
     }
 
     /// This note, when its kind is one a command takes (`accepts`); else `note.kind`,
@@ -253,7 +258,7 @@ impl Markdown {
     /// Every H2 whose text is `text`, with the top-level blocks of its section.
     pub fn h2_sections(&self, text: &str) -> Vec<H2Section<'_>> {
         self.sections()
-            .filter(|(h, _)| h.level == 2 && one_line(h.content.value(&self.text)) == text)
+            .filter(|(h, _)| h.level == 2 && h.heading_text(&self.text) == text)
             .map(|(heading, section)| {
                 let inside = |b: &&Spanned<Block>| heading.span.end <= b.span.start && b.span.end <= section.end;
                 H2Section { blocks: self.body.iter().filter(inside).collect(), heading }

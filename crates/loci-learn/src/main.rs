@@ -19,6 +19,7 @@ const NAME: &str = "learn";
 #[derive(Parser)]
 #[command(name = "loci-learn", version, about = "Cards, review and learning estimates for loci")]
 struct Cli {
+    /// Print one JSON envelope on stdout.
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
@@ -34,7 +35,10 @@ enum Cmd {
     /// Append one graded recall (a JSON object on stdin) to the review log.
     Log,
     /// Show a concept's estimate and the lines behind it.
-    State { concept: String },
+    State {
+        /// A concept path or slug.
+        concept: String,
+    },
     /// Review due and new cards in the terminal.
     Review,
 }

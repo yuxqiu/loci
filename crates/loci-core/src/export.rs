@@ -33,7 +33,7 @@ impl<'a> Unit<'a> {
     }
 
     /// The unit for `part` of `note` (m1-m4 §4 step 1: the whole note, the section under
-    /// a heading, or one block, as `resolve` found it), placed under a heading of `level`.
+    /// a heading, or one block, as `resolve` found it), its top heading at `level`.
     fn child(note: &'a Note, part: Option<Range<usize>>, level: u8) -> Self {
         let range = part.unwrap_or(note.body_start()..note.text.len());
         // Its top heading takes `level`; without one, a title does, above its headings.
@@ -81,7 +81,8 @@ impl<'a> Unit<'a> {
         (h.level as i32 + self.shift).clamp(1, 6) as u8
     }
 
-    /// The output level of the nearest heading before byte `at` (0 if none).
+    /// The output level of the nearest heading before byte `at`; else the inserted
+    /// title's; 0 when there is neither.
     fn level_at(&self, at: usize) -> u8 {
         match self.headings().iter().rfind(|h| h.span.start < at) {
             Some(h) => self.level(h),
@@ -125,7 +126,7 @@ fn anchors<'a>(units: &[Unit<'a>]) -> (BTreeMap<&'a VaultPath, Anchors>, Vec<Str
         }
         let start = u.content_start();
         for h in u.headings() {
-            let text = parse::one_line(h.content.value(&u.note.text));
+            let text = h.heading_text(&u.note.text);
             let id = take(&text);
             if a.top.is_none() && h.span.start == start {
                 a.top = Some(id.clone());
@@ -333,15 +334,16 @@ fn escape(s: &str) -> String {
 fn collect<'a>(index: &'a Index, root: &'a Note, depth: usize) -> Vec<Unit<'a>> {
     let mut units = vec![Unit::root(root)];
     let mut seen: BTreeSet<&VaultPath> = BTreeSet::from([&root.path]);
+    // (index into `units`, links from the root)
     let mut queue = VecDeque::from([(0usize, 0usize)]);
-    while let Some((i, d)) = queue.pop_front() {
-        if d >= depth {
+    while let Some((unit, distance)) = queue.pop_front() {
+        if distance >= depth {
             continue;
         }
 
         // The notes the unit links to, each placed one level below the heading before
         // its link; read before any is added, since adding moves `units`.
-        let parent = &units[i];
+        let parent = &units[unit];
         let children: Vec<(&Note, Option<Range<usize>>, u8)> = parent
             .links(index)
             .into_iter()
@@ -356,7 +358,7 @@ fn collect<'a>(index: &'a Index, root: &'a Note, depth: usize) -> Vec<Unit<'a>> 
             if !seen.insert(&note.path) {
                 continue;
             }
-            queue.push_back((units.len(), d + 1));
+            queue.push_back((units.len(), distance + 1));
             units.push(Unit::child(note, part, level));
         }
     }
@@ -651,7 +653,7 @@ mod tests {
             let md = export(&i, "views/v.md", 0).markdown;
             assert!(md.contains(want), "{body:?}: {md:?}");
             let texts = |m: parse::Markdown| -> Vec<String> {
-                m.headings().map(|h| parse::one_line(h.content.value(&m.text)).into_owned()).collect()
+                m.headings().map(|h| h.heading_text(&m.text).into_owned()).collect()
             };
             if !body.contains("[[") {
                 let (got, was) =

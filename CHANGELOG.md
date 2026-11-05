@@ -37,6 +37,9 @@ them under its version.
 
 ### Changed
 
+- `loci learn state` and `loci learn review` no longer crash when a very low
+  `desired_retention` gives a card an interval of tens of thousands of years; the
+  card is due at the last representable time.
 - Framework rules: "Answering questions": an answer from the vault names the note
   behind each claim, keeps outside knowledge under "Outside the vault", and says
   what the vault does not cover.

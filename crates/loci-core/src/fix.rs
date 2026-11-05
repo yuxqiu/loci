@@ -235,9 +235,9 @@ fn verify(before: &Index, was: &[Diagnostic], after: &Index, now: &[Diagnostic])
     };
 
     let (was_n, now_n) = (errors(was), errors(now));
-    if let Some((code, n)) = now_n.iter().find(|(c, n)| **n > was_n.get(*c).copied().unwrap_or(0)) {
-        let w = was_n.get(code).copied().unwrap_or(0);
-        return Err(refuse(format!("the fixes would raise the `{code}` errors from {w} to {n}")));
+    let was_errors = |code: &str| was_n.get(code).copied().unwrap_or(0);
+    if let Some((code, n)) = now_n.iter().find(|(c, n)| **n > was_errors(c)) {
+        return Err(refuse(format!("the fixes would raise the `{code}` errors from {} to {n}", was_errors(code))));
     }
 
     // Markdown links count too: a fix that turns one into a wikilink keeps its target,

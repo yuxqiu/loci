@@ -83,7 +83,9 @@ updates = "u0003"
   never sees older entries.
 - A vault without the key has handled none.
 - A key newer than any id the binary knows means the binary is older than the vault:
-  `loci status` warns (`updates.newer`) and offers nothing.
+  `loci status` warns (`updates.newer`) and offers nothing; `loci updates` refuses
+  (`updates.newer`, exit 1) with no flag or with `--handled`, and `--all` still lists
+  every update.
 
 ## 4. Growth
 

@@ -18,7 +18,7 @@ pub(super) fn links(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
 /// The headings of `note`, the real choices for a heading link that misses, so it can
 /// be relinked without opening the note; picking one is judgement, so there is no fix.
 fn headings_hint(note: &Note) -> String {
-    let headings: Vec<_> = note.headings().map(|h| crate::parse::one_line(h.content.value(&note.text))).collect();
+    let headings: Vec<_> = note.headings().map(|h| h.heading_text(&note.text)).collect();
     if headings.is_empty() {
         "it has no headings".to_string()
     } else {

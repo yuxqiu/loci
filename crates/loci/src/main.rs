@@ -145,6 +145,7 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum SkillCmd {
+    /// Print one skill, or list them all.
     Show {
         /// The skill to print (default: list them all).
         name: Option<String>,

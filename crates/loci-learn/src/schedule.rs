@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use fsrs::{FSRS, FSRS6_DEFAULT_DECAY, FSRSItem, FSRSReview, MemoryState, current_retrievability};
-use jiff::{Timestamp, ToSpan, tz::TimeZone};
+use jiff::{SignedDuration, Timestamp, tz::TimeZone};
 use loci_core::id::Ulid;
 use loci_core::parse::Spanned;
 
@@ -137,9 +137,12 @@ fn calendar_days(a: Timestamp, b: Timestamp) -> u32 {
     u32::try_from(days.max(0)).expect("a non-negative day count fits in u32")
 }
 
+/// `t` plus `days`, or the last timestamp when that is past it. FSRS intervals are not
+/// bounded (a low desired retention gives any length), so this takes a `SignedDuration`:
+/// a `Span` panics beyond about 20,000 years.
 fn add_days(t: Timestamp, days: f64) -> Timestamp {
     let seconds = (days * SECONDS_PER_DAY).round() as i64;
-    t.checked_add(seconds.seconds()).unwrap_or(Timestamp::MAX)
+    t.checked_add(SignedDuration::from_secs(seconds)).unwrap_or(Timestamp::MAX)
 }
 
 /// Groups card lines by card id, in timestamp order.
@@ -178,6 +181,14 @@ mod tests {
         let b: Timestamp = "2026-10-31T00:01:00Z".parse().unwrap();
         assert_eq!(calendar_days(a, b), 1);
         assert_eq!(calendar_days(a, a), 0);
+    }
+
+    #[test]
+    fn a_due_past_the_calendar_is_the_last_timestamp() {
+        // A low desired retention gives intervals beyond any date (§2 allows it).
+        let t: Timestamp = "2026-10-01T10:00:00Z".parse().unwrap();
+        assert_eq!(add_days(t, 1e12), Timestamp::MAX);
+        assert_eq!(add_days(t, f64::INFINITY), Timestamp::MAX);
     }
 
     #[test]
