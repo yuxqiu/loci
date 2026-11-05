@@ -1,4 +1,5 @@
-//! Path rules (m0 §3, §6.2, §6.4, §6.6), shared with `new` and `mv`, and the inbox layout.
+//! Path rules (m0 §3, §6.2, §6.4, §6.6), which `new` and `mv` share through
+//! `VaultPath::place`, and the inbox layout.
 
 use unicode_normalization::is_nfc;
 

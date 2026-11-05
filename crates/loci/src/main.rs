@@ -34,7 +34,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Create a vault in the current directory.
+    /// Create a vault in the current directory, or the `--vault` folder.
     Init,
     /// Lint the working tree (core rules and every installed plugin).
     Lint {

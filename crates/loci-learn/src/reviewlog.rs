@@ -14,10 +14,11 @@ const LOG: &str = "plugins/learn/reviews.jsonl";
 const ATTRS: &str = "plugins/learn/.gitattributes";
 const ATTRS_LINE: &str = "reviews.jsonl merge=union\n";
 
+/// A grade; its discriminant is the FSRS rating, 1–4.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Grade {
-    Again,
+    Again = 1,
     Hard,
     Good,
     Easy,
@@ -26,12 +27,7 @@ pub enum Grade {
 impl Grade {
     /// The FSRS rating: 1–4.
     pub fn rating(self) -> u32 {
-        match self {
-            Grade::Again => 1,
-            Grade::Hard => 2,
-            Grade::Good => 3,
-            Grade::Easy => 4,
-        }
+        self as u32
     }
 
     /// Reads a grade as fail / partial / pass (§4.2).
@@ -130,9 +126,17 @@ impl Input {
 
 /// The review log of a vault.
 #[derive(Debug, Clone, Copy)]
-pub struct ReviewLog<'a>(pub &'a Vault);
+pub struct ReviewLog<'a>(&'a Vault);
 
-impl ReviewLog<'_> {
+impl<'a> ReviewLog<'a> {
+    /// The log of `vault`. Refuses a symlink on the way to the log, its `.gitattributes`
+    /// or the config (`file.symlink`): loci never reads or writes through one (m0 §3),
+    /// and an ignored one escaped the vault's walk.
+    pub fn open(vault: &'a Vault) -> Result<Self, Refusal> {
+        [LOG, ATTRS, crate::config::PATH].into_iter().try_for_each(|p| vault.refuse_symlink(&VaultPath::fixed(p)))?;
+        Ok(Self(vault))
+    }
+
     /// Reads every line of the log, sorted by timestamp (stable for equal times). A line
     /// that does not parse is `learn.log`.
     pub fn read(&self) -> Result<Vec<Line>, Refusal> {
@@ -154,50 +158,49 @@ impl ReviewLog<'_> {
         Ok(lines)
     }
 
-    /// Refuses a symlink on the way to the log, its `.gitattributes` or the config
-    /// (`file.symlink`): loci never reads or writes through one (m0 §3), and an ignored
-    /// one escaped the vault's walk.
-    pub fn refuse_symlinks(&self) -> Result<(), Refusal> {
-        [LOG, ATTRS, crate::config::PATH].into_iter().try_for_each(|p| self.0.refuse_symlink(&VaultPath::fixed(p)))
-    }
-
     /// Appends one line, creating `plugins/learn/` and its `.gitattributes` first if needed.
-    /// Returns the file length before the append, for rollback.
-    pub fn append(&self, line: &Line) -> std::io::Result<u64> {
-        std::fs::create_dir_all(self.0.abs(&VaultPath::fixed(DIR)))?;
+    /// Returns the file length before the append, for rollback. An error names the file.
+    pub fn append(&self, line: &Line) -> Result<u64, String> {
+        let dir = self.0.abs(&VaultPath::fixed(DIR));
+        std::fs::create_dir_all(&dir).map_err(at(&dir))?;
         let attrs = self.0.abs(&VaultPath::fixed(ATTRS));
         if !attrs.exists() {
-            std::fs::write(&attrs, ATTRS_LINE)?;
+            std::fs::write(&attrs, ATTRS_LINE).map_err(at(&attrs))?;
         }
         let log = self.0.abs(&VaultPath::fixed(LOG));
-        let mut f = std::fs::OpenOptions::new().create(true).read(true).append(true).open(log)?;
-        let before = f.metadata()?.len();
+        let mut f = std::fs::OpenOptions::new().create(true).read(true).append(true).open(&log).map_err(at(&log))?;
+        let before = f.metadata().map_err(at(&log))?.len();
         // A last line without its line break (an edit by hand) gets one, so the new line
         // does not join it.
         let mut last = *b"\n";
         if before > 0 {
-            f.seek(SeekFrom::End(-1))?;
-            f.read_exact(&mut last)?;
+            f.seek(SeekFrom::End(-1)).and_then(|_| f.read_exact(&mut last)).map_err(at(&log))?;
         }
         let lead = if last[0] == b'\n' { "" } else { "\n" };
         let json = serde_json::to_string(line).expect("a line always serialises");
         // One write, undone on failure, so a partial line never stays in the log.
         if let Err(e) = f.write_all(format!("{lead}{json}\n").as_bytes()) {
-            f.set_len(before)?;
-            return Err(e);
+            f.set_len(before).map_err(at(&log))?;
+            return Err(at(&log)(e));
         }
         Ok(before)
     }
 
-    /// Truncates the log back to `len` bytes (undoing an append).
-    pub fn truncate(&self, len: u64) -> std::io::Result<()> {
-        std::fs::OpenOptions::new().write(true).open(self.0.abs(&VaultPath::fixed(LOG)))?.set_len(len)
+    /// Truncates the log back to `len` bytes (undoing an append). An error names the file.
+    pub fn truncate(&self, len: u64) -> Result<(), String> {
+        let log = self.0.abs(&VaultPath::fixed(LOG));
+        std::fs::OpenOptions::new().write(true).open(&log).and_then(|f| f.set_len(len)).map_err(at(&log))
     }
 
     /// Commits the log and its `.gitattributes` alone, as the user (§2.4). Returns the commit.
     pub fn commit(&self, command: &str) -> Result<String, String> {
         self.0.repo().commit_paths(&format!("loci: learn {command}"), &[VaultPath::fixed(LOG), VaultPath::fixed(ATTRS)])
     }
+}
+
+/// An I/O error at `path`, as a message naming it.
+fn at(path: &std::path::Path) -> impl Fn(std::io::Error) -> String + '_ {
+    move |e| format!("{}: {e}", path.display())
 }
 
 #[cfg(test)]

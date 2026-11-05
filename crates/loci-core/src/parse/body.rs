@@ -90,7 +90,7 @@ enum OpenKind<'a> {
     },
     /// A table cell, which builds nothing.
     Cell,
-    /// Other inline markup (emphasis), which builds nothing.
+    /// Anything else (inline markup, a table's head and rows), which builds nothing.
     Inline,
 }
 

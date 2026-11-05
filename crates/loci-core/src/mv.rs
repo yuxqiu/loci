@@ -166,7 +166,7 @@ fn refuse_lost_files(
 fn refuse_slug_collisions(index: &Index, moves: &BTreeMap<VaultPath, VaultPath>) -> Result<(), Refusal> {
     let mut new_slugs = BTreeSet::new();
     for new in moves.values() {
-        let Ok(Some(Place::Concept { slug, .. })) = new.place() else { continue };
+        let Ok(Some(Place::Concept { slug })) = new.place() else { continue };
         let taken = index.concepts_named(&slug).iter().any(|p| !moves.contains_key(p));
         if taken || !new_slugs.insert(slug.clone()) {
             return Err(Refusal::refused("mv.collision", format!("slug `{slug}` is already used")));

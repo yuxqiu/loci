@@ -192,7 +192,7 @@ fn relinked<'i>(index: &'i Index, change: &Change) -> impl Iterator<Item = &'i N
 /// its own note follows the note. The fragment is not checked: one that no longer
 /// resolves still follows its note (lint reports it).
 fn rewrite(tree: &Vault, note: &Note, link: &Spanned<Link>, new: &VaultPath) -> Option<String> {
-    let mut written = match &link.target.names {
+    let mut target = match &link.target.names {
         Names::ThisNote => return None,
         // `[[b.md]]` stays as written when its concept keeps its slug.
         Names::Slug(slug) if new.stem() == slug.as_str() => return None,
@@ -201,9 +201,9 @@ fn rewrite(tree: &Vault, note: &Note, link: &Spanned<Link>, new: &VaultPath) -> 
         Names::Bare(_) | Names::Escaping(_) => unreachable!("it resolves to nothing, so it never moves"),
     };
     if let Some(f) = &link.target.fragment {
-        written.push_str(&format!("#{f}"));
+        target.push_str(&format!("#{f}"));
     }
-    (written != link.target.text(&note.text)).then_some(written)
+    (target != link.target.text(&note.text)).then_some(target)
 }
 
 /// Builds the changed tree in memory and checks that every link outside `sources/` that

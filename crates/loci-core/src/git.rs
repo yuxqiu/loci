@@ -18,7 +18,9 @@ impl<'a> Repo<'a> {
 
     fn git(&self) -> Command {
         let mut c = Command::new("git");
-        c.arg("-C").arg(self.0);
+        // No advice (hints for people, such as a sparse index expanding): what git
+        // prints on stderr is then an error or a warning loci reports.
+        c.arg("-C").arg(self.0).env("GIT_ADVICE", "0");
         c
     }
 
@@ -59,7 +61,7 @@ impl<'a> Repo<'a> {
 
     /// The agent's notes in the record `name`, or none if it has no notes or does not
     /// exist.
-    pub fn agent_notes(&self, name: &str) -> Result<Vec<String>, String> {
+    fn agent_notes(&self, name: &str) -> Result<Vec<String>, String> {
         if !self.answer(&["rev-parse", "--verify", "-q", name])? {
             return Ok(vec![]);
         }
@@ -71,11 +73,11 @@ impl<'a> Repo<'a> {
     /// `refs/loci/agent/<HEAD id>` (replacing an earlier record for the same HEAD),
     /// without touching the index or any branch. `now` dates the record.
     /// `notes` (what was hard in the task) join those of the record it replaces. Returns
-    /// the ref, or `None` when there is no HEAD, or when the tree equals HEAD's and there
-    /// are no notes.
+    /// the ref, or `None` when the tree equals HEAD's and there are no notes. Without
+    /// HEAD there is nothing to record against, so the work would be lost: an error.
     pub fn record_agent_tree(&self, now: SystemTime, notes: &[String]) -> Result<Option<String>, String> {
         if !self.has_head()? {
-            return Ok(None);
+            return Err("the repository has no commit yet; commit once so the work can be recorded".into());
         }
 
         let head = self.head()?;
@@ -156,29 +158,37 @@ impl<'a> Repo<'a> {
         self.answer(&["check-ignore", "-q", "--", path.as_str()])
     }
 
-    /// Every path git sees in the work tree, or under `pathspec` when given: tracked files
-    /// and untracked files it does not ignore (`git ls-files -z --cached --others
-    /// --exclude-standard`).
-    pub fn ls_files(&self, pathspec: Option<&VaultPath>) -> Result<LsFiles, String> {
-        let what = "ls-files";
-        let mut cmd = self.git();
-        cmd.args(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"])
-            // A vault path, never a pattern: `*` or `?` in a folder name is literal.
-            .args(pathspec.map(|p| format!(":(literal){p}")));
-        let out = checked(&mut cmd, what)?;
-        let mut listing = LsFiles::default();
-        for name in out.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()) {
-            let path = std::str::from_utf8(name)
-                .map_err(|_| format!("`{}` has a name that is not UTF-8", String::from_utf8_lossy(name)))
-                .and_then(vault_path);
-            match path {
-                Ok(path) => listing.paths.push(path),
-                Err(e) => listing.bad_names.push(e),
-            }
+    /// What git names, for opening the vault: the paths it sees in the work tree
+    /// (tracked files and untracked files it does not ignore, `git ls-files -z --cached
+    /// --others --exclude-standard`), and every name that is no vault path among them or
+    /// in HEAD's tree (a deletion may be only there). Together these are every name git
+    /// reports without `--ignored` (m0 §3); ignored files loci never names.
+    pub(crate) fn ls_files(&self) -> Result<LsFiles, String> {
+        let out =
+            checked(self.git().args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]), "ls-files")?;
+        let (paths, mut bad_names) = names(nul_separated(&out.stdout));
+        if self.has_head()? {
+            bad_names.extend(names(nul_separated(&self.run(&["ls-tree", "-r", "-z", "--name-only", "HEAD"])?)).1);
         }
         let stderr = String::from_utf8_lossy(&out.stderr);
-        listing.warnings = stderr.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect();
-        Ok(listing)
+        let warnings = stderr.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect();
+        Ok(LsFiles { paths, bad_names, warnings })
+    }
+
+    /// The paths git sees under `folder`: tracked files and untracked files it does not
+    /// ignore.
+    pub fn ls_folder(&self, folder: &VaultPath) -> Result<Vec<VaultPath>, String> {
+        // A vault path, never a pattern: `*` or `?` in a folder name is literal.
+        let pathspec = format!(":(literal){folder}");
+        vault_paths(nul_separated(&self.run(&[
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            &pathspec,
+        ])?))
     }
 
     /// Whether the repository has a commit.
@@ -222,18 +232,17 @@ impl<'a> Repo<'a> {
             "--ignore-submodules=all",
         ])?;
         let (changed, untracked) = parse_status(&out)?;
-        let head: BTreeSet<String> = if self.has_head()? {
-            let out = self.run(&["ls-tree", "-r", "--name-only", "-z", "HEAD"])?;
-            utf8_records(&out).map(str::to_string).collect()
+        let head_files: BTreeSet<VaultPath> = if self.has_head()? {
+            vault_paths(nul_separated(&self.run(&["ls-tree", "-r", "-z", "--name-only", "HEAD"])?))?
+                .into_iter()
+                .collect()
         } else {
             BTreeSet::new()
         };
 
-        let vp = |n: &String| vault_path(n).map_err(|e| format!("git status: {e}"));
-        let mut ch = Changes { untracked: untracked.iter().map(vp).collect::<Result<_, _>>()?, ..Changes::default() };
-        for path in changed.iter().map(vp) {
-            let path = path?;
-            match (head.contains(path.as_str()), crate::vault::is_regular_file(self.0, &path)) {
+        let mut ch = Changes { untracked, ..Changes::default() };
+        for path in changed {
+            match (head_files.contains(&path), crate::vault::is_regular_file(self.0, &path)) {
                 (true, true) => ch.modified.push(path),
                 (false, true) => ch.added.push(path),
                 (true, false) => ch.deleted.push(path),
@@ -297,17 +306,46 @@ fn merged_notes(previous: Vec<String>, notes: &[String]) -> Vec<String> {
     all
 }
 
-/// What `git ls-files` lists.
-#[derive(Debug, Default)]
-pub struct LsFiles {
-    /// The names that are vault paths. An untracked nested repository is listed as its
-    /// folder.
+/// What git names, for opening the vault ([`Repo::ls_files`]).
+#[derive(Debug)]
+pub(crate) struct LsFiles {
+    /// The listed names that are vault paths. An untracked nested repository is listed
+    /// as its folder.
     pub paths: Vec<VaultPath>,
-    /// Why each other name is no vault path (not UTF-8, or a control character), for
-    /// messages; loci reads no vault that has one.
+    /// Why each other listed or HEAD name is no vault path (not UTF-8, or a control
+    /// character), for messages; loci opens no vault that has one.
     pub bad_names: Vec<String>,
     /// The warnings git printed, one per line (a directory it could not open).
     pub warnings: Vec<String>,
+}
+
+/// The NUL-separated records of `out`.
+fn nul_separated(out: &[u8]) -> impl Iterator<Item = &[u8]> {
+    out.split(|b| *b == 0).filter(|r| !r.is_empty())
+}
+
+/// The names git printed: those that are vault paths, and why each other one is not.
+fn names<'a>(out: impl IntoIterator<Item = &'a [u8]>) -> (Vec<VaultPath>, Vec<String>) {
+    let (mut paths, mut bad) = (vec![], vec![]);
+    for name in out {
+        let path = std::str::from_utf8(name)
+            .map_err(|_| format!("\"{}\" has a name that is not UTF-8", name.escape_ascii()))
+            .and_then(vault_path);
+        match path {
+            Ok(path) => paths.push(path),
+            Err(e) => bad.push(e),
+        }
+    }
+    (paths, bad)
+}
+
+/// The names git printed, after the vault opened: a name that is no vault path means
+/// the vault changed since (it refused one at open), an error.
+fn vault_paths<'a>(out: impl IntoIterator<Item = &'a [u8]>) -> Result<Vec<VaultPath>, String> {
+    match names(out) {
+        (paths, bad) if bad.is_empty() => Ok(paths),
+        (_, bad) => Err(format!("{} (the vault changed since loci opened it)", bad.join(", "))),
+    }
 }
 
 /// The top level of the git work tree holding `dir`, canonicalized. The error is git's
@@ -320,8 +358,8 @@ pub fn toplevel(dir: &Path) -> Result<PathBuf, String> {
 /// A path git printed on a line of its own, without the line break (and nothing else: a
 /// folder name may end in a space). An error naming `what` when it is not UTF-8.
 fn path_line(out: Vec<u8>, what: &str) -> Result<String, String> {
-    let out = String::from_utf8(out)
-        .map_err(|e| format!("{what} is not UTF-8: {}", String::from_utf8_lossy(e.as_bytes())))?;
+    let out =
+        String::from_utf8(out).map_err(|e| format!("{what} is not UTF-8: \"{}\"", e.as_bytes().escape_ascii()))?;
     Ok(out.strip_suffix('\n').unwrap_or(&out).to_string())
 }
 
@@ -348,38 +386,29 @@ impl Changes {
     }
 }
 
-/// The NUL-separated records of `out` (paths, or `git status` records) that are valid
-/// UTF-8. A non-UTF-8 path is not a vault file (under the folders core reads, the vault
-/// is refused as `file.unreadable`), so it is skipped rather than mangled into a path
-/// that does not exist.
-fn utf8_records(out: &[u8]) -> impl Iterator<Item = &str> {
-    out.split(|b| *b == 0).filter(|r| !r.is_empty()).filter_map(|r| std::str::from_utf8(r).ok())
-}
-
 /// The changed paths (ordinary and conflict records) and the untracked paths. A record
 /// that does not have its fields is an error, not a path.
-fn parse_status(out: &[u8]) -> Result<(Vec<String>, Vec<String>), String> {
+fn parse_status(out: &[u8]) -> Result<(Vec<VaultPath>, Vec<VaultPath>), String> {
     let (mut changed, mut untracked) = (vec![], vec![]);
-    for rec in utf8_records(out) {
-        // 1 XY sub mH mI mW hH hI path; u XY sub m1 m2 m3 mW h1 h2 h3 path.
-        let fields = match rec.as_bytes().first() {
-            Some(b'1') => 9,
-            Some(b'u') => 11,
-            Some(b'?') => {
-                let path = rec.strip_prefix("? ").ok_or_else(|| format!("git status: malformed record `{rec}`"))?;
-                untracked.push(path.to_string());
-                continue;
-            }
+    for rec in nul_separated(out) {
+        let shown = || rec.escape_ascii();
+        // 1 XY sub mH mI mW hH hI path; u XY sub m1 m2 m3 mW h1 h2 h3 path; ? path.
+        let (fields, list) = match rec[0] {
+            b'1' => (9, &mut changed),
+            b'u' => (11, &mut changed),
+            b'?' => (2, &mut untracked),
             // Headers: none requested, and git-status(1) says to ignore unknown ones.
-            Some(b'#') => continue,
+            b'#' => continue,
             // Renamed (`2`) and ignored (`!`) records are not requested.
-            _ => return Err(format!("git status: unexpected record `{rec}`")),
+            _ => return Err(format!("git status: unexpected record `{}`", shown())),
         };
-        let path =
-            rec.splitn(fields, ' ').nth(fields - 1).ok_or_else(|| format!("git status: malformed record `{rec}`"))?;
-        changed.push(path.to_string());
+        let path = rec
+            .splitn(fields, |b| *b == b' ')
+            .nth(fields - 1)
+            .ok_or_else(|| format!("git status: malformed record `{}`", shown()))?;
+        list.push(path);
     }
-    Ok((changed, untracked))
+    Ok((vault_paths(changed)?, vault_paths(untracked)?))
 }
 
 #[cfg(test)]
@@ -531,6 +560,22 @@ mod tests {
         std::fs::remove_file(root.join("a\nb.md")).unwrap();
         let err = Repo::new(root).status().unwrap_err();
         assert!(err.contains(r#""a\nb.md" is not a vault path"#), "{err}");
+    }
+
+    /// A changed name that is not UTF-8 is an error too, not a change left uncounted.
+    #[cfg(unix)]
+    #[test]
+    fn status_refuses_a_name_that_is_not_utf8() {
+        use std::os::unix::ffi::OsStrExt;
+        let tmp = test_repo();
+        let root = tmp.path();
+        let name = std::ffi::OsStr::from_bytes(b"n\xe9.md");
+        std::fs::write(root.join(name), "n\n").unwrap();
+        Repo::new(root).run(&["add", "."]).unwrap();
+        Repo::new(root).run(&["commit", "-qm", "base"]).unwrap();
+        std::fs::remove_file(root.join(name)).unwrap();
+        let err = Repo::new(root).status().unwrap_err();
+        assert!(err.contains(r#""n\xe9.md" has a name that is not UTF-8"#), "{err}");
     }
 
     /// A folder name may end in a space: only git's line break is dropped.

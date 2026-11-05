@@ -81,19 +81,19 @@ fn check_exists(line: &Line, all: &[Spanned<Card>], index: &Index) -> Result<(),
 }
 
 pub fn log(vault: &Vault, mut stdin: impl Read) -> Result<Report, Refusal> {
-    ReviewLog(vault).refuse_symlinks()?;
+    let log = ReviewLog::open(vault)?;
     let mut input = String::new();
-    stdin.read_to_string(&mut input).map_err(Refusal::io)?;
+    stdin.read_to_string(&mut input).map_err(|e| Refusal::io(format!("reading stdin: {e}")))?;
     let bad = |e: String| Refusal::refused("learn.bad-input", e);
     let parsed: Input = serde_json::from_str(&input).map_err(|e| bad(e.to_string()))?;
     let line = parsed.into_line(Timestamp::now()).map_err(bad)?;
     let index = Index::open(vault);
     let all = cards::all(&index);
     check_exists(&line, &all, &index)?;
-    let before = ReviewLog(vault).append(&line).map_err(Refusal::io)?;
-    match ReviewLog(vault).commit("log") {
+    let before = log.append(&line).map_err(Refusal::io)?;
+    match log.commit("log") {
         Ok(sha) => Ok(Report::ok(json!({"line": line, "commit": sha}), format!("logged {sha}\n"))),
-        Err(e) => Err(match ReviewLog(vault).truncate(before) {
+        Err(e) => Err(match log.truncate(before) {
             Ok(()) => Refusal::git(e),
             Err(t) => Refusal::git(format!("{e}; removing the uncommitted line also failed: {t}")),
         }),
@@ -101,17 +101,14 @@ pub fn log(vault: &Vault, mut stdin: impl Read) -> Result<Report, Refusal> {
 }
 
 pub fn state(vault: &Vault, arg: &str) -> Result<Report, Refusal> {
-    ReviewLog(vault).refuse_symlinks()?;
+    let log = ReviewLog::open(vault)?;
     let index = Index::open(vault);
-    let note = index.note_named(arg)?;
-    if note.kind != Kind::Concept {
-        return Err(Refusal::refused("note.kind", format!("`{}` is not a concept", note.path)));
-    }
+    let note = index.note_named(arg)?.of_kind(|k| k == Kind::Concept, "a concept")?;
     let Some(concept) = note.id() else {
         return Err(Refusal::refused("learn.unknown-concept", format!("`{}` has no valid id", note.path)));
     };
     let config = Config::load(vault)?;
-    let lines = ReviewLog(vault).read()?;
+    let lines = log.read()?;
     let (note_cards, _) = cards::of_note(note);
     let (estimate, used) =
         Scheduler::new(config.desired_retention).estimate(&note_cards, concept, &lines, Timestamp::now());
@@ -124,20 +121,20 @@ pub fn state(vault: &Vault, arg: &str) -> Result<Report, Refusal> {
 }
 
 pub fn review(vault: &Vault) -> Result<Report, Refusal> {
-    ReviewLog(vault).refuse_symlinks()?;
+    let log = ReviewLog::open(vault)?;
     let config = Config::load(vault)?;
-    let lines = ReviewLog(vault).read()?;
+    let lines = log.read()?;
     let index = Index::open(vault);
     let all = cards::all(&index);
     let scheduler = Scheduler::new(config.desired_retention);
     let (session, new_count) = scheduler.select(&all, &lines, config.new_per_day, Timestamp::now());
 
     // Each grade is appended at once; the lines are committed at the end (§2.6 step 6).
-    let (reviewed, stopped) = grade_cards(&session, ReviewLog(vault));
+    let (reviewed, stopped) = grade_cards(&session, log);
 
     // Lines already appended are committed even when the session stopped on an error.
     let uncommitted = |e| Refusal::git(format!("{e}; the {reviewed} grade(s) stay in the log, uncommitted"));
-    let commit = if reviewed > 0 { Some(ReviewLog(vault).commit("review").map_err(uncommitted)?) } else { None };
+    let commit = if reviewed > 0 { Some(log.commit("review").map_err(uncommitted)?) } else { None };
     if let Err(e) = stopped {
         let committed = commit.map_or(String::new(), |sha| format!(" ({reviewed} grades committed in {sha})"));
         return Err(Refusal::io(format!("the session stopped: {e}{committed}")));
@@ -151,7 +148,7 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
 /// Asks for a grade on each card of `session` and appends it to the log. Returns how
 /// many it appended, and how it stopped: at the end, on `q` or end of input (`Ok`), or
 /// on an I/O error.
-fn grade_cards(session: &[(Ulid, &Spanned<Card>)], log: ReviewLog) -> (usize, std::io::Result<()>) {
+fn grade_cards(session: &[(Ulid, &Spanned<Card>)], log: ReviewLog) -> (usize, Result<(), String>) {
     let (mut input, mut err) = (std::io::stdin().lock(), std::io::stderr());
     let mut appended = 0;
     for (i, &(id, card)) in session.iter().enumerate() {
@@ -159,7 +156,7 @@ fn grade_cards(session: &[(Ulid, &Spanned<Card>)], log: ReviewLog) -> (usize, st
         let grade = match ask(card, &progress, &mut input, &mut err) {
             Ok(Some(grade)) => grade,
             Ok(None) => break,
-            Err(e) => return (appended, Err(e)),
+            Err(e) => return (appended, Err(format!("the terminal: {e}"))),
         };
         let line = Line { t: Timestamp::now(), subject: Subject::Card(id), grade };
         if let Err(e) = log.append(&line) {

@@ -5,6 +5,7 @@ use std::ops::Range;
 
 use pulldown_cmark::Options;
 
+use crate::envelope::Refusal;
 use crate::id::Ulid;
 use crate::path::Kind;
 use crate::path::VaultPath;
@@ -155,6 +156,15 @@ impl Note {
         self.headings()
             .find(|h| h.level == 1)
             .map_or_else(|| self.path.stem().into(), |h| one_line(h.content.value(&self.text)))
+    }
+
+    /// This note, when its kind is one a command takes (`accepts`); else `note.kind`,
+    /// saying it is not `what` (m0 §8).
+    pub fn of_kind(&self, accepts: impl Fn(Kind) -> bool, what: &str) -> Result<&Self, Refusal> {
+        if !accepts(self.kind) {
+            return Err(Refusal::refused("note.kind", format!("`{}` is not {what}", self.path)));
+        }
+        Ok(self)
     }
 }
 

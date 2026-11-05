@@ -93,25 +93,6 @@ struct Anchors {
     headings: BTreeMap<String, String>,
 }
 
-/// The heading identifiers of a document, each [`anchor_id`] of the heading text with
-/// `-1`, `-2`, … appended when it is already taken, as GitHub does.
-#[derive(Default)]
-struct AnchorIds {
-    used: BTreeSet<String>,
-    /// Every identifier, in document order.
-    order: Vec<String>,
-}
-
-impl AnchorIds {
-    /// The identifier of the next heading, whose text is `text`.
-    fn take(&mut self, text: &str) -> String {
-        let base = anchor_id(text);
-        let id = take_unique(&mut self.used, |n| if n == 0 { base.clone() } else { format!("{base}-{n}") });
-        self.order.push(id.clone());
-        id
-    }
-}
-
 /// The first of `candidate(0)`, `candidate(1)`, … not in `taken`, now taken.
 fn take_unique(taken: &mut BTreeSet<String>, candidate: impl Fn(usize) -> String) -> String {
     let name = (0..).map(candidate).find(|c| !taken.contains(c)).expect("an untaken name exists");
@@ -120,19 +101,26 @@ fn take_unique(taken: &mut BTreeSet<String>, candidate: impl Fn(usize) -> String
 }
 
 /// The identifiers of the headings of the units: per unit, its anchors; and every
-/// identifier in document order.
+/// identifier in document order. Each is the [`anchor_id`] of the heading text with
+/// `-1`, `-2`, … appended when it is already taken, as GitHub does.
 fn anchors(units: &[Unit]) -> (Vec<Anchors>, Vec<String>) {
-    let mut ids = AnchorIds::default();
+    let (mut used, mut order) = (BTreeSet::new(), vec![]);
+    let mut take = |text: &str| {
+        let base = anchor_id(text);
+        let id = take_unique(&mut used, |n| if n == 0 { base.clone() } else { format!("{base}-{n}") });
+        order.push(id.clone());
+        id
+    };
     let mut out = vec![];
     for u in units {
         let mut a = Anchors::default();
         if let Some((_, title)) = &u.title {
-            a.top = Some(ids.take(title));
+            a.top = Some(take(title));
         }
         let start = u.content_start();
         for h in u.headings() {
             let text = parse::one_line(h.content.value(&u.note.text));
-            let id = ids.take(&text);
+            let id = take(&text);
             if a.top.is_none() && h.span.start == start {
                 a.top = Some(id.clone());
             }
@@ -140,7 +128,7 @@ fn anchors(units: &[Unit]) -> (Vec<Anchors>, Vec<String>) {
         }
         out.push(a);
     }
-    (out, ids.order)
+    (out, order)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -415,8 +415,19 @@ fn material_dropped_ignores_plugin_data() {
     assert!(with_code(&env, "material-dropped").is_empty(), "{}", diag_lines(&env));
 }
 
-/// Every name git lists must be UTF-8, even where core does not read (`plugins/`): a
-/// vault holding one that is not is refused (`file.unreadable`), naming it.
+/// Git's advice on stderr is no warning: a sparse index makes `ls-files` print hints.
+#[test]
+fn a_sparse_index_opens() {
+    let v = TestVault::committed(BIN, "mv-rename");
+    v.git(&["sparse-checkout", "init", "--cone", "--sparse-index"]);
+    v.git(&["sparse-checkout", "set", "concepts"]);
+    let (code, env) = v.run(&["status"]);
+    assert!(error_code(&env).is_empty() && code == 0, "{env:#}");
+}
+
+/// Every name git reports must be UTF-8, even where core does not read (`plugins/`) and
+/// in HEAD alone (a staged deletion): a vault holding one that is not is refused
+/// (`file.unreadable`), naming it.
 #[test]
 fn a_non_utf8_name_anywhere_refuses_the_vault() {
     use std::os::unix::ffi::OsStrExt;
@@ -429,12 +440,22 @@ fn a_non_utf8_name_anywhere_refuses_the_vault() {
         let (code, env) = v.run(args);
         assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{args:?}: {env:#}");
         let message = error_message(&env);
-        assert!(message.contains("`plugins/x/data\u{fffd}` has a name that is not UTF-8"), "{message}");
+        assert!(message.contains(r#""plugins/x/data\xff" has a name that is not UTF-8"#), "{message}");
     }
     std::fs::remove_file(raw(b"plugins/x/data\xff")).unwrap();
     let (code, env) = v.run(&["lint"]);
     assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "a tracked name gone from disk: {env:#}");
+    // A staged deletion leaves the name in HEAD alone: still refused, until committed.
+    v.git(&["add", "-A"]);
+    for args in [&["lint"][..], &["status"], &["lint", "--fix"]] {
+        let (code, env) = v.run(args);
+        assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{args:?}, a staged deletion: {env:#}");
+    }
     v.commit_all("odd removed");
+    // An ignored file is never named, so its name is not checked.
+    v.write(".gitignore", "/ignored/\n");
+    std::fs::create_dir_all(v.root.join("ignored")).unwrap();
+    std::fs::write(raw(b"ignored/data\xff"), "x").unwrap();
     let (code, env) = v.run(&["lint"]);
     assert!(error_code(&env).is_empty() && code <= 1, "{env:#}");
 }
@@ -531,7 +552,7 @@ fn an_unreadable_file_refuses_the_vault() {
             "`views/locked.md` cannot be read",
             "`sources/papers/p.pdf` cannot be read",
             "`views/closed/inner.md` cannot be read",
-            "`views/odd\u{fffd}.png` has a name that is not UTF-8",
+            r#""views/odd\xff.png" has a name that is not UTF-8"#,
             "git: warning: could not open directory 'inbox/shut/'",
         ] {
             assert!(message.contains(part), "{part}: {message}");

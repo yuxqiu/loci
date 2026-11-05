@@ -2,6 +2,7 @@
 //! the exit code.
 
 use std::fmt;
+use std::io::Write as _;
 use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
@@ -345,17 +346,24 @@ impl Report {
 
     /// Prints the report: the envelope on stdout with `json`; otherwise the human text
     /// on stdout and diagnostics and the error on stderr (m0 §8). Returns the exit code.
+    /// A reader that closed stdout early (`| head`) wanted no more of it: the work is
+    /// done, so the exit code stands; any other failure to write is `Internal`.
     pub fn print(&self, json: bool, version: &str, command: &str) -> Exit {
-        if json {
+        let stdout = if json {
             let env = self.envelope(version, command);
-            println!("{}", serde_json::to_string_pretty(&env).expect("an envelope always serialises"));
+            serde_json::to_string_pretty(&env).expect("an envelope always serialises") + "\n"
+        } else if self.human.is_empty() || self.human.ends_with('\n') {
+            self.human.clone()
         } else {
-            if !self.human.is_empty() {
-                print!("{}", self.human);
-                if !self.human.ends_with('\n') {
-                    println!();
-                }
-            }
+            format!("{}\n", self.human)
+        };
+        if let Err(e) = std::io::stdout().lock().write_all(stdout.as_bytes())
+            && e.kind() != std::io::ErrorKind::BrokenPipe
+        {
+            eprintln!("error[io]: writing to stdout: {e}");
+            return Exit::Internal;
+        }
+        if !json {
             for d in &self.diagnostics {
                 eprintln!("{d}");
             }

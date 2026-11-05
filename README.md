@@ -12,7 +12,7 @@ The name: *loci communes* were the topic headings of a commonplace book; the met
 2. Install the agent skills the way your agent expects. They are the folders in
    `share/loci/skills/` (and `crates/loci-learn/skills/` for the plugin), also
    installed by the Nix packages under `share/loci/skills/`. An agent without them
-   can read them with `loci skill show`.
+   can read them with `loci skill show` once the vault exists (step 3).
 3. In the folder for your notes, run `loci init`. It creates the vault, the git
    repository and an `AGENTS.md` that tells agents to read the framework
    rules (`loci rules`), `RULES.md` and `STYLE.md` at the start of a session, and to

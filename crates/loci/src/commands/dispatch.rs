@@ -1,8 +1,9 @@
 //! Plugin dispatch (m0 §2.2): `loci <name> args...` runs `loci-<name> args...`.
 
+use std::os::unix::process::ExitStatusExt;
 use std::process::ExitCode;
 
-use loci_core::envelope::{Exit, Refusal, Report};
+use loci_core::envelope::{Refusal, Report};
 
 use super::{Ctx, plugins};
 use crate::{VERSION, core_commands};
@@ -32,7 +33,17 @@ pub fn run(ctx: &Ctx, args: Vec<String>) -> ExitCode {
     }
 
     match cmd.status() {
-        Ok(status) => ExitCode::from(status.code().map_or(Exit::Internal as u8, |c| c.clamp(0, 255) as u8)),
+        Ok(status) => match status.code() {
+            Some(c) => ExitCode::from(c as u8),
+            None => {
+                let signal = status.signal().map_or("a signal".to_string(), |s| format!("signal {s}"));
+                fail(
+                    ctx,
+                    name,
+                    Refusal::internal("plugin.failed", format!("{} was killed by {signal}", p.path.display())),
+                )
+            }
+        },
         Err(e) => fail(ctx, name, Refusal::internal("plugin.failed", format!("cannot run {}: {e}", p.path.display()))),
     }
 }

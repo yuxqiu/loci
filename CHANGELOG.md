@@ -34,6 +34,24 @@ them under its version.
 
 ### Changed
 
+- `loci closure --depth N` orders the concepts at depth N after their prerequisites
+  and reports a cycle through them (`prereqs.cycle`); they were listed as if they had
+  no prerequisites.
+- A `loci` command whose stdout is closed early (`loci lint | head`) keeps its exit
+  code instead of crashing; a plugin killed by a signal gets a `plugin.failed` error
+  (with `--json`, an envelope) instead of no output.
+- `loci bench` shows the agent's stderr and reports each case's `agent_exit` (`null`
+  on timeout or a signal), so an agent that fails to start is visible.
+- `loci done` warns (`done.record`) in a repository with no commit yet, where it
+  cannot record the work or its `--note`s.
+- A vault whose `HEAD` holds a name that is not UTF-8 or has a control character is
+  refused (`file.unreadable`) until the fix is committed, also when the file is
+  deleted and the deletion staged; such a change used to be left out of `loci
+  status` and of `lint --fix`'s dirty-tree check. Such names are shown escaped
+  (`"n\xe9.md"`).
+- `loci learn` I/O errors name the file or folder that failed.
+- A vault with a sparse index opens; git's hints are no longer read as warnings that
+  refuse it.
 - `loci new --title` refuses a blank title or one with a line break (`new.title`), and
   writes a closing ` #` after a title ending in `#`, so the H1 reads back whole.
   `loci export` keeps a multi-line setext heading on one line in a note's inserted
@@ -112,7 +130,7 @@ them under its version.
   list are no longer printed. The agent reads the rules at session start, as the
   `AGENTS.md` that `loci init` writes says, through the new `loci rules`.
 - `loci links` lists **unlinked mentions** both ways: notes that name the note
-  (title, parenthesised alias or slug) without linking it, and concepts the note
+  (title, parenthesised alias, or file name: a concept's slug) without linking it, and concepts the note
   names without linking them, and marks prerequisites
   `(prereq)`. `loci new` runs `git add -N` on the file it creates and, on a slug
   collision, names the note that has the slug. A dangling `[[slug]]` suggests the

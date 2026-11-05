@@ -12,9 +12,8 @@ pub fn run(ctx: &Ctx, from: &str, into: &str, dry_run: bool) -> Result<Report, R
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
     let (from, into) = (index.note_named(from)?, index.note_named(into)?);
-    if let Some(n) = [from, into].into_iter().find(|n| n.kind != Kind::Concept) {
-        return Err(Refusal::refused("note.kind", format!("`{}` is not a concept", n.path)));
-    }
+    let (from, into) =
+        (from.of_kind(|k| k == Kind::Concept, "a concept")?, into.of_kind(|k| k == Kind::Concept, "a concept")?);
     let change = merge::plan(&index, from, into)?;
     let (from, into) = (&from.path, &into.path);
     if !dry_run {

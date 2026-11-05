@@ -137,6 +137,19 @@ fn a_failed_commit_leaves_nothing_staged() {
 }
 
 #[test]
+fn a_failed_append_names_the_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let v = vault(&[("concepts/a/x.md", &concept(CONCEPT, &format!("- q :: a ^{ID1}\n")))]);
+    let dir = v.root.join("plugins/learn");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let (code, env) = learn(&v, &["log"], &format!(r#"{{"card":"{ID1}","grade":"hard"}}"#));
+    assert_eq!((code, error_code(&env)), (3, "io"), "{env}");
+    let message = env["error"]["message"].as_str().unwrap();
+    assert!(message.contains(&dir.join(".gitattributes").display().to_string()), "{message}");
+}
+
+#[test]
 fn the_log_is_not_written_through_a_symlink() {
     let v = vault(&[("concepts/a/x.md", &concept(CONCEPT, &format!("- q :: a ^{ID1}\n")))]);
     let outside = v.root.parent().unwrap().join("outside");

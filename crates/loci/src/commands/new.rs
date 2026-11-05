@@ -60,7 +60,7 @@ fn skeleton(id: Ulid, title: &str) -> String {
 /// ignored, no slug in use.
 fn refuse_destination(vault: &Vault, path: &VaultPath) -> Result<Slug, Refusal> {
     let slug = match path.place() {
-        Ok(Some(Place::Concept { slug, .. })) => slug,
+        Ok(Some(Place::Concept { slug })) => slug,
         Err(problem) if path.kind() == Some(Kind::Concept) => return Err(problem.refusal(path)),
         _ => return Err(Refusal::refused("new.no-area", format!("`{path}` {}", path.why_not_concept()))),
     };

@@ -27,7 +27,7 @@ pub(super) const CONCEPT_FIELDS: &[Field] = &[
 ];
 
 /// The row of the concept field with key `key` in edition `mark`, if it is one.
-fn field(key: &str, mark: Option<UpdateId>) -> Option<&'static Field> {
+fn row(key: &str, mark: Option<UpdateId>) -> Option<&'static Field> {
     CONCEPT_FIELDS.iter().find(|f| f.field.key() == key && f.editions.contains(mark))
 }
 
@@ -41,7 +41,7 @@ fn concepts_with_fields<'a>(ctx: &'a Ctx) -> impl Iterator<Item = &'a Note> {
 pub(super) fn concept_fields(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     for note in concepts_with_fields(ctx) {
         for e in note.frontmatter.iter().flat_map(|f| f.entries()) {
-            if field(&e.key, ctx.mark).is_none() {
+            if row(&e.key, ctx.mark).is_none() {
                 let msg = format!("field `{}` is not allowed in a concept", *e.key);
                 out.push(Diagnostic::error(Code::FmUnknownField, msg).in_note(note, e.key.span.clone()));
             }
@@ -101,7 +101,7 @@ fn prereqs_field(note: &Note) -> Vec<Diagnostic> {
 pub(super) fn outdated_fields(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     for note in concepts_with_fields(ctx) {
         for e in note.frontmatter.iter().flat_map(|f| f.entries()) {
-            let Some(Field { field, editions }) = field(&e.key, ctx.mark) else { continue };
+            let Some(Field { field, editions }) = row(&e.key, ctx.mark) else { continue };
             let Some(update) = editions.until else { continue };
             let change = FmChange::RemoveField(*field);
             let fix = Fix::new(Applicability::Unsafe, format!("delete `{}`", *e.key)).frontmatter(&note.path, change);
@@ -152,7 +152,7 @@ pub(super) fn duplicates(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     }
 }
 
-/// `prereqs.cycle`: each cycle of the prerequisite graph once.
+/// `prereqs.cycle`: the cycles of the prerequisite graph that [`cycles`] finds.
 pub(super) fn prereq_cycles(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     let index = ctx.index;
     let graph: BTreeMap<VaultPath, Vec<VaultPath>> = index
@@ -167,8 +167,9 @@ pub(super) fn prereq_cycles(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
     }
 }
 
-/// Every cycle of `graph` (concept path -> prerequisite paths), found by an iterative
-/// depth-first walk, each once in [`canonical`] form.
+/// The cycles an iterative depth-first walk of `graph` (concept path -> prerequisite
+/// paths) closes, one per back edge, each once in [`canonical`] form: at least one in
+/// every group of concepts that has a cycle, not every cycle.
 fn cycles(graph: &BTreeMap<VaultPath, Vec<VaultPath>>) -> BTreeSet<Vec<VaultPath>> {
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Visit {

@@ -253,14 +253,11 @@ impl VaultPath {
         let Some(kind) = self.kind() else { return Ok(None) };
         let parts: Vec<&str> = self.components().collect();
         Ok(Some(match (kind, parts.as_slice()) {
-            (Kind::Concept, [_, area, ..]) => {
-                Place::Concept { area, slug: self.stem().parse().map_err(PathProblem::SlugFormat)? }
-            }
-            (Kind::Area, [_, area, _]) => Place::Area { area },
+            (Kind::Concept, _) => Place::Concept { slug: self.stem().parse().map_err(PathProblem::SlugFormat)? },
+            (Kind::Area, _) => Place::Area,
             (Kind::View, _) => Place::View,
-            (Kind::Journal, ["journal", stream, _, ..]) => {
-                Place::Journal { stream: stream.parse().map_err(|_| PathProblem::JournalPath)? }
-            }
+            // The stream folder is a slug.
+            (Kind::Journal, ["journal", stream, _, ..]) if stream.parse::<Slug>().is_ok() => Place::Journal,
             (Kind::Journal, _) => return Err(PathProblem::JournalPath),
             (Kind::Source, _) => {
                 let ext = SOURCE.captures(&self.0).ok_or(PathProblem::SourcesLayout)?;
@@ -271,7 +268,6 @@ impl VaultPath {
             (Kind::Rules, _) => Place::Rules,
             (Kind::Asset, _) => Place::Asset,
             (Kind::Unknown, _) => return Err(PathProblem::KindUnknown),
-            (Kind::Concept | Kind::Area, _) => unreachable!("`kind` matched the folder layout"),
         }))
     }
 
@@ -294,16 +290,11 @@ fn has_control(s: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Place<'a> {
     Concept {
-        area: &'a str,
         slug: Slug,
     },
-    Area {
-        area: &'a str,
-    },
+    Area,
     View,
-    Journal {
-        stream: Slug,
-    },
+    Journal,
     /// A source file `sources/<type>/<slug>.<ext>`.
     Source {
         ext: &'a str,
@@ -490,9 +481,9 @@ mod tests {
     #[test]
     fn places() {
         let place = |p: &str| vp(p).place().map(|pl| pl.map(|pl| format!("{pl:?}")));
-        assert_eq!(place("concepts/a/bfs.md").unwrap().unwrap(), r#"Concept { area: "a", slug: Slug("bfs") }"#);
+        assert_eq!(place("concepts/a/bfs.md").unwrap().unwrap(), r#"Concept { slug: Slug("bfs") }"#);
         assert_eq!(place("sources/papers/x.mp3").unwrap().unwrap(), r#"Source { ext: "mp3" }"#);
-        assert_eq!(place("journal/life/2025-03-14 rent.md").unwrap().unwrap(), r#"Journal { stream: Slug("life") }"#);
+        assert_eq!(place("journal/life/2025-03-14 rent.md").unwrap().unwrap(), "Journal");
         assert_eq!(place("inbox/drafts/x.md").unwrap().unwrap(), r#"Inbox(Folder("drafts"))"#);
         assert_eq!(place("plugins/learn/x.jsonl"), Ok(None), "not read by core");
         for good in ["sources/papers/dijkstra-1959.pdf", "sources/clippings/heaps.md", "journal/life/a/b/notes.md"] {

@@ -13,6 +13,8 @@ use crate::envelope::{Diagnostic, Envelope, Refusal};
 
 pub const ENV_VAULT: &str = "LOCI_VAULT";
 pub const ENV_VERSION: &str = "LOCI_VERSION";
+/// At most this many characters of a failed plugin's stderr go in the failure message.
+const STDERR_CHARS: usize = 400;
 
 static NAME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-z][a-z0-9-]*$").unwrap());
 
@@ -146,7 +148,7 @@ impl Plugin {
         let why = if stderr.is_empty() {
             String::new()
         } else {
-            let cut = stderr.char_indices().nth(400).map_or(stderr.len(), |(i, _)| i);
+            let cut = stderr.char_indices().nth(STDERR_CHARS).map_or(stderr.len(), |(i, _)| i);
             format!(": {}", &stderr[..cut])
         };
 

@@ -324,6 +324,15 @@ fn done_keeps_the_agents_notes() {
 }
 
 #[test]
+fn done_without_a_commit_warns() {
+    let v = TestVault::fixture(BIN, "agent-workflow");
+    v.init_git();
+    let (code, env) = v.run(&["done", "--note", "hard"]);
+    assert_eq!((code, env["data"]["record"].clone()), (0, json!(null)), "{env:#}");
+    assert_eq!(messages(&env, "done.record").len(), 1, "the note is not lost silently: {env:#}");
+}
+
+#[test]
 fn done_prunes_old_records() {
     let v = TestVault::committed(BIN, "agent-workflow");
     // The test git is dated 2025-01-01, long before now.
@@ -352,4 +361,14 @@ fn deleted_working_directory_is_refused() {
     let env: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{out:?}"));
     assert_eq!(out.status.code(), Some(3), "{env:#}");
     assert_eq!(env["error"]["code"], "io", "{env:#}");
+}
+
+#[test]
+fn closed_stdout_is_no_crash() {
+    // A reader that stops early (`loci status | head -0`) closes the pipe first.
+    let v = TestVault::committed(BIN, "agent-workflow");
+    let mut c = v.command();
+    let mut child = c.arg("status").stdout(std::process::Stdio::piped()).spawn().unwrap();
+    drop(child.stdout.take());
+    assert_eq!(child.wait().unwrap().code(), Some(0));
 }

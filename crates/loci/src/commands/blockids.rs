@@ -3,6 +3,7 @@
 use loci_core::blockids;
 use loci_core::envelope::{Refusal, Report};
 use loci_core::index::Index;
+use loci_core::path::Kind;
 use serde_json::json;
 
 use super::Ctx;
@@ -11,10 +12,7 @@ pub fn run(ctx: &Ctx, note: &str, section: &str) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     // Like every note argument: a path (`.md` optional) or a concept slug (m0 §8).
     let index = Index::open(&vault);
-    let parsed = index.note_named(note)?;
-    if !parsed.kind.is_managed() {
-        return Err(Refusal::refused("note.kind", format!("`{}` is not a managed note", parsed.path)));
-    }
+    let parsed = index.note_named(note)?.of_kind(Kind::is_managed, "a managed note")?;
 
     let path = parsed.path.clone();
     let (out, assigned) = blockids::assign(parsed, section, loci_core::id::Ulid::monotonic())?;

@@ -35,15 +35,15 @@ fn median(xs: &mut [f64]) -> f64 {
     xs[xs.len() / 2]
 }
 
-/// Runs `command` through `sh -c` with `question` on stdin; returns stdout, or `None`
-/// on timeout. Failing to start or talk to `sh` is an error.
-fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::Result<Option<Vec<u8>>> {
+/// Runs `command` through `sh -c` with `question` on stdin and loci's stderr as its
+/// own; returns its exit code (`None` when killed by a signal) and stdout, or `None` on
+/// timeout. Failing to start or talk to `sh` is an error.
+fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::Result<Option<(Option<i32>, Vec<u8>)>> {
     let mut child = Command::new("sh")
         .args(["-c", command])
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
         .spawn()?;
 
     // Stdout is drained on its own thread so that an agent printing more than a pipe
@@ -63,15 +63,15 @@ fn run_agent(command: &str, question: &str, cwd: &std::path::Path) -> std::io::R
     }
 
     let start = Instant::now();
-    if child.wait_timeout(AGENT_TIMEOUT)?.is_none() {
+    let Some(status) = child.wait_timeout(AGENT_TIMEOUT)? else {
         child.kill()?;
         child.wait()?;
         return Ok(None);
-    }
+    };
 
     // A process the agent left running may hold stdout open, so the wait is bounded too.
     match output.recv_timeout(AGENT_TIMEOUT.saturating_sub(start.elapsed())) {
-        Ok(out) => Ok(Some(out?)),
+        Ok(out) => Ok(Some((status.code(), out?))),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(None),
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!("the stdout reader always sends"),
     }
@@ -105,10 +105,11 @@ pub fn run(ctx: &Ctx, agent: &str, cases_file: Option<&Path>) -> Result<Report, 
     let (mut passes, mut times, mut results) = (0usize, vec![], vec![]);
     for case in &cases {
         let start = Instant::now();
-        let pass = run_case(vault.root(), agent, case).map_err(|e| Refusal::internal("bench.agent", e))?;
+        let (pass, agent_exit) =
+            run_case(vault.root(), agent, case).map_err(|e| Refusal::internal("bench.agent", e))?;
         times.push(start.elapsed().as_secs_f64());
         passes += usize::from(pass);
-        results.push(json!({"q": case.q, "pass": pass}));
+        results.push(json!({"q": case.q, "pass": pass, "agent_exit": agent_exit}));
     }
 
     let pass_rate = passes as f64 / cases.len() as f64;
@@ -120,15 +121,17 @@ pub fn run(ctx: &Ctx, agent: &str, cases_file: Option<&Path>) -> Result<Report, 
 
 /// Runs one case on a fresh copy of the vault (without `bench/`), so that the agent
 /// never sees the cases and no case sees another's edits; the copy is deleted after.
-fn run_case(root: &Path, agent: &str, case: &Case) -> Result<bool, String> {
+/// Returns whether the case passed and the agent's exit code (`None` when it timed out
+/// or was killed by a signal).
+fn run_case(root: &Path, agent: &str, case: &Case) -> Result<(bool, Option<i32>), String> {
     let work =
         tempfile::Builder::new().prefix("loci-bench-").tempdir().map_err(|e| format!("a temporary folder: {e}"))?;
     let copy = work.path().join("vault");
     vault::copy_dir(root, &copy, &["bench"]).map_err(|e| format!("copying the vault: {e}"))?;
-    let Some(reply) =
+    let Some((agent_exit, reply)) =
         run_agent(agent, &case.q, &copy).map_err(|e| format!("cannot run the agent through `sh`: {e}"))?
     else {
-        return Ok(false);
+        return Ok((false, None));
     };
 
     let output = work.path().join("output.txt");
@@ -142,5 +145,5 @@ fn run_case(root: &Path, agent: &str, case: &Case) -> Result<bool, String> {
         .stderr(Stdio::null())
         .status()
         .map_err(|e| format!("cannot run the check through `sh`: {e}"))?;
-    Ok(status.success())
+    Ok((status.success(), agent_exit))
 }

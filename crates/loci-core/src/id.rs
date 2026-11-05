@@ -56,8 +56,9 @@ impl fmt::Display for Slug {
 }
 
 /// A ULID, read only in canonical form: Crockford base32, uppercase, 26 characters, at
-/// most 128 bits (so the first character is 0-7). Not `ulid::Ulid::from_string`, which
-/// accepts lowercase and drops the bits past 128 without an error.
+/// most 128 bits (so the first character is 0-7). `ulid::Ulid::from_string` alone
+/// accepts lowercase and drops the bits past 128 without an error, so a ULID is
+/// canonical when it prints back as written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Ulid(ulid::Ulid);
 
@@ -78,13 +79,8 @@ impl FromStr for Ulid {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, String> {
-        let canonical = s.len() == 26
-            && s.as_bytes()[0] <= b'7'
-            && s.bytes().all(|b| b"0123456789ABCDEFGHJKMNPQRSTVWXYZ".contains(&b));
-        if !canonical {
-            return Err(format!("`{s}` is not a ULID"));
-        }
-        Ok(Self(ulid::Ulid::from_string(s).expect("a canonical ULID decodes")))
+        let id = ulid::Ulid::from_string(s).ok().filter(|u| u.to_string() == s);
+        id.map(Self).ok_or_else(|| format!("`{s}` is not a ULID"))
     }
 }
 

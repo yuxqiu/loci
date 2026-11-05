@@ -30,11 +30,8 @@ impl Format {
 pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option<PathBuf>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
-    let note = index.note_named(target)?;
+    let note = index.note_named(target)?.of_kind(|k| matches!(k, Kind::View | Kind::Concept), "a view or a concept")?;
     let path = note.path.clone();
-    if !matches!(note.kind, Kind::View | Kind::Concept) {
-        return Err(Refusal::refused("note.kind", format!("`{path}` is not a view or a concept")));
-    }
 
     let e = export::Export::of(&index, note, depth);
     let text = match format {
@@ -51,9 +48,9 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
     Ok(Report::ok(data, format!("{}\n", out_path.display())))
 }
 
-/// Writes the export and its images: to `output` when given (the user's path, outside
-/// the vault), else into `.loci/export/` (in the vault, gitignored, so written as vault
-/// files are). Returns where the document went.
+/// Writes the export and its images: to `output` when given (the user's path, written
+/// as given, not as a vault file), else into `.loci/export/` (in the vault, gitignored,
+/// so written as vault files are). Returns where the document went.
 fn write_out(
     vault: &Vault,
     e: &export::Export,

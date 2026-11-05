@@ -11,10 +11,7 @@ use super::Ctx;
 pub fn run(ctx: &Ctx, concept: &str, depth: Option<usize>) -> Result<Report, Refusal> {
     let vault = ctx.vault()?;
     let index = Index::open(&vault);
-    let root = index.note_named(concept)?;
-    if root.kind != Kind::Concept {
-        return Err(Refusal::refused("note.kind", format!("`{}` is not a concept", root.path)));
-    }
+    let root = index.note_named(concept)?.of_kind(|k| k == Kind::Concept, "a concept")?;
     let c = closure::Closure::of(&index, root, depth);
     let mut diags = vec![];
     if c.cyclic {

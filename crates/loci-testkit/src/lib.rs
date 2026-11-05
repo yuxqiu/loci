@@ -347,7 +347,8 @@ pub fn covered<'a>(text: &'a str, d: &Value) -> &'a str {
 
 /// A stub plugin (a shell script) with fixed replies to its `lint` and `skills` hooks;
 /// `lint` also prints [`STUB_LINT_STDERR`] on stderr.
-/// Any other first argument prints its arguments and environment and exits 7.
+/// `crash` kills the stub with a signal. Any other first argument prints its arguments
+/// and environment and exits 7.
 pub struct Stub {
     pub lint: String,
     pub lint_exit: i32,
@@ -405,6 +406,7 @@ impl Stub {
              case \"$1\" in\n\
              lint) echo '{STUB_LINT_STDERR}' >&2; printf '%s\\n' '{}'; exit {};;\n\
              skills) printf '%s\\n' '{}'; exit {};;\n\
+             crash) kill -KILL $$;;\n\
              *) printf 'args=%s\\n' \"$*\"; printf 'vault=%s\\n' \"$LOCI_VAULT\"; \
                 printf 'version=%s\\n' \"$LOCI_VERSION\"; exit 7;;\n\
              esac\n",

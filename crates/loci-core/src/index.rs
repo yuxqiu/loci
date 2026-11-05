@@ -73,7 +73,7 @@ impl<'v> Index<'v> {
     pub fn open(vault: &'v Vault) -> Self {
         let mut index = Index { vault, notes: BTreeMap::new(), slugs: BTreeMap::new() };
         for path in vault.files().iter().filter(|p| p.is_note()) {
-            if let Ok(Some(Place::Concept { slug, .. })) = path.place() {
+            if let Ok(Some(Place::Concept { slug })) = path.place() {
                 index.slugs.entry(slug).or_default().push(path.clone());
             }
             index.notes.insert(path.clone(), parse::parse(path, vault.text(path).to_string()));
@@ -286,7 +286,7 @@ fn mention_names(note: &Note) -> Vec<String> {
 }
 
 /// The byte range of the first mention of any of `names` in the body of `note`: a
-/// Latin match stands as whole words, and text inside a link does not count.
+/// Latin match stands as whole words, and text inside a wikilink or embed does not count.
 fn first_mention(note: &Note, names: &[String]) -> Option<Range<usize>> {
     let edge = |c: Option<char>| !c.is_some_and(|c| c.is_ascii_alphanumeric());
     let text = fold(&note.text);

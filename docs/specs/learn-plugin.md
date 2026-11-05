@@ -10,7 +10,9 @@ prefixed `learn.`.
 
 The plugin binary never writes notes. It writes only under `plugins/learn/`:
 `.gitattributes` and `reviews.jsonl` (§2.4, §3). It reads
-`plugins/learn/config.toml` (§2.1), which the user writes.
+`plugins/learn/config.toml` (§2.1), which the user writes. `log`, `state` and `review`
+first refuse a symlink on the way to these three files, even an ignored one
+(`file.symlink`, m0 §3).
 
 ## 1. Cards
 

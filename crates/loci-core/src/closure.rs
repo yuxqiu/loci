@@ -21,7 +21,8 @@ pub struct Closure {
     pub members: Vec<Member>,
     /// (concept path naming it, the slug) for prereqs that do not resolve.
     pub unresolved: Vec<(VaultPath, Slug)>,
-    /// True if the reachable graph has a cycle (the order breaks it by slug bytes).
+    /// True if the members, or the members and the concept, form a cycle (the order
+    /// breaks it by slug bytes).
     pub cyclic: bool,
 }
 
@@ -35,10 +36,12 @@ impl Closure {
         let mut out = Closure::default();
         let mut queue = VecDeque::from([(root, 0usize)]);
         while let Some((note, d)) = queue.pop_front() {
+            // A member at the depth limit keeps its edges, for the order and cycles.
+            let prereqs = index.prereqs(note);
+            edges.insert(note.path.clone(), prereqs.resolved.iter().map(|q| q.path.clone()).collect());
             if max_depth.is_some_and(|m| d >= m) {
                 continue;
             }
-            let prereqs = index.prereqs(note);
             out.unresolved.extend(prereqs.unresolved.into_iter().map(|s| (note.path.clone(), s.clone())));
             for q in &prereqs.resolved {
                 if q.path != *root_path && !depths.contains_key(&q.path) {
@@ -46,7 +49,6 @@ impl Closure {
                     queue.push_back((q, d + 1));
                 }
             }
-            edges.insert(note.path.clone(), prereqs.resolved.iter().map(|q| q.path.clone()).collect());
         }
 
         let (order, cycle_broken) = prerequisites_first(&depths, &edges);

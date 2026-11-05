@@ -35,6 +35,9 @@ fn dispatch_passes_args_env_and_exit_code() {
     // Run from a subdirectory: LOCI_VAULT is still the absolute root.
     let (_, out, _) = v.run_raw_in(&v.root.join("concepts"), &["stub"]);
     assert!(out.contains(&format!("vault={}\n", v.root.display())), "{out}");
+    // A plugin killed by a signal still gets an envelope.
+    let (code, env) = v.run(&["stub", "crash"]);
+    assert_eq!((code, error_code(&env)), (3, "plugin.failed"));
 }
 
 #[test]

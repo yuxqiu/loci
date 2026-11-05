@@ -214,15 +214,17 @@ pub(crate) fn is_regular_file(root: &Path, rel: &VaultPath) -> bool {
 /// does for every other command. Refuses a failed listing (`git`), a vault in which any
 /// listed path is, or lies under, a symlink (`file.symlink`), and one in which any file
 /// core reads cannot be listed, read, or decoded as UTF-8, or in which any name git
-/// lists, anywhere, is not UTF-8 (`file.unreadable`): loci never runs on a guess.
+/// reports without `--ignored` (listed, or in HEAD's tree) is no vault path
+/// (`file.unreadable`): loci never runs on a guess.
 fn walk(root: &Path) -> Result<(Vec<VaultPath>, BTreeMap<VaultPath, String>), Refusal> {
-    let listed = crate::git::Repo::new(root).ls_files(None).map_err(Refusal::git)?;
+    let listed = crate::git::Repo::new(root).ls_files().map_err(Refusal::git)?;
 
     // Git skips what it cannot read (a directory without permission) with a warning.
     // Wherever the folder is, `plugins/` included, loci cannot tell what it missed.
     let mut unreadable: Vec<String> = listed.warnings.iter().map(|w| format!("git: {w}")).collect();
 
-    // Every listed name, `plugins/` and files gone from disk included, must be a vault path.
+    // Every name git reports, `plugins/`, files gone from disk and HEAD's included, must
+    // be a vault path: no command handles another.
     unreadable.extend(listed.bad_names);
 
     let (mut files, mut texts) = (vec![], BTreeMap::new());

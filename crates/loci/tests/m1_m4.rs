@@ -115,6 +115,18 @@ fn closure_depth_and_cycles() {
     let slugs: Vec<_> =
         env["data"]["closure"].as_array().unwrap().iter().map(|m| m["slug"].as_str().unwrap()).collect();
     assert_eq!(slugs, ["b", "c"], "the cycle is broken by slug bytes");
+    // Members at the depth limit still order by their prerequisites and close cycles.
+    let (_, env) = v.run(&["closure", "a", "--depth", "2"]);
+    assert_eq!(with_code(&env, "prereqs.cycle").len(), 1, "{env}");
+    let v = vault(&[
+        ("concepts/g/r.md", concept(IDS[0], "prereqs: [\"[[a]]\", \"[[b]]\"]\n", "# R\n")),
+        ("concepts/g/a.md", concept(IDS[1], &p("b"), "# A\n")),
+        ("concepts/g/b.md", concept(IDS[2], "", "# B\n")),
+    ]);
+    let (_, env) = v.run(&["closure", "r", "--depth", "1"]);
+    let slugs: Vec<_> =
+        env["data"]["closure"].as_array().unwrap().iter().map(|m| m["slug"].as_str().unwrap()).collect();
+    assert_eq!(slugs, ["b", "a"], "{env}");
 }
 
 #[test]
@@ -148,6 +160,9 @@ fn bench_runs_the_agent_on_every_case() {
     // The reply is checked; each case runs on a fresh copy without `bench/`, where the
     // agent's edit is seen by the check; a failing check fails the case.
     assert_eq!(passes, [true, true, false], "{env:#}");
+    assert_eq!(d["results"][0]["agent_exit"], 0, "{env:#}");
+    let (_, env) = v.run(&["bench", "exit 5"]);
+    assert_eq!(env["data"]["results"][0]["agent_exit"], 5, "a failing agent shows: {env:#}");
     assert!(!v.exists("views/new.md"), "the vault itself is untouched");
 
     // Cases may live outside the vault.
