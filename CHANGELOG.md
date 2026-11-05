@@ -31,6 +31,9 @@ them under its version.
   to your vault rules, your workflows, or loci itself, tested where cheap.
 - Framework rules: how to keep `RULES.md` lessons short and current, and when to
   offer an issue draft for loci itself.
+- `prereqs.unread` (warning, `loci closure`): a concept whose prerequisites cannot
+  all be read (broken frontmatter, or an item that is no `"[[slug]]"`), so the
+  closure may miss some.
 
 ### Changed
 
@@ -269,6 +272,19 @@ them under its version.
 - `loci export` writes an empty HTML comment for a block id whose removal would change
   the note's blocks (a line left as `===` was read as a heading underline, `***` as a
   rule); other ids are still dropped.
+- A vault opens when git tracing is on (`GIT_TRACE`, `GIT_TRACE2`, …, or trace2
+  targets in git config) or an fsmonitor hook prints messages; that output was read
+  as warnings and refused the vault.
+- `loci mv` and `loci new` refuse a destination under a file (`mv.exists`,
+  `new.exists`); `mv --dry-run` reported it would work, and both failed with an I/O
+  error.
+- `loci updates --handled` keeps `loci.toml`'s CRLF line breaks, and an invalid
+  `loci.toml` error names the file.
+- The default `loci export` output is `.loci/export/<note path>/<stem>.<ext>`
+  (`.loci/export/views/study.md/study.md`), with its images in that folder's
+  `assets/`, so one export no longer overwrites another's images.
+- The framework rules say `loci lint --fix` fixes the whole vault, and that
+  `--unsafe-fixes --only <code>` applies every unsafe fix of that code.
 
 ### Removed
 

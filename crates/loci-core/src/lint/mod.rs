@@ -133,7 +133,7 @@ struct Ctx<'a> {
 
 /// The rules of the vault's edition over the index (§7.3), sorted.
 pub fn run(index: &Index) -> Vec<Diagnostic> {
-    let config = &index.vault().config;
+    let config = index.vault().config();
     let ctx = Ctx { index, budgets: &config.budgets, mark: config.updates };
     let mut out = vec![];
     for rule in RULES.iter().filter(|r| r.editions.contains(ctx.mark)) {

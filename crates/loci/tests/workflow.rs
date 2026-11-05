@@ -238,6 +238,8 @@ fn new_refusals() {
         ("journal/r/2025/01/25-01-01", "new.no-area"),
         // The destination checks `mv` makes too.
         ("concepts/A/y", "path.case-twin"),
+        // Under a file, which no folder can be made at.
+        ("concepts/a/x.md/y", "new.exists"),
     ] {
         let (exit, env) = v.run(&["new", path]);
         assert_eq!((exit, error_code(&env)), (1, code), "new {path}: {env:#}");

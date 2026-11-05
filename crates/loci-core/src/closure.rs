@@ -21,6 +21,9 @@ pub struct Closure {
     pub members: Vec<Member>,
     /// (concept path naming it, the slug) for prereqs that do not resolve.
     pub unresolved: Vec<(VaultPath, Slug)>,
+    /// The concepts whose prereqs were followed but cannot all be read: broken
+    /// frontmatter, or a `prereqs` item that is no link (lint reports both).
+    pub unread: Vec<VaultPath>,
     /// True if the members, or the members and the concept, form a cycle (the order
     /// breaks it by slug bytes).
     pub cyclic: bool,
@@ -41,6 +44,9 @@ impl Closure {
             edges.insert(note.path.clone(), prereqs.resolved.iter().map(|q| q.path.clone()).collect());
             if max_depth.is_some_and(|m| d >= m) {
                 continue;
+            }
+            if note.has_broken_frontmatter() || !note.bad_prereqs().is_empty() {
+                out.unread.push(note.path.clone());
             }
             out.unresolved.extend(prereqs.unresolved.into_iter().map(|s| (note.path.clone(), s.clone())));
             for q in &prereqs.resolved {

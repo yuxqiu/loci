@@ -157,8 +157,8 @@ impl Markdown {
         })
     }
 
-    /// Every heading with its section: the heading through the next heading of the same
-    /// or a higher level.
+    /// Every heading with its section: from the heading up to the next heading of the
+    /// same or a smaller level number, else the end of the text.
     pub fn sections(&self) -> impl Iterator<Item = (Spanned<&Heading>, Range<usize>)> {
         let headings: Vec<_> = self.headings().collect();
         (0..headings.len()).map(move |i| {
@@ -274,7 +274,7 @@ mod tests {
     /// from one after the list.
     #[test]
     fn shape_compares_nesting() {
-        let md = |t: &str| crate::parse::markdown(t.to_string());
+        let md = |t: &str| crate::parse::Markdown::parse(t.to_string());
         assert!(!md("- a\n\n  p\n").same_shape(&md("- a\n\np\n")));
         assert!(md("- a\n\n  p\n").same_shape(&md("- b ^x\n\n  q\n")));
         assert!(!md("# A\n").same_shape(&md("## A\n")), "a heading's level");

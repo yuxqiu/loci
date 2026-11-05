@@ -135,7 +135,7 @@ enum Cmd {
         /// browser).
         #[arg(long = "to", value_enum, default_value = "md")]
         format: commands::export::Format,
-        /// The output file (default: `.loci/export/<stem>.<ext>`).
+        /// The output file (default: `.loci/export/<note path>/<stem>.<ext>`).
         #[arg(short)]
         output: Option<PathBuf>,
     },

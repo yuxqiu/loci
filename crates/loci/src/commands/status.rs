@@ -7,6 +7,7 @@ use loci_core::config::UpdateId;
 use loci_core::envelope::{Diagnostic, Refusal, Report};
 use loci_core::git;
 use loci_core::path::{InboxPlace, Place, VaultPath};
+use loci_core::vault::Vault;
 use serde_json::json;
 
 use super::Ctx;
@@ -19,11 +20,11 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
     let files = vault.files();
     let mut out = Out::default();
 
-    entry_point(files, &mut out);
+    entry_point(&vault, &mut out);
     let changes = changes(vault.repo(), &mut out);
     let records = agent_work(vault.repo(), &mut out);
     let inbox = inbox(files, changes.as_ref(), &mut out);
-    let updates = updates(vault.config.updates, &mut out);
+    let updates = updates(vault.config().updates, &mut out);
 
     let data = json!({
         "changes": changes.as_ref().map(|c| json!({
@@ -48,8 +49,8 @@ struct Out {
 }
 
 /// The agent entry point, `AGENTS.md`.
-fn entry_point(files: &[VaultPath], out: &mut Out) {
-    if !files.iter().any(|f| *f == loci_core::path::AGENTS) {
+fn entry_point(vault: &Vault, out: &mut Out) {
+    if !vault.contains(&VaultPath::fixed(loci_core::path::AGENTS)) {
         let warning = Diagnostic::warning("install.missing", "`AGENTS.md` is missing");
         out.diags.push(warning.with_hint("run `loci init` in a new vault"));
     }
@@ -156,8 +157,8 @@ fn updates(mark: Option<UpdateId>, out: &mut Out) -> Vec<UpdateId> {
 }
 
 /// The next step for the inbox: commit the `uncommitted` files first (`None`: unknown),
-/// else process its `files` with the intake skill.
-fn next_step(files: usize, uncommitted: Option<&[&VaultPath]>, out: &mut Out) {
+/// else process its `inbox_count` files with the intake skill.
+fn next_step(inbox_count: usize, uncommitted: Option<&[&VaultPath]>, out: &mut Out) {
     match uncommitted {
         Some(u) if !u.is_empty() => {
             for f in u.iter().take(LISTED) {
@@ -175,7 +176,7 @@ fn next_step(files: usize, uncommitted: Option<&[&VaultPath]>, out: &mut Out) {
                 ),
             ));
         }
-        Some(_) if files > 0 => {
+        Some(_) if inbox_count > 0 => {
             out.human.push_str("Next: process them with the intake skill (`loci skill show intake`).\n");
         }
         _ => {}

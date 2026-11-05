@@ -74,14 +74,12 @@ fn check_material(index: &Index, changes: &git::Changes, out: &mut Vec<Diagnosti
     let repo = index.vault().repo();
     // A `HEAD` blob that is not UTF-8 holds no parsed material.
     let head = |p: &VaultPath| {
-        repo.show_head(p).map(|b| String::from_utf8(b).map_or(Counts::default(), |t| parse::markdown(t).counts))
+        repo.show_head(p).map(|b| String::from_utf8(b).map_or(Counts::default(), |t| parse::Markdown::parse(t).counts))
     };
     let mut tally: BTreeMap<Material, Tally> = BTreeMap::new();
 
     // Deleted: what the deleted notes held, in path order.
-    let mut deleted: Vec<&VaultPath> = changes.deleted.iter().filter(|p| p.is_note() && p.is_core()).collect();
-    deleted.sort();
-    for p in deleted {
+    for p in changes.deleted.iter().filter(|p| p.is_note() && p.is_core()) {
         let counts = head(p)?;
         for m in Material::ALL {
             let t = tally.entry(m).or_default();
@@ -95,7 +93,8 @@ fn check_material(index: &Index, changes: &git::Changes, out: &mut Vec<Diagnosti
     // Added: what changed and new notes gained since HEAD.
     let new_files = changes.added.iter().chain(&changes.untracked).map(|p| (p, false));
     let changed_or_new = changes.modified.iter().map(|p| (p, true)).chain(new_files);
-    for (p, note, in_head) in changed_or_new.filter_map(|(p, in_head)| Some((p, index.note_at(p)?, in_head))) {
+    for (p, in_head) in changed_or_new {
+        let Some(note) = index.note_at(p) else { continue };
         let now = note.counts;
         let before = if in_head { head(p)? } else { Counts::default() };
         for m in Material::ALL {

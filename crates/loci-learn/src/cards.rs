@@ -117,11 +117,11 @@ fn split(raw: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use loci_core::parse::parse;
+    use loci_core::parse::Note;
 
     fn cards(body: &str) -> (Vec<Spanned<Card>>, Vec<Range<usize>>) {
         let text = format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\n---\n# T\n\n{body}");
-        of_note(&parse(&VaultPath::fixed("concepts/a/x.md"), text))
+        of_note(&Note::parse(&VaultPath::fixed("concepts/a/x.md"), text))
     }
 
     #[test]

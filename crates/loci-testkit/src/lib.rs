@@ -118,7 +118,7 @@ impl TestVault {
         self.git(&["commit", "-q", "--allow-empty", "-m", msg]);
     }
 
-    /// Runs `loci --json <args>` in the vault root. Returns (exit code, envelope).
+    /// Runs the binary under test with `--json <args>` in the vault root. Returns (exit code, envelope).
     pub fn run(&self, args: &[&str]) -> (i32, Value) {
         self.run_in(&self.root, args)
     }
@@ -129,7 +129,7 @@ impl TestVault {
         self.run_command(c, "")
     }
 
-    /// Runs `loci <args>` (no implicit `--json`). Returns (exit code, stdout, stderr).
+    /// Runs the binary under test with `<args>` (no implicit `--json`). Returns (exit code, stdout, stderr).
     pub fn run_raw(&self, args: &[&str]) -> (i32, String, String) {
         self.run_raw_in(&self.root, args)
     }
@@ -294,12 +294,9 @@ pub fn span_of(d: &Value) -> &Value {
     &d["location"]["span"]
 }
 
-/// (code, path) pairs of the diagnostics.
-pub fn codes(env: &Value) -> Vec<(String, String)> {
-    diags(env)
-        .iter()
-        .map(|d| (d["code"].as_str().unwrap().to_string(), path_of(d).as_str().unwrap_or("").to_string()))
-        .collect()
+/// The codes of the diagnostics.
+pub fn codes(env: &Value) -> Vec<String> {
+    diags(env).iter().map(|d| d["code"].as_str().unwrap().to_string()).collect()
 }
 
 /// The diagnostics with a given code.

@@ -13,7 +13,12 @@ pub fn run(ctx: &Ctx, concept: &str, depth: Option<usize>) -> Result<Report, Ref
     let index = Index::open(&vault);
     let root = index.note_named(concept)?.of_kind(|k| k == Kind::Concept, "a concept")?;
     let c = closure::Closure::of(&index, root, depth);
-    let mut diags = vec![];
+    let unread = |p| {
+        Diagnostic::warning("prereqs.unread", "its prerequisites cannot all be read; the closure may miss some")
+            .at_path(p)
+            .with_hint("`loci lint` names the problem")
+    };
+    let mut diags: Vec<Diagnostic> = c.unread.iter().map(unread).collect();
     if c.cyclic {
         diags.push(
             Diagnostic::warning(

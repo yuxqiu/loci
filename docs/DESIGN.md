@@ -512,7 +512,7 @@ and its benchmark cases stay in the vault.
 | Layer | What it covers |
 |---|---|
 | unit | the parser, link resolution, frontmatter, plugin dispatch; in `loci-learn`: card parsing and review-log processing |
-| fixture vaults (`tests/fixtures/`) | duplicate filenames; heading links into a dissolved note; relative and colliding image links; notes without an H1; `#` lines and hashtags inside code; CJK text; a review log with lines for deleted cards |
+| fixture vaults (`tests/fixtures/`) | duplicate filenames; heading links into a dissolved note; same-named images resolved by root path; notes without an H1; `#` lines and hashtags inside code; CJK text |
 | golden (insta snapshots in `crates/*/tests/snapshots/`) | a fixture plus a command, compared with the expected tree and JSON |
 | property (proptest) | `mv` keeps every resolving link resolving; `merge` sends links to the kept concept; `lint` output is deterministic; splice identity and one-pass equivalence; every parsed span lies in the text, and a frontmatter rewrite keeps its meaning |
 | scale | a generated vault of 10k–100k notes, timing `lint`, `status` and replay |

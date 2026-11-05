@@ -142,10 +142,10 @@ fn block_ids_resolve_and_duplicate() {
 
 #[test]
 fn block_id_of_parent_item_spans_its_children() {
-    use loci_core::parse::parse;
+    use loci_core::parse::Note;
 
     let text = std::fs::read_to_string(fixtures_dir().join("block-ids/concepts/a/lists.md")).unwrap();
-    let note = parse(&loci_core::path::VaultPath::fixed("concepts/a/lists.md"), text.clone());
+    let note = Note::parse(&loci_core::path::VaultPath::fixed("concepts/a/lists.md"), text.clone());
     let ids: Vec<_> = note.block_ids().collect();
     let get = |id: &str| ids.iter().find(|b| b.id.value(&text) == id).unwrap_or_else(|| panic!("no ^{id}"));
     let parent = get("parent1");
@@ -326,6 +326,11 @@ fn vault_not_git_and_config_invalid() {
     v.write("loci.toml", "schema = 2\n");
     let (code, env) = v.run(&["lint"]);
     assert_eq!((code, error_code(&env)), (1, "config.invalid"));
+    // The message names the file, also when it is not UTF-8.
+    std::fs::write(v.root.join("loci.toml"), b"schema = 1\n# caf\xe9\n").unwrap();
+    let (code, env) = v.run(&["lint"]);
+    assert_eq!((code, error_code(&env)), (1, "config.invalid"));
+    assert!(env["error"]["message"].as_str().unwrap().starts_with("loci.toml: "), "{env:#}");
 }
 
 #[test]
@@ -421,6 +426,39 @@ fn a_sparse_index_opens() {
     let v = TestVault::committed(BIN, "mv-rename");
     v.git(&["sparse-checkout", "init", "--cone", "--sparse-index"]);
     v.git(&["sparse-checkout", "set", "concepts"]);
+    let (code, env) = v.run(&["status"]);
+    assert!(error_code(&env).is_empty() && code == 0, "{env:#}");
+}
+
+/// Git's trace output on stderr is no warning either.
+#[test]
+fn git_tracing_opens() {
+    let v = TestVault::committed(BIN, "mv-rename");
+    for var in ["GIT_TRACE", "GIT_TRACE2", "GIT_TRACE_PERFORMANCE"] {
+        let mut c = v.command();
+        c.current_dir(&v.root).args(["--json", "status"]).env(var, "1");
+        let (code, env) = v.run_command(c, "");
+        assert!(error_code(&env).is_empty() && code == 0, "{var}: {env:#}");
+    }
+    // Trace2 targets set in git's global config, too.
+    let global = v.tmp.path().join("gitconfig");
+    std::fs::write(&global, "[trace2]\n\tnormalTarget = 1\n\tperfTarget = 2\n\teventTarget = 1\n").unwrap();
+    let mut c = v.command();
+    c.current_dir(&v.root).args(["--json", "status"]).env("GIT_CONFIG_GLOBAL", &global);
+    let (code, env) = v.run_command(c, "");
+    assert!(error_code(&env).is_empty() && code == 0, "trace2 config: {env:#}");
+}
+
+/// What an fsmonitor hook prints on stderr is no warning: git passes it on even when
+/// the listing succeeds.
+#[test]
+fn a_noisy_fsmonitor_hook_opens() {
+    use std::os::unix::fs::PermissionsExt;
+    let v = TestVault::committed(BIN, "mv-rename");
+    let hook = v.tmp.path().join("hook.sh");
+    std::fs::write(&hook, "#!/bin/sh\necho hook-noise >&2\nexit 1\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    v.git(&["config", "core.fsmonitor", hook.to_str().unwrap()]);
     let (code, env) = v.run(&["status"]);
     assert!(error_code(&env).is_empty() && code == 0, "{env:#}");
 }

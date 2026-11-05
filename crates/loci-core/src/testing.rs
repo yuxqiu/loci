@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use crate::config::Config;
 use crate::index::Index;
-use crate::parse::{Note, parse};
+use crate::parse::Note;
 use crate::path::VaultPath;
 use crate::vault::Vault;
 
@@ -29,7 +29,7 @@ pub fn index(files: &[(impl AsRef<str>, impl AsRef<str>)]) -> Index<'static> {
 
 /// A concept note, at `concepts/a/x.md`, holding `text`.
 pub fn concept(text: &str) -> Note {
-    parse(&vp("concepts/a/x.md"), text.to_string())
+    Note::parse(&vp("concepts/a/x.md"), text.to_string())
 }
 
 /// `p` as a vault path; panics when it is none.

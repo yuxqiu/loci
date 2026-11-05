@@ -28,13 +28,18 @@ let
       pname,
       # The package's own skills, relative to the repo root.
       skills,
+      # Library crates whose tests this package's check also runs.
+      testedLibs ? [ ],
     }:
     pkgs.rustPlatform.buildRustPackage {
       inherit pname src;
       version = lockedVersion pname;
       cargoLock.lockFile = ../Cargo.lock;
       cargoBuildFlags = [ "-p" pname ];
-      cargoTestFlags = [ "-p" pname ];
+      cargoTestFlags = lib.concatMap (crate: [
+        "-p"
+        crate
+      ]) ([ pname ] ++ testedLibs);
       # The integration tests build temporary git vaults.
       nativeCheckInputs = [ pkgs.git ];
       postInstall = ''
@@ -49,6 +54,7 @@ in
   loci = build {
     pname = "loci";
     skills = "share/loci/skills";
+    testedLibs = [ "loci-core" ];
   };
   loci-learn = build {
     pname = "loci-learn";

@@ -38,7 +38,7 @@ pub fn all() -> Vec<Update> {
 /// The entries of `list`: each is a level-2 heading `<id> · <date> · <title>` and its
 /// section, as loci's markdown parser reads them (a `## ` line in a code block is text).
 fn parse(list: &str) -> Vec<Update> {
-    let note = loci_core::parse::markdown(list.to_string());
+    let note = loci_core::parse::Markdown::parse(list.to_string());
     note.sections()
         .filter(|(h, _)| h.level == 2)
         .map(|(h, section)| {
@@ -70,7 +70,7 @@ pub fn run(ctx: &Ctx, every: bool, handled: Option<&str>) -> Result<Report, Refu
             let text: String = list.iter().map(|u| format!("{}\n", u.text)).collect();
             Ok(Report::ok(json!({"updates": list}), text))
         }
-        (false, None) => show_waiting(waiting(vault.config.updates, &list)?),
+        (false, None) => show_waiting(waiting(vault.config().updates, &list)?),
         (false, Some(id)) => handle(&vault, &list, id),
     }
 }
@@ -89,7 +89,7 @@ fn show_waiting(waiting: Vec<&Update>) -> Result<Report, Refusal> {
 /// `--handled <id>`: records every update through `id` as handled, by setting the
 /// `updates` key in place. Refuses an unknown id and one already handled.
 fn handle(vault: &loci_core::vault::Vault, list: &[Update], id: &str) -> Result<Report, Refusal> {
-    let mark = vault.config.updates;
+    let mark = vault.config().updates;
     let Some(target) = list.iter().find(|u| id.parse() == Ok(u.id)) else {
         let ids: Vec<String> = list.iter().map(|u| u.id.to_string()).collect();
         return Err(Refusal::refused("updates.unknown", format!("no update `{id}`; known: {}", ids.join(", "))));
@@ -106,7 +106,8 @@ fn handle(vault: &loci_core::vault::Vault, list: &[Update], id: &str) -> Result<
     let path = VaultPath::fixed(config::FILE);
     let abs = vault.abs(&path);
     let text = std::fs::read_to_string(&abs).map_err(Refusal::io_at(&abs))?;
-    let updated = Config::set_updates(&text, target.id).map_err(|e| Refusal::refused("config.invalid", e))?;
+    let updated = Config::set_updates(&text, target.id)
+        .map_err(|e| Refusal::refused("config.invalid", format!("{}: {e}", config::FILE)))?;
     vault.write(&path, updated.as_bytes())?;
     Ok(Report::ok(json!({"handled": target.id}), format!("handled updates through {}\n", target.id)))
 }

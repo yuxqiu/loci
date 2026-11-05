@@ -1,6 +1,6 @@
 //! Integration tests for `loci-learn` (learn-plugin §5), run against temporary vaults.
 
-use loci_testkit::{TestVault, diags, error_code};
+use loci_testkit::{TestVault, codes, error_code};
 use serde_json::Value;
 
 const BIN: &str = env!("CARGO_BIN_EXE_loci-learn");
@@ -33,10 +33,6 @@ fn concept(id: &str, cards: &str) -> String {
     loci_testkit::concept(id, "", &format!("# T\n\nBody.\n\n## Cards\n\n{cards}"))
 }
 
-fn diag_codes(env: &Value) -> Vec<String> {
-    diags(env).iter().map(|d| d["code"].as_str().unwrap().to_string()).collect()
-}
-
 #[test]
 fn version_and_direct_runs() {
     let v = vault(&[]);
@@ -65,7 +61,7 @@ fn cards_lint() {
     let (code, env) = learn(&v, &["lint"], "");
     assert_eq!(code, 1);
     assert!(env["data"].is_null());
-    let mut c = diag_codes(&env);
+    let mut c = codes(&env);
     c.sort();
     assert_eq!(
         c,

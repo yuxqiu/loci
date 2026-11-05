@@ -8,7 +8,7 @@ use super::{Code, Ctx};
 use crate::config::{Editions, UpdateId};
 use crate::envelope::{Applicability, Diagnostic, Fix};
 use crate::id::Ulid;
-use crate::parse::{ConceptField, FmChange, FmValue, Note, prereq_slug};
+use crate::parse::{ConceptField, FmChange, FmValue, Note, Spanned};
 use crate::path::VaultPath;
 
 /// A concept frontmatter field (m0 §6.1) and the editions it belongs to.
@@ -80,19 +80,11 @@ fn prereqs_field(note: &Note) -> Vec<Diagnostic> {
         wrong_type(note, ConceptField::Prereqs, "a list of `\"[[slug]]\"`", span).with_hint("write \"[[slug]]\"")
     };
     let quote = || Fix::new(Applicability::Safe, "quote it").frontmatter(&note.path, FmChange::QuotePrereqs);
-    match note.fm(ConceptField::Prereqs.key()).map(|v| (&v.node, &v.span)) {
-        None => vec![],
-        Some((FmValue::List(items), _)) => items
-            .iter()
-            // An item is a prereq link exactly when the parser read one from it.
-            .filter(|i| !matches!(&i.node, FmValue::Str(item) if prereq_slug(item).is_some()))
-            .map(|i| match i.is_unquoted_prereq() {
-                true => wrong(i.span.clone()).with_fix(quote()),
-                false => wrong(i.span.clone()),
-            })
-            .collect(),
-        Some((_, span)) => vec![wrong(span.clone())],
-    }
+    let diagnostic = |v: &Spanned<FmValue>| {
+        let d = wrong(v.span.clone());
+        if v.is_unquoted_prereq() { d.with_fix(quote()) } else { d }
+    };
+    note.bad_prereqs().into_iter().map(diagnostic).collect()
 }
 
 /// Concept fields a pending vault update removes (a row with `Editions::until` an

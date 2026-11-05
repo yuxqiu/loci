@@ -61,7 +61,7 @@ pub fn assign(
 /// An id must not change what it marks (a paragraph's last line `*` becomes a list item
 /// once `^id` follows it): `out` has `note`'s blocks, each assigned id a block id.
 fn refuse_changed(note: &Note, out: &str, assigned: &[Assigned], section: &str) -> Result<(), Refusal> {
-    let after = crate::parse::markdown(out.to_string());
+    let after = crate::parse::Markdown::parse(out.to_string());
     let ids: BTreeSet<&str> = after.block_ids().map(|b| b.id.value(&after.text)).collect();
     let marked = assigned.iter().all(|a| ids.contains(a.id.to_string().as_str()));
     if marked && after.same_shape(note) {

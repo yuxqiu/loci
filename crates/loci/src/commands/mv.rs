@@ -65,7 +65,7 @@ fn refuse_partial_folder(vault: &Vault, from: &VaultPath, plan: &Change) -> Resu
 /// carry the edit past lint as a plain rename.
 fn refuse_changed_source(vault: &Vault, plan: &Change) -> Result<(), Refusal> {
     let changed = vault.repo().status().map_err(Refusal::git)?.modified;
-    match plan.moves.keys().find(|p| matches!(p.place(), Ok(Some(Place::Source { .. }))) && changed.contains(p)) {
+    match plan.moves.keys().find(|p| matches!(p.place(), Ok(Some(Place::Source { .. }))) && changed.contains(*p)) {
         None => Ok(()),
         Some(p) => Err(Refusal::refused(
             "mv.source-changed",

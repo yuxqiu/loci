@@ -42,7 +42,7 @@ impl Skill {
     /// are its frontmatter's `name:` and `description:`. Panics when either is missing:
     /// the binary was built with a bad skill.
     fn from_markdown(body: &str) -> Self {
-        let skill = crate::parse::markdown(body.to_string());
+        let skill = crate::parse::Markdown::parse(body.to_string());
         let field = |key| skill.fm_str(key).unwrap_or_else(|| panic!("a compiled skill has no `{key}`: {body}"));
         Self { name: field("name").to_string(), description: field("description").to_string(), body: body.to_string() }
     }

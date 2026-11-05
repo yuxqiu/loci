@@ -105,7 +105,8 @@ fn refuse_changed_kinds(moves: &BTreeMap<VaultPath, VaultPath>) -> Result<(), Re
     Ok(())
 }
 
-/// `to` neither exists nor differs from an existing name only in letter case.
+/// `to` neither exists, nor lies under a file, nor differs from an existing name only
+/// in letter case.
 fn refuse_unsafe_destination(
     index: &Index,
     from: &VaultPath,
@@ -115,6 +116,9 @@ fn refuse_unsafe_destination(
     refuse_case_twin(index.vault(), to, Some(from))?;
     if exists(to) || has_entry(index.vault(), to) {
         return Err(Refusal::refused("mv.exists", format!("`{to}` already exists")));
+    }
+    if let Some(file) = file_above(index.vault(), to) {
+        return Err(Refusal::refused("mv.exists", format!("`{file}` is a file, not a folder")));
     }
 
     Ok(())
@@ -198,6 +202,14 @@ pub fn stored_name(index: &Index, from: &VaultPath) -> Result<VaultPath, Refusal
         1 => Ok(spellings.into_iter().next().expect("one spelling")),
         _ => Err(Refusal::refused("mv.from", format!("`{from}` names several stored spellings; rename one with git"))),
     }
+}
+
+/// The first folder on the way to `path` that is a file (a vault file, or anything on
+/// disk but a folder), so nothing can be made under it.
+pub fn file_above(vault: &Vault, path: &VaultPath) -> Option<VaultPath> {
+    (1..path.components().count())
+        .filter_map(|k| path.head(k))
+        .find(|p| vault.contains(p) || vault.abs(p).symlink_metadata().is_ok_and(|m| !m.is_dir()))
 }
 
 /// Whether the vault has a file at `path`, or a folder (files under `path/`).
@@ -295,6 +307,8 @@ mod tests {
         let e = |f: &str, t: &str| try_mv(&i, f, t).unwrap_err().code().to_string();
         assert_eq!(e("concepts/a/x.md", "concepts/a/y.md"), "mv.exists");
         assert_eq!(e("views/v.md", "views/V.md"), "path.case-twin");
+        // Under a file, which no folder can be made at.
+        assert_eq!(e("views/v.md", "concepts/a/x.md/v.md"), "mv.exists");
 
         // A case-only rename to a name lint rejects is refused for the name, not the case.
         assert_eq!(e("concepts/a/x.md", "concepts/a/X.md"), "slug.format");

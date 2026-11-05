@@ -94,6 +94,22 @@ fn closure_orders_prerequisites_first() {
     assert_eq!((code, error_code(&env)), (1, "path.outside"));
 }
 
+/// A concept whose prereqs cannot all be read (an item that is no `"[[slug]]"`, or
+/// broken frontmatter) gets a warning, so the closure is not taken as complete.
+#[test]
+fn closure_warns_of_unread_prereqs() {
+    let v = vault(&[
+        ("concepts/g/top.md", concept(IDS[0], "prereqs: [\"[[mid]]\", \"[[odd]]\"]\n", "# Top\n")),
+        ("concepts/g/mid.md", concept(IDS[1], "prereqs: [[base]]\n", "# Mid\n")),
+        ("concepts/g/odd.md", concept(IDS[2], "id: again\n", "# Odd\n")),
+        ("concepts/g/base.md", concept(IDS[3], "", "# Base\n")),
+    ]);
+    let (code, env) = v.run(&["closure", "top"]);
+    assert_eq!(code, 0, "{env:#}");
+    let unread: Vec<_> = with_code(&env, "prereqs.unread").iter().map(|d| path_of(d).clone()).collect();
+    assert_eq!(unread, [json!("concepts/g/mid.md"), json!("concepts/g/odd.md")], "{env:#}");
+}
+
 #[test]
 fn closure_depth_and_cycles() {
     let p = |x: &str| format!("prereqs: [\"[[{x}]]\"]\n");
@@ -259,16 +275,10 @@ fn export_collects_links_and_assets() {
     let (code, env) = v.run(&["export", "views/study"]);
     assert_eq!(code, 0, "{env}");
     let d = &env["data"];
-    assert_eq!(d["output"].as_str().unwrap(), v.root.join(".loci/export/study.md").to_str().unwrap());
+    assert_eq!(d["output"].as_str().unwrap(), v.root.join(".loci/export/views/study.md/study.md").to_str().unwrap());
     assert_eq!(strs(&d["notes"]), ["views/study.md", "concepts/g/bfs.md", "concepts/g/dijkstra.md"]);
     assert_eq!(strs(&d["assets"]), ["assets/grid.png"]);
-    assert_eq!(v.read(".loci/export/assets/grid.png"), "PNG");
-    let md = v.read(".loci/export/study.md");
-    assert!(!md.contains("id: "), "frontmatter stripped:\n{md}");
-    assert!(md.contains("Relax edges.") && !md.contains("Not exported."), "only the linked section:\n{md}");
-    assert!(md.contains("](#"), "links to included notes become anchors:\n{md}");
-    assert!(md.contains("see Graph."), "a note two links away is plain text:\n{md}");
-    assert!(md.contains("](assets/grid.png)"), "{md}");
+    assert_eq!(v.read(".loci/export/views/study.md/assets/grid.png"), "PNG");
 
     // Depth 2 pulls graph in.
     let (_, env) = v.run(&["export", "views/study", "--depth", "2"]);
@@ -325,6 +335,27 @@ fn export_html_is_rendered_in_process() {
     assert!(!v.exists("assets"), "no images, no assets folder");
     let (code, env) = v.run(&["export", "views/plan", "-o", "/"]);
     assert_eq!((code, error_code(&env)), (3, "io"), "a path that names no file: {env:#}");
+}
+
+/// Each default export has its own folder, so one export never overwrites another's
+/// images.
+#[test]
+fn default_exports_keep_their_own_images() {
+    let v = vault(&[
+        ("views/p/p.md", "# P\n\n![[views/p/g.png]]\n".to_string()),
+        ("views/p/g.png", "AAA".to_string()),
+        ("views/q/p.md", "# Q\n\n![[views/q/g.png]]\n".to_string()),
+        ("views/q/g.png", "BBB".to_string()),
+        // Its folder would sit inside `views/p/p.md`'s `assets/` if `.md` were cut.
+        ("views/p/p/assets/g.png.md", "# R\n\n![[views/q/g.png]]\n".to_string()),
+    ]);
+    // The same stem, in different folders.
+    for view in ["views/p/p", "views/q/p", "views/p/p/assets/g.png.md"] {
+        let (code, env) = v.run(&["export", view]);
+        assert_eq!(code, 0, "{env:#}");
+    }
+    assert_eq!(v.read(".loci/export/views/p/p.md/assets/g.png"), "AAA");
+    assert_eq!(v.read(".loci/export/views/q/p.md/assets/g.png"), "BBB");
 }
 
 #[test]

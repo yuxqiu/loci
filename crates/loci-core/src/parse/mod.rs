@@ -17,10 +17,9 @@ mod frontmatter;
 mod links;
 
 use body::walk_body;
-use frontmatter::{frontmatter, frontmatter_links};
+use frontmatter::{frontmatter, frontmatter_links, prereq_slug};
 
 pub use blocks::{Block, BlockId, IdBlock, Lead, ListItem, Marker, Node};
-pub(crate) use frontmatter::prereq_slug;
 pub use frontmatter::{ConceptField, FmChange, FmEntry, FmValue, Frontmatter, new_concept_frontmatter};
 pub use links::{Fragment, Label, Link, LinkForm, MarkdownLink, Names, Target, atx_closing};
 pub(crate) use links::{bare_slug, heading_key, line_ends, one_line};
@@ -150,6 +149,12 @@ impl std::ops::Deref for Note {
 }
 
 impl Note {
+    /// Parses `text` (the whole file) as the note at `path`, a path core reads.
+    pub fn parse(path: &VaultPath, text: String) -> Note {
+        let kind = path.kind().expect("a note is at a path core reads");
+        Note { path: path.clone(), kind, markdown: Markdown::parse(text) }
+    }
+
     /// The note's title (§4.7): the first H1's heading text, on one line, else the file
     /// stem.
     pub fn title(&self) -> Cow<'_, str> {
@@ -183,6 +188,24 @@ pub struct Markdown {
 }
 
 impl Markdown {
+    /// Parses `text`, a whole markdown file in the vault or not.
+    pub fn parse(text: String) -> Markdown {
+        // Frontmatter starts at byte 0, after a BOM (§4.3).
+        let frontmatter = frontmatter(&text, if text.starts_with(BOM) { BOM.len() } else { 0 });
+        let walked = walk_body(&text, body_start(&text, frontmatter.as_ref()));
+        let mut links = frontmatter.iter().flat_map(|f| frontmatter_links(f)).collect::<Vec<_>>();
+        links.extend(walked.links);
+        links.sort_by_key(|l| l.span.start);
+        Markdown {
+            text,
+            frontmatter,
+            body: walked.body,
+            links,
+            markdown_links: walked.markdown_links,
+            counts: walked.counts,
+        }
+    }
+
     /// The value of frontmatter field `key`.
     pub fn fm(&self, key: &str) -> Option<&Spanned<FmValue>> {
         Some(&self.frontmatter.as_ref()?.get(key)?.value)
@@ -193,6 +216,19 @@ impl Markdown {
         match &self.fm(key)?.node {
             FmValue::Str(value) => Some(value),
             _ => None,
+        }
+    }
+
+    /// What in `prereqs` is no prereq link (§6.1): the items that are not, or the whole
+    /// value when it is no list. An item is a link exactly when the parser read one
+    /// from it.
+    pub fn bad_prereqs(&self) -> Vec<&Spanned<FmValue>> {
+        match self.fm(ConceptField::Prereqs.key()) {
+            None => vec![],
+            Some(Spanned { node: FmValue::List(items), .. }) => {
+                items.iter().filter(|i| !matches!(&i.node, FmValue::Str(item) if prereq_slug(item).is_some())).collect()
+            }
+            Some(value) => vec![value],
         }
     }
 
@@ -260,12 +296,6 @@ pub fn options() -> Options {
         | Options::ENABLE_TASKLISTS
 }
 
-/// Parses `text` (the whole file) as the note at `path`, a path core reads.
-pub fn parse(path: &VaultPath, text: String) -> Note {
-    let kind = path.kind().expect("a note is at a path core reads");
-    Note { path: path.clone(), kind, markdown: markdown(text) }
-}
-
 /// Byte offset where the body of `text` starts: after a closed frontmatter block, or
 /// after a BOM.
 fn body_start(text: &str, frontmatter: Option<&Spanned<Frontmatter>>) -> usize {
@@ -273,24 +303,6 @@ fn body_start(text: &str, frontmatter: Option<&Spanned<Frontmatter>>) -> usize {
         Some(f) if f.is_closed() => f.span.end,
         _ if text.starts_with(BOM) => BOM.len(),
         _ => 0,
-    }
-}
-
-/// Parses `text`, a whole markdown file in the vault or not.
-pub fn markdown(text: String) -> Markdown {
-    // Frontmatter starts at byte 0, after a BOM (§4.3).
-    let frontmatter = frontmatter(&text, if text.starts_with(BOM) { BOM.len() } else { 0 });
-    let walked = walk_body(&text, body_start(&text, frontmatter.as_ref()));
-    let mut links = frontmatter.iter().flat_map(|f| frontmatter_links(f)).collect::<Vec<_>>();
-    links.extend(walked.links);
-    links.sort_by_key(|l| l.span.start);
-    Markdown {
-        text,
-        frontmatter,
-        body: walked.body,
-        links,
-        markdown_links: walked.markdown_links,
-        counts: walked.counts,
     }
 }
 
@@ -331,7 +343,7 @@ mod tests {
     #[test]
     fn bom_offsets() {
         let t = format!("{BOM}# T\n\n[[a]]\n");
-        let n = parse(&vp("views/v.md"), t.clone());
+        let n = Note::parse(&vp("views/v.md"), t.clone());
         assert!(n.has_bom());
         assert_eq!(&t[n.links[0].target.span.clone()], "a");
     }

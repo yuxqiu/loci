@@ -69,6 +69,9 @@ fn refuse_destination(vault: &Vault, path: &VaultPath) -> Result<Slug, Refusal> 
     if vault.exists(path) {
         return Err(Refusal::refused("new.exists", format!("`{path}` already exists")));
     }
+    if let Some(file) = loci_core::mv::file_above(vault, path) {
+        return Err(Refusal::refused("new.exists", format!("`{file}` is a file, not a folder")));
+    }
 
     loci_core::mv::refuse_case_twin(vault, path, None)?;
 
@@ -93,7 +96,7 @@ mod tests {
     #[test]
     fn the_skeleton_is_canonical() {
         let text = skeleton(Ulid::generate(), "BFS");
-        let note = loci_core::parse::parse(&VaultPath::fixed("concepts/a/bfs.md"), text.clone());
+        let note = loci_core::parse::Note::parse(&VaultPath::fixed("concepts/a/bfs.md"), text.clone());
         let rewritten = loci_core::splice::apply(&text, vec![note.rewrite_frontmatter(&[])]);
         assert_eq!(rewritten.unwrap(), text, "a fix would not reformat a new concept");
     }

@@ -16,9 +16,15 @@ struct Unit<'a> {
     range: Range<usize>,
     /// Added to the level of each heading in `range`.
     shift: i32,
-    /// A heading inserted before the content (level, text), when the content does not
-    /// start with a heading.
-    title: Option<(u8, String)>,
+    /// A heading inserted before the content, when the content does not start with a
+    /// heading.
+    title: Option<Title>,
+}
+
+/// A heading export inserts: the included note's title, at the unit's level.
+struct Title {
+    level: u8,
+    text: String,
 }
 
 impl<'a> Unit<'a> {
@@ -38,7 +44,7 @@ impl<'a> Unit<'a> {
             _ => {
                 let min = headings.iter().map(|h| h.level).min();
                 unit.shift = min.map_or(0, |m| level as i32 + 1 - m as i32);
-                unit.title = Some((level, note.title().into_owned()));
+                unit.title = Some(Title { level, text: note.title().into_owned() });
             }
         }
         unit
@@ -79,7 +85,7 @@ impl<'a> Unit<'a> {
     fn level_at(&self, at: usize) -> u8 {
         match self.headings().iter().rfind(|h| h.span.start < at) {
             Some(h) => self.level(h),
-            None => self.title.as_ref().map_or(0, |(l, _)| *l),
+            None => self.title.as_ref().map_or(0, |t| t.level),
         }
     }
 }
@@ -100,10 +106,10 @@ fn take_unique(taken: &mut BTreeSet<String>, candidate: impl Fn(usize) -> String
     name
 }
 
-/// The identifiers of the headings of the units: per unit, its anchors; and every
+/// The identifiers of the headings of the units: by note path, its unit's anchors; and every
 /// identifier in document order. Each is the [`anchor_id`] of the heading text with
 /// `-1`, `-2`, … appended when it is already taken, as GitHub does.
-fn anchors(units: &[Unit]) -> (Vec<Anchors>, Vec<String>) {
+fn anchors<'a>(units: &[Unit<'a>]) -> (BTreeMap<&'a VaultPath, Anchors>, Vec<String>) {
     let (mut used, mut order) = (BTreeSet::new(), vec![]);
     let mut take = |text: &str| {
         let base = anchor_id(text);
@@ -111,11 +117,11 @@ fn anchors(units: &[Unit]) -> (Vec<Anchors>, Vec<String>) {
         order.push(id.clone());
         id
     };
-    let mut out = vec![];
+    let mut out = BTreeMap::new();
     for u in units {
         let mut a = Anchors::default();
-        if let Some((_, title)) = &u.title {
-            a.top = Some(take(title));
+        if let Some(title) = &u.title {
+            a.top = Some(take(&title.text));
         }
         let start = u.content_start();
         for h in u.headings() {
@@ -126,7 +132,7 @@ fn anchors(units: &[Unit]) -> (Vec<Anchors>, Vec<String>) {
             }
             a.headings.entry(heading_key(&text)).or_insert(id);
         }
-        out.push(a);
+        out.insert(&u.note.path, a);
     }
     (out, order)
 }
@@ -166,11 +172,11 @@ fn is_image(path: &VaultPath) -> bool {
 impl Export {
     pub fn of(index: &Index, root: &Note, depth: usize) -> Export {
         // 1. Collect, then name every heading once.
-        let (units, unit_of) = collect(index, root, depth);
+        let units = collect(index, root, depth);
         let (anchors, heading_ids) = anchors(&units);
 
         // 2–4. Assemble, rewriting headings, links, images and block ids.
-        let mut assembly = Assembly { index, unit_of, anchors, assets: Assets::default() };
+        let mut assembly = Assembly { index, anchors, assets: Assets::default() };
         let mut doc = String::new();
         for u in &units {
             let edited = assembly.unit_text(u);
@@ -184,23 +190,22 @@ impl Export {
 }
 
 /// Appends a unit's `edited` text to `doc`, a blank line apart, under its inserted
-/// `title` (level, text) if it has one.
-fn append(doc: &mut String, title: Option<&(u8, String)>, edited: &str) {
+/// `title` if it has one.
+fn append(doc: &mut String, title: Option<&Title>, edited: &str) {
     if !doc.is_empty() && !doc.ends_with("\n\n") {
         doc.push_str(if doc.ends_with('\n') { "\n" } else { "\n\n" });
     }
-    if let Some((level, title)) = title {
-        doc.push_str(&format!("{} {title}{}\n\n", "#".repeat(*level as usize), parse::atx_closing(title)));
+    if let Some(Title { level, text }) = title {
+        doc.push_str(&format!("{} {text}{}\n\n", "#".repeat(*level as usize), parse::atx_closing(text)));
     }
     doc.push_str(edited.trim_start_matches('\n'));
 }
 
-/// What rewriting a unit needs: the index, where each included note is, the units'
-/// anchors, and the images collected so far.
+/// What rewriting a unit needs: the index, the anchors of each included note, and the
+/// images collected so far.
 struct Assembly<'a> {
     index: &'a Index<'a>,
-    unit_of: BTreeMap<&'a VaultPath, usize>,
-    anchors: Vec<Anchors>,
+    anchors: BTreeMap<&'a VaultPath, Anchors>,
     assets: Assets,
 }
 
@@ -224,7 +229,7 @@ impl Assembly<'_> {
             let start = note.text[..id.span.start].trim_end_matches([' ', '\t', '\r', '\n']).len();
             let mut left = note.text.clone();
             left.replace_range(start..id.span.end, "");
-            if parse::markdown(left).same_shape(note) {
+            if parse::Markdown::parse(left).same_shape(note) {
                 edits.push(Edit::replace(start..id.span.end, ""));
             } else {
                 edits.push(Edit::replace(id.span.clone(), "<!-- -->"));
@@ -283,10 +288,10 @@ impl Assembly<'_> {
         };
 
         let text = label.unwrap_or_else(|| heading.map_or_else(|| linked.title().into_owned(), str::to_string));
-        let anchor = self.unit_of.get(&linked.path).and_then(|&j| {
-            let a = &self.anchors[j];
-            heading.and_then(|h| a.headings.get(&heading_key(h))).or(a.top.as_ref())
-        });
+        let anchor = self
+            .anchors
+            .get(&linked.path)
+            .and_then(|a| heading.and_then(|h| a.headings.get(&heading_key(h))).or(a.top.as_ref()));
 
         match anchor {
             Some(id) => format!("[{text}](#{id})"),
@@ -324,10 +329,10 @@ fn escape(s: &str) -> String {
 }
 
 /// Step 1 (m1-m4 §4): each note once, at its first appearance, breadth-first from
-/// `root` up to `depth` links away; and each note's unit index.
-fn collect<'a>(index: &'a Index, root: &'a Note, depth: usize) -> (Vec<Unit<'a>>, BTreeMap<&'a VaultPath, usize>) {
+/// `root` up to `depth` links away.
+fn collect<'a>(index: &'a Index, root: &'a Note, depth: usize) -> Vec<Unit<'a>> {
     let mut units = vec![Unit::root(root)];
-    let mut unit_of: BTreeMap<&VaultPath, usize> = BTreeMap::from([(&root.path, 0)]);
+    let mut seen: BTreeSet<&VaultPath> = BTreeSet::from([&root.path]);
     let mut queue = VecDeque::from([(0usize, 0usize)]);
     while let Some((i, d)) = queue.pop_front() {
         if d >= depth {
@@ -348,16 +353,15 @@ fn collect<'a>(index: &'a Index, root: &'a Note, depth: usize) -> (Vec<Unit<'a>>
             .collect();
 
         for (note, part, level) in children {
-            if unit_of.contains_key(&note.path) {
+            if !seen.insert(&note.path) {
                 continue;
             }
-            unit_of.insert(&note.path, units.len());
             queue.push_back((units.len(), d + 1));
             units.push(Unit::child(note, part, level));
         }
     }
 
-    (units, unit_of)
+    units
 }
 
 /// The images an export copies, each under a file name unique in its `assets/` folder.
@@ -523,7 +527,7 @@ mod tests {
             md.contains("## See Bug # #\n") && md.contains("## Kept Bug # ##\n") && md.contains("## Setext C # #\n"),
             "{md}"
         );
-        let read = parse::markdown(md);
+        let read = parse::Markdown::parse(md);
         let texts: Vec<_> = read.headings().map(|h| h.content.value(&read.text).to_string()).collect();
         assert_eq!(texts, ["V", "See Bug #", "Kept Bug #", "Setext C #"]);
     }
@@ -602,7 +606,7 @@ mod tests {
             let i = crate::testing::index(&[("concepts/a/x.md", concept("X", &format!("Some text\n{line}\n")))]);
             let md = export(&i, "concepts/a/x.md", 0).markdown;
             assert!(md.contains(&format!("Some text\n{kept}\n")), "{line}: {md}");
-            assert_eq!(crate::parse::markdown(md.clone()).headings().count(), 1, "{md}");
+            assert_eq!(crate::parse::Markdown::parse(md.clone()).headings().count(), 1, "{md}");
         }
         for (body, kept) in [
             // No block id in a block quote (§4.6): the text stays.
@@ -650,7 +654,8 @@ mod tests {
                 m.headings().map(|h| parse::one_line(h.content.value(&m.text)).into_owned()).collect()
             };
             if !body.contains("[[") {
-                let (got, was) = (texts(parse::markdown(md)), texts(parse::markdown(format!("# V\n\n{body}"))));
+                let (got, was) =
+                    (texts(parse::Markdown::parse(md)), texts(parse::Markdown::parse(format!("# V\n\n{body}"))));
                 assert_eq!(got, was, "{body:?}: the heading texts survive");
             }
         }

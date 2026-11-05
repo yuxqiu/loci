@@ -76,7 +76,7 @@ impl<'v> Index<'v> {
             if let Ok(Some(Place::Concept { slug })) = path.place() {
                 index.slugs.entry(slug).or_default().push(path.clone());
             }
-            index.notes.insert(path.clone(), parse::parse(path, vault.text(path).to_string()));
+            index.notes.insert(path.clone(), parse::Note::parse(path, vault.text(path).to_string()));
         }
         index
     }

@@ -33,28 +33,30 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
     let note = index.note_named(target)?.of_kind(|k| matches!(k, Kind::View | Kind::Concept), "a view or a concept")?;
     let path = note.path.clone();
 
-    let e = export::Export::of(&index, note, depth);
+    let doc = export::Export::of(&index, note, depth);
     let text = match format {
-        Format::Md => e.markdown.clone(),
-        Format::Html => html(&e, &note.title()).map_err(|m| Refusal::internal("export.html", m))?,
+        Format::Md => doc.markdown.clone(),
+        Format::Html => html(&doc, &note.title()).map_err(|m| Refusal::internal("export.html", m))?,
     };
-    let out_path = write_out(&vault, &e, &path, format, output.map(|o| ctx.cwd.join(o)), text)?;
+    let out_path = write_out(&vault, &doc, &path, format, output.map(|o| ctx.cwd.join(o)), text)?;
     let data = json!({
         "output": out_path,
-        "notes": e.notes,
-        "assets": e.assets.iter().map(|(_, n)| format!("{}/{n}", export::ASSETS)).collect::<Vec<_>>(),
+        "notes": doc.notes,
+        "assets": doc.assets.iter().map(|(_, n)| format!("{}/{n}", export::ASSETS)).collect::<Vec<_>>(),
     });
 
     Ok(Report::ok(data, format!("{}\n", out_path.display())))
 }
 
 /// Writes the export and its images: to `output` when given (the user's path, written
-/// as given, not as a vault file), else into `.loci/export/` (in the vault, gitignored,
-/// so written as vault files are). Returns where the document went.
+/// as given, not as a vault file), else into `.loci/export/<note path>/` (in the
+/// vault, gitignored, so written as vault files are; a folder named by the note's whole
+/// path, which no other note's folder can be inside, so no export overwrites
+/// another's images). Returns where the document went.
 fn write_out(
     vault: &Vault,
-    e: &export::Export,
-    note: &VaultPath,
+    doc: &export::Export,
+    note_path: &VaultPath,
     format: Format,
     output: Option<PathBuf>,
     text: String,
@@ -63,27 +65,32 @@ fn write_out(
         let abs = vault.abs(src);
         std::fs::read(&abs).map_err(Refusal::io_at(&abs))
     };
-    let Some(out_path) = output else {
-        let in_export = |name: &str| VaultPath::new(format!(".loci/export/{name}")).expect("a file name");
-        for (src, name) in &e.assets {
-            vault.write(&in_export(&format!("{}/{name}", export::ASSETS)), &read(src)?)?;
+    match output {
+        None => {
+            let in_export =
+                |name: &str| VaultPath::new(format!(".loci/export/{note_path}/{name}")).expect("a file name");
+            for (src, name) in &doc.assets {
+                vault.write(&in_export(&format!("{}/{name}", export::ASSETS)), &read(src)?)?;
+            }
+            let out = in_export(&format!("{}.{}", note_path.stem(), format.ext()));
+            vault.write(&out, text.as_bytes())?;
+            Ok(vault.abs(&out))
         }
-        let out = in_export(&format!("{}.{}", note.stem(), format.ext()));
-        vault.write(&out, text.as_bytes())?;
-        return Ok(vault.abs(&out));
-    };
-    let Some(out_dir) = out_path.parent() else {
-        return Err(Refusal::io(format!("`{}` names no file", out_path.display())));
-    };
-    let assets_dir = out_dir.join(export::ASSETS);
-    let dir = if e.assets.is_empty() { out_dir } else { &assets_dir };
-    std::fs::create_dir_all(dir).map_err(Refusal::io_at(dir))?;
-    for (src, name) in &e.assets {
-        let dest = assets_dir.join(name);
-        std::fs::write(&dest, read(src)?).map_err(Refusal::io_at(&dest))?;
+        Some(out_path) => {
+            let Some(out_dir) = out_path.parent() else {
+                return Err(Refusal::io(format!("`{}` names no file", out_path.display())));
+            };
+            let assets_dir = out_dir.join(export::ASSETS);
+            let dir = if doc.assets.is_empty() { out_dir } else { &assets_dir };
+            std::fs::create_dir_all(dir).map_err(Refusal::io_at(dir))?;
+            for (src, name) in &doc.assets {
+                let dest = assets_dir.join(name);
+                std::fs::write(&dest, read(src)?).map_err(Refusal::io_at(&dest))?;
+            }
+            std::fs::write(&out_path, text).map_err(Refusal::io_at(&out_path))?;
+            Ok(out_path)
+        }
     }
-    std::fs::write(&out_path, text).map_err(Refusal::io_at(&out_path))?;
-    Ok(out_path)
 }
 
 /// A standalone HTML page for the export, which needs nothing from the network: the

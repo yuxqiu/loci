@@ -140,9 +140,9 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
         return Err(Refusal::io(format!("the session stopped: {}{committed}", e.error.message)));
     }
 
-    let due_left = session.len() - reviewed;
-    let data = json!({"reviewed": reviewed, "new": new_count, "due_left": due_left, "commit": commit});
-    Ok(Report::ok(data, format!("reviewed {reviewed}, {due_left} left\n")))
+    let left = session.len() - reviewed;
+    let data = json!({"reviewed": reviewed, "new": new_count, "due_left": left, "commit": commit});
+    Ok(Report::ok(data, format!("reviewed {reviewed}, {left} left\n")))
 }
 
 /// Asks for a grade on each card of `session` and appends it to the log. Returns how

@@ -4,8 +4,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use relative_path::RelativePath;
-
 use crate::config::{self, Config};
 use crate::envelope::Refusal;
 use crate::path::VaultPath;
@@ -39,7 +37,7 @@ impl VaultDir {
 #[derive(Debug, Clone)]
 pub struct Vault {
     root: PathBuf,
-    pub config: Config,
+    config: Config,
     /// Every file core reads (m0 §3): the files git sees (tracked, or untracked and not
     /// ignored), minus `plugins/` and paths core never reads, listed once at open;
     /// sorted, each once.
@@ -83,7 +81,7 @@ impl Vault {
         // (m0 §3). Checked here, once, so that no command has to: a vault breaking either
         // is refused before any command runs.
         let (files, texts) = walk(&root)?;
-        let invalid = |m: String| Refusal::refused("config.invalid", m);
+        let invalid = |m: String| Refusal::refused("config.invalid", format!("{}: {m}", config::FILE));
         let text = std::fs::read_to_string(root.join(config::FILE)).map_err(|e| invalid(e.to_string()))?;
         let config = Config::parse(&text).map_err(invalid)?;
         Ok(Self::of(root, config, files, texts))
@@ -150,13 +148,18 @@ impl Vault {
     /// Refuses a symlink on the way to vault path `rel` (`file.symlink`): loci never
     /// writes through one (m0 §3).
     pub fn refuse_symlink(&self, rel: &VaultPath) -> Result<(), Refusal> {
-        match symlink_on_path(&self.root, rel.as_str()) {
+        match symlink_on_path(&self.root, rel) {
             Some(link) => Err(Refusal::refused(
                 "file.symlink",
                 format!("`{link}` is a symlink, which loci does not write through"),
             )),
             None => Ok(()),
         }
+    }
+
+    /// The vault's `loci.toml`.
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     /// Every file core reads, sorted.
@@ -182,20 +185,13 @@ impl Vault {
     }
 }
 
-/// The first symlink on the way to vault-relative path `name` (a listed name, or a
-/// path about to be written): a folder above it, or the path itself, as a vault path.
-/// loci never reads or writes through a symlink (m0 §3).
-fn symlink_on_path(root: &Path, name: &str) -> Option<String> {
-    let mut at = root.to_path_buf();
-    let mut seen: Vec<&str> = vec![];
-    for part in RelativePath::new(name).components() {
-        at.push(part.as_str());
-        seen.push(part.as_str());
-        if std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink()) {
-            return Some(seen.join("/"));
-        }
-    }
-    None
+/// The first symlink on the way to vault path `rel` (a listed name, or a path about to
+/// be written): a folder above it, or the path itself. loci never reads or writes
+/// through a symlink (m0 §3).
+fn symlink_on_path(root: &Path, rel: &VaultPath) -> Option<VaultPath> {
+    (1..=rel.components().count())
+        .filter_map(|k| rel.head(k))
+        .find(|p| abs(root, p).symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()))
 }
 
 /// Where vault path `rel` is on disk, under vault root `root`: the one place a vault
@@ -225,13 +221,13 @@ fn walk(root: &Path) -> Result<(Vec<VaultPath>, BTreeMap<VaultPath, String>), Re
 
     // Every name git reports, `plugins/`, files gone from disk and HEAD's included, must
     // be a vault path: no command handles another.
-    unreadable.extend(listed.bad_names);
+    unreadable.extend(listed.name_problems);
 
     let (mut files, mut texts) = (vec![], BTreeMap::new());
     let mut symlinks = vec![];
     for rel in listed.paths {
         // Every name, `plugins/` and `loci.toml` included, is checked for symlinks.
-        if let Some(link) = symlink_on_path(root, rel.as_str()) {
+        if let Some(link) = symlink_on_path(root, &rel) {
             symlinks.push(format!("`{link}`"));
             continue;
         }
@@ -376,6 +372,8 @@ pub fn copy_dir(from: &Path, to: &Path, skip: &[&str]) -> std::io::Result<()> {
         if kind.is_dir() {
             copy_dir(&src, &dst, &[])?
         } else {
+            // A link is no dir here (`file_type` does not follow it); `fs::copy` follows
+            // it and refuses anything but a regular file.
             std::fs::copy(&src, &dst).map(drop).map_err(at(&src))?
         }
     }

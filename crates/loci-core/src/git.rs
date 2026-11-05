@@ -18,9 +18,15 @@ impl<'a> Repo<'a> {
 
     fn git(&self) -> Command {
         let mut c = Command::new("git");
-        // No advice (hints for people, such as a sparse index expanding): what git
-        // prints on stderr is then an error or a warning loci reports.
+        // No advice (hints for people, such as a sparse index expanding) and no trace
+        // (the `GIT_TRACE*` variables, and trace2 targets, which config can set and
+        // these variables override): what git prints on stderr is then an error or a
+        // warning loci reports.
         c.arg("-C").arg(self.0).env("GIT_ADVICE", "0");
+        for (var, _) in std::env::vars_os().filter(|(v, _)| v.as_encoded_bytes().starts_with(b"GIT_TRACE")) {
+            c.env_remove(var);
+        }
+        c.env("GIT_TRACE2", "0").env("GIT_TRACE2_PERF", "0").env("GIT_TRACE2_EVENT", "0");
         c
     }
 
@@ -186,14 +192,16 @@ impl<'a> Repo<'a> {
     /// (tracked files and untracked files it does not ignore, `git ls-files -z --cached
     /// --others --exclude-standard`), and every name that is no vault path among them or
     /// in HEAD's tree (a deletion may be only there). Together these are every name git
-    /// reports without `--ignored` (m0 §3); ignored files loci never names.
+    /// reports without `--ignored` (m0 §3); ignored files loci never names. Without
+    /// fsmonitor, whose hook's stderr git passes on even when listing succeeds.
     pub(crate) fn ls_files(&self) -> Result<LsFiles, String> {
-        let out = checked(self.git().args(LS_FILES), "ls-files")?;
-        let (paths, mut bad_names) = names(nul_separated(&out.stdout));
-        bad_names.extend(names(nul_separated(&self.head_names()?)).1);
+        let out = checked(self.git().args(["-c", "core.fsmonitor=false"]).args(LS_FILES), "ls-files")?;
+        let (paths, mut name_problems) = names(nul_separated(&out.stdout));
+        let (_, head_problems) = names(nul_separated(&self.head_names()?));
+        name_problems.extend(head_problems);
         let stderr = String::from_utf8_lossy(&out.stderr);
         let warnings = stderr.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect();
-        Ok(LsFiles { paths, bad_names, warnings })
+        Ok(LsFiles { paths, name_problems, warnings })
     }
 
     /// The paths git sees under `folder`: tracked files and untracked files it does not
@@ -255,14 +263,15 @@ impl<'a> Repo<'a> {
         let (changed, untracked) = parse_status(&out)?;
         let head_files: BTreeSet<VaultPath> = vault_paths(nul_separated(&self.head_names()?))?.into_iter().collect();
 
-        let mut ch = Changes { untracked, ..Changes::default() };
+        let mut ch = Changes { untracked: untracked.into_iter().collect(), ..Changes::default() };
         for path in changed {
-            match (head_files.contains(&path), crate::vault::is_regular_file(self.0, &path)) {
-                (true, true) => ch.modified.push(path),
-                (false, true) => ch.added.push(path),
-                (true, false) => ch.deleted.push(path),
-                (false, false) => {}
-            }
+            let set = match (head_files.contains(&path), crate::vault::is_regular_file(self.0, &path)) {
+                (true, true) => &mut ch.modified,
+                (false, true) => &mut ch.added,
+                (true, false) => &mut ch.deleted,
+                (false, false) => continue,
+            };
+            set.insert(path);
         }
 
         Ok(ch)
@@ -344,7 +353,7 @@ pub(crate) struct LsFiles {
     pub paths: Vec<VaultPath>,
     /// Why each other listed or HEAD name is no vault path (not UTF-8, or a control
     /// character), for messages; loci opens no vault that has one.
-    pub bad_names: Vec<String>,
+    pub name_problems: Vec<String>,
     /// The warnings git printed, one per line (a directory it could not open).
     pub warnings: Vec<String>,
 }
@@ -403,10 +412,10 @@ fn vault_path(name: &str) -> Result<VaultPath, String> {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Changes {
-    pub modified: Vec<VaultPath>,
-    pub deleted: Vec<VaultPath>,
-    pub added: Vec<VaultPath>,
-    pub untracked: Vec<VaultPath>,
+    pub modified: BTreeSet<VaultPath>,
+    pub deleted: BTreeSet<VaultPath>,
+    pub added: BTreeSet<VaultPath>,
+    pub untracked: BTreeSet<VaultPath>,
 }
 
 impl Changes {
@@ -444,6 +453,10 @@ fn parse_status(out: &[u8]) -> Result<(Vec<VaultPath>, Vec<VaultPath>), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn strs(set: &BTreeSet<VaultPath>) -> Vec<&str> {
+        set.iter().map(VaultPath::as_str).collect()
+    }
 
     #[test]
     fn status_records() {
@@ -545,9 +558,9 @@ mod tests {
         git(&["rm", "-q", "--cached", "a.md"]);
         git(&["add", "-N", "a.md"]);
         let ch = Repo::new(root).status().unwrap();
-        assert_eq!(ch.modified, ["a.md"]);
-        assert_eq!(ch.deleted, ["r.md"]);
-        assert_eq!(ch.added, Vec::<&str>::new());
+        assert_eq!(strs(&ch.modified), ["a.md"]);
+        assert_eq!(strs(&ch.deleted), ["r.md"]);
+        assert_eq!(strs(&ch.added), Vec::<&str>::new());
         git(&["add", "a.md"]);
         git(&["rm", "-q", "--cached", "n.md"]);
 
@@ -556,7 +569,7 @@ mod tests {
         git(&["add", "a.md"]);
         git(&["update-index", "--skip-worktree", "a.md"]);
         std::fs::remove_file(root.join("a.md")).unwrap();
-        assert_eq!(Repo::new(root).status().unwrap().deleted, ["a.md", "r.md"]);
+        assert_eq!(strs(&Repo::new(root).status().unwrap().deleted), ["a.md", "r.md"]);
         git(&["update-index", "--no-skip-worktree", "a.md"]);
         git(&["checkout", "-q", "HEAD", "--", "a.md"]);
 
@@ -571,9 +584,9 @@ mod tests {
 
         // The stash also restores `gone.md`.
         let ch = Repo::new(root).status().unwrap();
-        assert_eq!(ch.modified, Vec::<&str>::new());
-        assert_eq!(ch.deleted, ["r.md"]);
-        assert_eq!(ch.added, ["copy.md", "gone.md", "y.md"]);
+        assert_eq!(strs(&ch.modified), Vec::<&str>::new());
+        assert_eq!(strs(&ch.deleted), ["r.md"]);
+        assert_eq!(strs(&ch.added), ["copy.md", "gone.md", "y.md"]);
     }
 
     /// A changed name that is no vault path (a control character) is an error, not a

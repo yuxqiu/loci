@@ -128,7 +128,8 @@ impl Config {
 
     /// `text`, a `loci.toml`, with its `updates` key set to `id`. Edited with
     /// `toml_edit`, so comments, layout and other keys stay as written; a comment on
-    /// the `updates` line is kept too.
+    /// the `updates` line is kept too, and so are CRLF line breaks (which `toml_edit`
+    /// writes as LF).
     pub fn set_updates(text: &str, id: UpdateId) -> Result<String, String> {
         let mut doc: toml_edit::DocumentMut = text.parse().map_err(|e: toml_edit::TomlError| e.to_string())?;
         match doc.get_mut("updates").and_then(toml_edit::Item::as_value_mut) {
@@ -139,7 +140,8 @@ impl Config {
             }
             None => doc["updates"] = toml_edit::value(id.to_string()),
         }
-        Ok(doc.to_string())
+        let out = doc.to_string();
+        Ok(if text.contains("\r\n") { out.replace("\r\n", "\n").replace('\n', "\r\n") } else { out })
     }
 }
 
@@ -202,6 +204,10 @@ mod tests {
         let set = Config::set_updates(bare, id("u0002")).unwrap();
         assert_eq!(set, "# my vault\nschema = 1\nupdates = \"u0002\"\n[budgets]\nnote = 5\n");
         assert_eq!(Config::parse(&set).unwrap().updates, Some(id("u0002")));
+
+        // CRLF line breaks are kept.
+        let crlf = "schema = 1\r\nupdates = \"u0001\"   # note\r\n\r\n[budgets]\r\nnote = 5\r\n";
+        assert_eq!(Config::set_updates(crlf, id("u0004")).unwrap(), crlf.replace("u0001", "u0004"));
 
         // A key that only starts with `updates` is another key.
         let near = "schema = 1\nupdates_note = \"x\"\n";
