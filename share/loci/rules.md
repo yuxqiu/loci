@@ -124,3 +124,12 @@ This vault is a loci knowledge base. These rules apply to every agent working in
   for a note you have seen.
 - `loci skill show` lists the procedures for larger tasks; read one before starting
   such a task.
+
+## Answering questions
+
+- When the user asks what the vault says, answer from the notes you read: name the
+  note (`[[slug]]` or its path) behind each claim.
+- Put anything from outside the vault under its own heading, "Outside the vault".
+  Never blend it into the answer.
+- If the vault does not cover part of the question, say which part. End with the
+  notes you read and what was not covered.

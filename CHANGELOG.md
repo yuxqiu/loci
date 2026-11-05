@@ -34,6 +34,13 @@ them under its version.
 
 ### Changed
 
+- Framework rules: "Answering questions": an answer from the vault names the note
+  behind each claim, keeps outside knowledge under "Outside the vault", and says
+  what the vault does not cover.
+- The `concepts` skill: a contradiction keeps both claims, says what would settle
+  it, and is never settled by recency; two notes that disagree on a fact are shown
+  to the user instead of proposed as a merge. The `intake` skill processes inbox
+  items one at a time, never in parallel subagents.
 - `loci closure --depth N` orders the concepts at depth N after their prerequisites
   and reports a cycle through them (`prereqs.cycle`); they were listed as if they had
   no prerequisites.

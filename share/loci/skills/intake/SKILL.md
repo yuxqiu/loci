@@ -12,6 +12,10 @@ If you have not read them this session, read the framework rules (`loci rules`),
 commit them: a dissolved draft must be in git so it can be recovered. A concept's
 origin is found with `git log -p -- <concept path>`, not by citing the draft.
 
+Process inbox items one at a time. Do not split related items across parallel
+subagents: each one's search misses the notes the others are creating, and
+they write duplicates.
+
 ## Drafts (`inbox/drafts/`)
 
 For each draft:

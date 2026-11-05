@@ -38,9 +38,16 @@ claim it supports ([[sources/papers/<key>.pdf#p3]]).
 
 - New material that contradicts a concept: decide whether it is a duplicate, a
   refinement or a contradiction, and make the change with both sources cited.
+  For a contradiction:
+  - Keep both claims, each with its source.
+  - Say what evidence would settle it.
+  - Never settle it by which source is newer. Replace the old claim only when
+    the new evidence is clearly better, and say why in the text.
 - Never cite another concept as evidence; cite the sources it cites.
 - Possible duplicates: tell the user and propose a merge (`loci links` on both notes
-  shows what the merge will touch); do not merge on your own.
+  shows what the merge will touch); do not merge on your own. If the two notes
+  disagree on a fact, they may be different concepts: show the user the
+  disagreement and ask, rather than proposing a merge.
 
 ## Areas
 
