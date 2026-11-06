@@ -8,8 +8,8 @@ them under its version.
 
 ### Added
 
-- loci builds on Windows; a plugin there is `loci-<name>.exe` on `PATH`. CI checks
-  Linux and macOS with the full tests, and Windows with a build and Clippy.
+- loci builds and is tested on Windows; a plugin there is `loci-<name>.exe` on
+  `PATH`. CI checks Linux, macOS and Windows.
 - `path.name-clash` (warning): a note `x.md` in a folder beside a file `x`, which
   `[[x]]` names.
 - `loci lint --fix`: applies the fixes that keep the meaning (a missing id, a
@@ -39,6 +39,9 @@ them under its version.
 
 ### Changed
 
+- A plugin exiting with a code outside 0–255 (possible on Windows, as when it
+  aborts) is `plugin.failed`, instead of a wrapped exit code (possibly 0).
+- On Windows, paths in messages and `LOCI_VAULT` have no `\\?\` prefix.
 - Files loci creates in the vault (a default `loci export`, its images) get the
   usual mode (0666 less the umask), not owner-only 0600.
 - `loci export` names images that differ only in letter case apart (`Graph.png`,

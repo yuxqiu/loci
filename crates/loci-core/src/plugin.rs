@@ -81,18 +81,8 @@ pub fn discover(path_var: Option<&std::ffi::OsStr>, core_commands: &[&str]) -> V
     found.into_iter().map(|(name, path)| Plugin { name, path }).collect()
 }
 
-/// A file with an execute bit; on Windows, which has none, any file (`discover` has
-/// required the `.exe` name).
 fn is_executable(path: &Path) -> bool {
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path).is_ok_and(|m| {
-        #[cfg(unix)]
-        let runnable = m.permissions().mode() & 0o111 != 0;
-        #[cfg(not(unix))]
-        let runnable = true;
-        m.is_file() && runnable
-    })
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && crate::platform::can_execute(&m))
 }
 
 /// A hook core calls on a plugin (§2.3).
@@ -242,11 +232,7 @@ mod tests {
         for n in ["loci-stub", "loci-lint", "loci-Bad", "other"] {
             let p = dir.path().join(format!("{n}{}", std::env::consts::EXE_SUFFIX));
             std::fs::write(&p, "#!/bin/sh\n").unwrap();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-            }
+            crate::platform::make_executable(&p);
         }
         let found = discover(Some(dir.path().as_os_str()), &["lint"]);
         assert_eq!(found.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), vec!["stub"]);

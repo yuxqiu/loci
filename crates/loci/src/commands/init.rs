@@ -47,7 +47,7 @@ fn refuse_destination(dir: &Path) -> Result<(), Refusal> {
 fn ensure_repo_root(dir: &Path) -> Result<(), Refusal> {
     match git::toplevel(dir) {
         Err(_) => git::Repo::new(dir).init().map_err(Refusal::git),
-        Ok(top) if dir.canonicalize().is_ok_and(|d| d == top) => Ok(()),
+        Ok(top) if dunce::canonicalize(dir).is_ok_and(|d| d == top) => Ok(()),
         Ok(_) => Err(Refusal::refused("vault.not-git", "run `loci init` at the root of the git work tree")),
     }
 }

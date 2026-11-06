@@ -1,0 +1,5 @@
+# LF on every checkout, Windows included: the rules, skills and updates are compiled
+# in with `include_str!`, which keeps CRLF (research 24 §7).
+* text=auto eol=lf
+# Fixture vaults are read byte for byte; one holds CRLF on purpose.
+tests/fixtures/** -text

@@ -33,14 +33,17 @@ pub fn run(ctx: &Ctx, args: Vec<String>) -> ExitCode {
 
     match cmd.status() {
         Ok(status) => match status.code() {
-            Some(c) => ExitCode::from(c as u8),
+            // Windows codes are 32 bits (an aborted process has 0xC0000409): one that is
+            // no Unix exit code fails rather than wrapping, possibly to 0.
+            Some(c) => match u8::try_from(c) {
+                Ok(c) => ExitCode::from(c),
+                Err(_) => {
+                    fail(ctx, name, Refusal::internal("plugin.failed", format!("{} exited with {c}", p.path.display())))
+                }
+            },
             None => {
-                // Only Unix ends a process without a code.
-                #[cfg(unix)]
-                let signal = std::os::unix::process::ExitStatusExt::signal(&status)
-                    .map_or("a signal".to_string(), |s| format!("signal {s}"));
-                #[cfg(not(unix))]
-                let signal = "a signal";
+                let signal =
+                    loci_core::platform::signal(&status).map_or("a signal".to_string(), |s| format!("signal {s}"));
                 fail(
                     ctx,
                     name,

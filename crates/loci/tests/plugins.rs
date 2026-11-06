@@ -1,10 +1,6 @@
 //! Plugin dispatch and the plugin contract (m0 §2.2, §2.3) with a stub plugin
 //! `loci-stub` first on `PATH` (fixture `dispatch`).
 
-// Unix only for now: the test vaults isolate PATH with symlinks and the stub plugin is
-// a shell script (D263).
-#![cfg(unix)]
-
 mod common;
 
 use common::*;
@@ -39,7 +35,8 @@ fn dispatch_passes_args_env_and_exit_code() {
     // Run from a subdirectory: LOCI_VAULT is still the absolute root.
     let (_, out, _) = v.run_raw_in(&v.root.join("concepts"), &["stub"]);
     assert!(out.contains(&format!("vault={}\n", v.root.display())), "{out}");
-    // A plugin killed by a signal still gets an envelope.
+    // A plugin that aborts (a signal on Unix, an exit code above 255 on Windows) still
+    // gets an envelope.
     let (code, env) = v.run(&["stub", "crash"]);
     assert_eq!((code, error_code(&env)), (3, "plugin.failed"));
 }

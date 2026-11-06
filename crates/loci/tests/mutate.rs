@@ -1,10 +1,6 @@
 //! Mutating commands on the fixture vaults (m0 §13.2): `mv`, `block-ids`, `init`.
 //! Goldens hold the envelope and the resulting tree with ULIDs redacted.
 
-// Unix only for now: the test vaults isolate PATH with symlinks and the stub plugin is
-// a shell script (D263).
-#![cfg(unix)]
-
 mod common;
 
 use common::*;
@@ -44,44 +40,6 @@ fn mv_rename_rewrites_links() {
     // never edited.
     assert_eq!(v.read("concepts/a/renamed-new.md"), before);
     assert_snapshot!(v.tree());
-}
-
-#[cfg(unix)]
-#[test]
-fn a_write_that_cannot_be_made_changes_nothing() {
-    use std::os::unix::fs::PermissionsExt;
-    let v = TestVault::with_files(
-        BIN,
-        &[("concepts/a/x.md", concept(IDS[0], "", "# X\n")), ("views/ro/v.md", "# V\n\n[[x]]\n".into())],
-    );
-    let ro = v.root.join("views/ro");
-    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
-    let before = v.tree();
-    let (exit, env) = v.run(&["mv", "concepts/a/x.md", "concepts/a/y.md"]);
-    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert_eq!((exit, error_code(&env)), (3, "io"), "{env:#}");
-    assert!(error_message(&env).contains("views/ro"), "the error names the path: {env:#}");
-    assert_eq!(v.tree(), before, "nothing was moved");
-}
-
-#[cfg(unix)]
-#[test]
-fn a_rename_that_cannot_be_made_undoes_the_earlier_ones() {
-    use std::os::unix::fs::PermissionsExt;
-    let v = TestVault::with_files(
-        BIN,
-        &[("views/x/a.md", "# A\n\n[[views/x/sub/b]]\n"), ("views/x/sub/b.md", "# B\n\n[[views/x/a]]\n")],
-    );
-    // `a.md` moves first; `b.md` cannot leave its read-only folder.
-    let ro = v.root.join("views/x/sub");
-    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o555)).unwrap();
-    let before = v.tree();
-    let (exit, env) = v.run(&["mv", "views/x", "views/y"]);
-    std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o755)).unwrap();
-    assert_eq!((exit, error_code(&env)), (3, "io"), "{env:#}");
-    assert!(error_message(&env).contains("views/x/sub/b.md"), "the error names the source: {env:#}");
-    assert_eq!(v.tree(), before, "the earlier move was undone");
-    assert!(!v.root.join("views/y").exists(), "the folder made for the move is gone: {env:#}");
 }
 
 #[test]

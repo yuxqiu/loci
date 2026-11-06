@@ -36,7 +36,8 @@ let
       version = lockedVersion pname;
       cargoLock.lockFile = ../Cargo.lock;
       cargoBuildFlags = [ "-p" pname ];
-      cargoTestFlags = lib.concatMap (crate: [
+      # Every test binary runs, so one CI run shows every failure.
+      cargoTestFlags = [ "--no-fail-fast" ] ++ lib.concatMap (crate: [
         "-p"
         crate
       ]) ([ pname ] ++ testedLibs);

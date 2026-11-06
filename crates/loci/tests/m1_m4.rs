@@ -1,9 +1,5 @@
 //! `merge`, `closure`, `bench`, `export` and `links` (docs/specs/m1-m4.md).
 
-// Unix only for now: the test vaults isolate PATH with symlinks and the stub plugin is
-// a shell script (D263).
-#![cfg(unix)]
-
 mod common;
 
 use common::*;
@@ -170,7 +166,7 @@ fn bench_runs_the_agent_on_every_case() {
     let (code, env) = v.run(&["bench", agent]);
     assert_eq!((code, error_code(&env)), (3, "bench.agent"));
     for tool in ["sh", "grep", "head"] {
-        std::os::unix::fs::symlink(find_on_path(tool), v.bin().join(tool)).unwrap();
+        platform::link_tool(&v.bin(), tool);
     }
     let (code, env) = v.run(&["bench", agent]);
     assert_eq!(code, 0, "{env}");
@@ -215,7 +211,7 @@ fn bench_runs_the_agent_on_every_case() {
 fn bench_gives_the_copy_a_repository_of_its_own() {
     let v = vault(&[("views/plan.md", "# Plan\n".into())]);
     for tool in ["sh", "grep"] {
-        std::os::unix::fs::symlink(find_on_path(tool), v.bin().join(tool)).unwrap();
+        platform::link_tool(&v.bin(), tool);
     }
     // The copy has the vault's HEAD and index; the agent commits there.
     let cases = r#"{"q": "x", "check": "grep -q staged.md staged.txt && git log -1 --format=%s | grep -q agent"}"#;
@@ -248,9 +244,6 @@ fn bench_gives_the_copy_a_repository_of_its_own() {
     let wt = v.tmp.path().join("wt");
     v.git(&["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "wt"]);
     v.git(&["-C", wt.to_str().unwrap(), "update-index", "--split-index"]);
-    // git's fsmonitor daemon listens on a socket in each work tree's git folder.
-    let socket = |dir: &str| std::os::unix::net::UnixListener::bind(v.root.join(dir).join("fsmonitor--daemon.ipc"));
-    let _sockets = (socket(".git").unwrap(), socket(".git/worktrees/wt").unwrap());
     std::fs::create_dir(wt.join("bench")).unwrap();
     bench(&wt, None);
 
@@ -388,7 +381,7 @@ fn export_does_not_write_through_a_symlink() {
     let elsewhere = v.tmp.path().join("elsewhere");
     std::fs::create_dir_all(&elsewhere).unwrap();
     std::fs::create_dir_all(v.root.join(".loci")).unwrap();
-    std::os::unix::fs::symlink(&elsewhere, v.root.join(".loci/export")).unwrap();
+    platform::symlink_dir(&elsewhere, &v.root.join(".loci/export"));
     let (code, env) = v.run(&["export", "views/plan"]);
     assert_eq!((code, error_code(&env)), (1, "file.symlink"), "{env:#}");
     assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none(), "nothing written through the link");

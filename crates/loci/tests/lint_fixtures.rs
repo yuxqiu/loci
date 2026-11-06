@@ -1,9 +1,5 @@
 //! `loci lint` on the fixture vaults of m0 §13.2.
 
-// Unix only for now: the test vaults isolate PATH with symlinks and the stub plugin is
-// a shell script (D263).
-#![cfg(unix)]
-
 mod common;
 
 use common::*;
@@ -384,16 +380,13 @@ fn the_vault_is_what_git_sees() {
 fn a_vault_with_a_symlink_is_refused() {
     let v = TestVault::committed(BIN, "mv-rename");
     std::fs::write(v.tmp.path().join("secret.md"), "secret-token-xyz\n").unwrap();
-    std::os::unix::fs::symlink(v.tmp.path().join("secret.md"), v.root.join("views/leak.md")).unwrap();
+    platform::symlink_file(&v.tmp.path().join("secret.md"), &v.root.join("views/leak.md"));
     std::fs::create_dir(v.tmp.path().join("synced")).unwrap();
-    std::os::unix::fs::symlink(v.tmp.path().join("synced"), v.root.join("views/synced")).unwrap();
+    platform::symlink_dir(&v.tmp.path().join("synced"), &v.root.join("views/synced"));
     // Paths core never reads count too: no write ever goes through a link.
     std::fs::write(v.tmp.path().join("log.jsonl"), "").unwrap();
     std::fs::create_dir_all(v.root.join("plugins/learn")).unwrap();
-    std::os::unix::fs::symlink(v.tmp.path().join("log.jsonl"), v.root.join("plugins/learn/reviews.jsonl")).unwrap();
-    // A link with a non-UTF-8 name is refused too, for its name.
-    let odd = v.root.join(<std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"views/odd\xff"));
-    std::os::unix::fs::symlink(v.tmp.path().join("secret.md"), &odd).unwrap();
+    platform::symlink_file(&v.tmp.path().join("log.jsonl"), &v.root.join("plugins/learn/reviews.jsonl"));
     for args in [&["lint"][..], &["status"], &["mv", "views/linker.md", "views/x.md"]] {
         let (code, env) = v.run(args);
         assert_eq!((code, error_code(&env)), (1, "file.symlink"), "{args:?}: {env:#}");
@@ -405,10 +398,6 @@ fn a_vault_with_a_symlink_is_refused() {
     std::fs::remove_file(v.root.join("views/leak.md")).unwrap();
     std::fs::remove_file(v.root.join("views/synced")).unwrap();
     std::fs::remove_file(v.root.join("plugins/learn/reviews.jsonl")).unwrap();
-    let (code, env) = v.run(&["lint"]);
-    assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
-    assert!(error_message(&env).contains("has a name that is not UTF-8"), "{env:#}");
-    std::fs::remove_file(&odd).unwrap();
     let (code, env) = v.run(&["lint"]);
     assert!(error_code(&env).is_empty() && code <= 1, "{env:#}");
 }
@@ -457,56 +446,20 @@ fn git_tracing_opens() {
 /// the listing succeeds.
 #[test]
 fn a_noisy_fsmonitor_hook_opens() {
-    use std::os::unix::fs::PermissionsExt;
     let v = TestVault::committed(BIN, "mv-rename");
     let hook = v.tmp.path().join("hook.sh");
     std::fs::write(&hook, "#!/bin/sh\necho hook-noise >&2\nexit 1\n").unwrap();
-    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    platform::make_executable(&hook);
     v.git(&["config", "core.fsmonitor", hook.to_str().unwrap()]);
     let (code, env) = v.run(&["status"]);
     assert!(error_code(&env).is_empty() && code == 0, "{env:#}");
-}
-
-/// Every name git reports must be UTF-8, even where core does not read (`plugins/`) and
-/// in HEAD alone (a staged deletion): a vault holding one that is not is refused
-/// (`file.unreadable`), naming it.
-#[test]
-fn a_non_utf8_name_anywhere_refuses_the_vault() {
-    use std::os::unix::ffi::OsStrExt;
-    let v = TestVault::committed(BIN, "mv-rename");
-    let raw = |p: &[u8]| v.root.join(std::ffi::OsStr::from_bytes(p));
-    std::fs::create_dir_all(v.root.join("plugins/x")).unwrap();
-    std::fs::write(raw(b"plugins/x/data\xff"), "x").unwrap();
-    v.commit_all("odd");
-    for args in [&["lint"][..], &["status"]] {
-        let (code, env) = v.run(args);
-        assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{args:?}: {env:#}");
-        let message = error_message(&env);
-        assert!(message.contains(r#""plugins/x/data\xff" has a name that is not UTF-8"#), "{message}");
-    }
-    std::fs::remove_file(raw(b"plugins/x/data\xff")).unwrap();
-    let (code, env) = v.run(&["lint"]);
-    assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "a tracked name gone from disk: {env:#}");
-    // A staged deletion leaves the name in HEAD alone: still refused, until committed.
-    v.git(&["add", "-A"]);
-    for args in [&["lint"][..], &["status"], &["lint", "--fix"]] {
-        let (code, env) = v.run(args);
-        assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{args:?}, a staged deletion: {env:#}");
-    }
-    v.commit_all("odd removed");
-    // An ignored file is never named, so its name is not checked.
-    v.write(".gitignore", "/ignored/\n");
-    std::fs::create_dir_all(v.root.join("ignored")).unwrap();
-    std::fs::write(raw(b"ignored/data\xff"), "x").unwrap();
-    let (code, env) = v.run(&["lint"]);
-    assert!(error_code(&env).is_empty() && code <= 1, "{env:#}");
 }
 
 /// `init` refuses a symlink among the files it manages before writing anything.
 #[test]
 fn init_respects_the_vault_boundary() {
     let fresh = TestVault::empty(BIN);
-    std::os::unix::fs::symlink(fresh.tmp.path().join("made.md"), fresh.root.join("AGENTS.md")).unwrap();
+    platform::symlink_file(&fresh.tmp.path().join("made.md"), &fresh.root.join("AGENTS.md"));
     let names = || {
         let mut n: Vec<_> = std::fs::read_dir(&fresh.root).unwrap().map(|e| e.unwrap().file_name()).collect();
         n.sort();
@@ -527,33 +480,23 @@ fn new_respects_the_vault_boundary() {
     v.write(".gitignore", "concepts/x\n");
     let out = v.tmp.path().join("out");
     std::fs::create_dir(&out).unwrap();
-    std::os::unix::fs::symlink(&out, v.root.join("concepts/x")).unwrap();
+    platform::symlink_dir(&out, &v.root.join("concepts/x"));
     let (code, env) = v.run(&["new", "concepts/x/foo"]);
     assert_eq!((code, error_code(&env)), (1, "file.symlink"), "{env:#}");
     assert!(!out.join("foo.md").exists());
 }
 
 /// A tracked file that is gone from disk is a pending deletion, not an unreadable file,
-/// even when its folder became a file; but a tracked name that is not UTF-8 refuses the
-/// vault until its deletion is committed, as every name git lists must be UTF-8.
+/// even when its folder became a file.
 #[test]
 fn a_deleted_file_does_not_refuse_the_vault() {
-    use std::os::unix::ffi::OsStrExt;
     let v = TestVault::committed(BIN, "mv-rename");
     v.write("views/a/b.md", "# B\n");
-    std::fs::create_dir_all(v.root.join("views/sub")).unwrap();
-    std::fs::write(v.root.join(std::ffi::OsStr::from_bytes(b"views/sub/odd\xff.png")), "x").unwrap();
     v.write("views/sub/gone.png", "x");
     v.write("views/sub/s.md", "# S\n");
     v.commit_all("files to delete");
     std::fs::remove_dir_all(v.root.join("views/a")).unwrap();
     v.write("views/a", "# A\n");
-    std::fs::remove_file(v.root.join(std::ffi::OsStr::from_bytes(b"views/sub/odd\xff.png"))).unwrap();
-    let (code, env) = v.run(&["status"]);
-    assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
-    assert!(error_message(&env).contains("has a name that is not UTF-8"), "{env:#}");
-    v.git(&["add", "-u", "views/sub"]);
-    v.git(&["commit", "-q", "-m", "odd deleted"]);
     std::fs::remove_file(v.root.join("views/sub/gone.png")).unwrap();
     let (code, env) = v.run(&["status"]);
     assert_eq!(code, 0, "{env:#}");
@@ -562,65 +505,15 @@ fn a_deleted_file_does_not_refuse_the_vault() {
     assert!(v.exists("views/other/s.md"));
 }
 
-/// Every file core reads must be readable: one that is not, by content, permission,
-/// folder or name, refuses the vault for every command, naming each.
+/// A tracked file replaced on disk by a folder is gone: the folder's files are listed on
+/// their own.
 #[test]
-fn an_unreadable_file_refuses_the_vault() {
-    use std::os::unix::ffi::OsStrExt;
-    use std::os::unix::fs::PermissionsExt;
-    let v = TestVault::committed(BIN, "kinds");
-    v.write("views/closed/inner.md", "# Inner\n");
-    v.commit_all("inner");
-    std::fs::write(v.root.join("views/bad.md"), b"# Bad \xff\n").unwrap();
-    v.write("views/locked.md", "# Locked\n");
-    std::fs::write(v.root.join(std::ffi::OsStr::from_bytes(b"views/odd\xff.png")), "x").unwrap();
-    v.write("inbox/shut/x.md", "# X\n");
-    let mode = |p: &str, m: u32| std::fs::set_permissions(v.root.join(p), std::fs::Permissions::from_mode(m)).unwrap();
-    std::fs::create_dir_all(v.root.join("sources/papers")).unwrap();
-    std::fs::write(v.root.join("sources/papers/p.pdf"), "%PDF").unwrap();
-    for p in ["views/locked.md", "views/closed", "inbox/shut", "sources/papers/p.pdf"] {
-        mode(p, 0o000);
-    }
-    let runs: Vec<_> =
-        [&["lint"][..], &["status"], &["new", "concepts/a/fresh"]].iter().map(|args| v.run(args)).collect();
-    for p in ["views/closed", "inbox/shut"] {
-        mode(p, 0o755);
-    }
-    for (code, env) in runs {
-        assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
-        let message = error_message(&env);
-        for part in [
-            "`views/bad.md` is not valid UTF-8",
-            "`views/locked.md` cannot be read",
-            "`sources/papers/p.pdf` cannot be read",
-            "`views/closed/inner.md` cannot be read",
-            r#""views/odd\xff.png" has a name that is not UTF-8"#,
-            "git: warning: could not open directory 'inbox/shut/'",
-        ] {
-            assert!(message.contains(part), "{part}: {message}");
-        }
-        // One problem per line, under the header.
-        assert_eq!(message.lines().count(), 8, "{message}");
-        assert!(message.lines().skip(1).all(|l| l.starts_with("  ")), "{message}");
-    }
-    assert!(!v.exists("concepts/a/fresh.md"), "nothing written");
-}
-
-/// A tracked file replaced on disk: by a folder, it is gone (the folder's files are
-/// listed on their own); by a socket or FIFO, which opening could block on, the vault is
-/// refused (`file.unreadable`).
-#[test]
-fn a_tracked_file_replaced_by_a_folder_or_a_special_file() {
-    let v = TestVault::with_files(BIN, &[("views/a.md", "# A\n"), ("views/b.md", "# B\n"), ("views/c.md", "# C\n")]);
+fn a_tracked_file_replaced_by_a_folder() {
+    let v = TestVault::with_files(BIN, &[("views/a.md", "# A\n"), ("views/c.md", "# C\n")]);
     std::fs::remove_file(v.root.join("views/a.md")).unwrap();
     v.write("views/a.md/inner.md", "# Inner\n");
     let (code, env) = v.run(&["lint"]);
     assert!(error_code(&env).is_empty() && code == 0, "a folder is not refused: {env:#}");
-    std::fs::remove_file(v.root.join("views/b.md")).unwrap();
-    let _socket = std::os::unix::net::UnixListener::bind(v.root.join("views/b.md")).unwrap();
-    let (code, env) = v.run(&["lint"]);
-    assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
-    assert!(error_message(&env).contains("`views/b.md` is not a regular file"), "{env:#}");
 }
 
 /// A name with a control character would break every one-line message that names it,

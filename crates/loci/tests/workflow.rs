@@ -1,10 +1,6 @@
 //! The agent review workflow (fixture `agent-workflow`, m0 §13.2): `status`,
 //! `material-dropped` and `new`.
 
-// Unix only for now: the test vaults isolate PATH with symlinks and the stub plugin is
-// a shell script (D263).
-#![cfg(unix)]
-
 mod common;
 
 use common::*;

@@ -1,10 +1,6 @@
 //! Integration tests for `loci-learn` (learn-plugin §5), run against temporary vaults.
 
-// Unix only for now: the test vaults isolate PATH with symlinks and the stub plugin is
-// a shell script (D263).
-#![cfg(unix)]
-
-use loci_testkit::{TestVault, codes, error_code, error_message};
+use loci_testkit::{TestVault, codes, error_code, error_message, platform};
 use serde_json::Value;
 
 const BIN: &str = env!("CARGO_BIN_EXE_loci-learn");
@@ -122,15 +118,13 @@ fn log_commits_alone_and_validates() {
     assert_eq!(code, 0, "the log still parses: {env}");
 }
 
-#[cfg(unix)]
 #[test]
 fn a_failed_commit_leaves_nothing_staged() {
-    use std::os::unix::fs::PermissionsExt;
     let v = vault(&[("concepts/a/x.md", &concept(CONCEPT, &format!("- q :: a ^{ID1}\n")))]);
     let hook = v.root.join(".git/hooks/pre-commit");
     std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
     std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
-    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    platform::make_executable(&hook);
     let (code, env) = learn(&v, &["log"], &format!(r#"{{"card":"{ID1}","grade":"hard"}}"#));
     assert_eq!((code, error_code(&env)), (3, "git"), "{env}");
     assert_eq!(v.git(&["diff", "--cached", "--name-only"]), "", "the removed line is not left staged");
@@ -146,6 +140,8 @@ fn a_failed_add_leaves_nothing_staged() {
     assert_eq!(v.git(&["diff", "--cached", "--name-only"]), "", "nothing is left staged");
 }
 
+/// This crate's one test of what only Unix has: a folder made read-only by its mode.
+#[cfg(unix)]
 #[test]
 fn a_failed_append_names_the_file() {
     use std::os::unix::fs::PermissionsExt;
@@ -165,7 +161,7 @@ fn the_log_is_not_written_through_a_symlink() {
     let outside = v.root.parent().unwrap().join("outside");
     std::fs::create_dir_all(&outside).unwrap();
     std::fs::create_dir_all(v.root.join("plugins")).unwrap();
-    std::os::unix::fs::symlink(&outside, v.root.join("plugins/learn")).unwrap();
+    platform::symlink_dir(&outside, &v.root.join("plugins/learn"));
     // Ignored, so opening the vault does not see it.
     std::fs::write(v.root.join(".git/info/exclude"), "/plugins/learn\n").unwrap();
     let (code, env) = learn(&v, &["log"], &format!(r#"{{"card":"{ID1}","grade":"hard"}}"#));
@@ -184,7 +180,7 @@ fn the_config_is_not_read_through_a_symlink() {
     let outside = v.root.parent().unwrap().join("outside.toml");
     std::fs::write(&outside, "new_per_day = 1\n").unwrap();
     std::fs::create_dir_all(v.root.join("plugins/learn")).unwrap();
-    std::os::unix::fs::symlink(&outside, v.root.join("plugins/learn/config.toml")).unwrap();
+    platform::symlink_file(&outside, &v.root.join("plugins/learn/config.toml"));
     std::fs::write(v.root.join(".git/info/exclude"), "/plugins/learn/config.toml\n").unwrap();
     for args in [&["state", "x"][..], &["review"]] {
         let (code, env) = learn(&v, args, "");

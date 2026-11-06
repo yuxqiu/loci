@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+dunce = "1.0.5"
 pulldown-cmark = { version = "0.13", default-features = false }
 regex = "1.13.1"
 saphyr = "0.3"

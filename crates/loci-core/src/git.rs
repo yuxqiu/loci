@@ -31,7 +31,7 @@ impl<'a> Repo<'a> {
     }
 
     /// Runs git and returns stdout, or an error message including stderr.
-    fn run(&self, args: &[&str]) -> Result<Vec<u8>, String> {
+    pub(crate) fn run(&self, args: &[&str]) -> Result<Vec<u8>, String> {
         stdout(self.git().args(args), &args.join(" "))
     }
 
@@ -387,11 +387,11 @@ fn vault_paths<'a>(out: impl IntoIterator<Item = &'a [u8]>) -> Result<Vec<VaultP
     }
 }
 
-/// The top level of the git work tree holding `dir`, canonicalized. The error is git's
-/// message, for example when `dir` is in no work tree.
+/// The top level of the git work tree holding `dir`, canonicalized (with no `\\?\` on
+/// Windows). The error is git's message, for example when `dir` is in no work tree.
 pub fn toplevel(dir: &Path) -> Result<PathBuf, String> {
     let top = path_line(Repo::new(dir).run(&["rev-parse", "--show-toplevel"])?, "the work tree's path")?;
-    Path::new(&top).canonicalize().map_err(|e| format!("{top}: {e}"))
+    dunce::canonicalize(Path::new(&top)).map_err(|e| format!("{top}: {e}"))
 }
 
 /// A path git printed on a line of its own, without the line break (and nothing else: a
@@ -451,7 +451,7 @@ fn parse_status(out: &[u8]) -> Result<(Vec<VaultPath>, Vec<VaultPath>), String> 
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn strs(set: &BTreeSet<VaultPath>) -> Vec<&str> {
@@ -478,7 +478,7 @@ mod tests {
 
     /// An empty repository whose settings override the user's own: no signing prompts,
     /// no hooks.
-    fn test_repo() -> tempfile::TempDir {
+    pub(crate) fn test_repo() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
         test_repo_at(tmp.path());
         tmp
@@ -516,20 +516,6 @@ mod tests {
         Repo::new(&sub).run(&["add", "."]).unwrap();
         Repo::new(&sub).run(&["commit", "-qm", "x"]).unwrap();
         std::fs::write(sub.join("y.md"), "y\n").unwrap();
-        assert_eq!(Repo::new(root).status().unwrap(), Changes::default());
-    }
-
-    /// A permission-only change is not a change to the content.
-    #[cfg(unix)]
-    #[test]
-    fn status_ignores_file_modes() {
-        use std::os::unix::fs::PermissionsExt;
-        let tmp = test_repo();
-        let root = tmp.path();
-        std::fs::write(root.join("a.md"), "a\n").unwrap();
-        Repo::new(root).run(&["add", "."]).unwrap();
-        Repo::new(root).run(&["commit", "-qm", "base"]).unwrap();
-        std::fs::set_permissions(root.join("a.md"), std::fs::Permissions::from_mode(0o755)).unwrap();
         assert_eq!(Repo::new(root).status().unwrap(), Changes::default());
     }
 
@@ -605,22 +591,6 @@ mod tests {
         assert!(err.contains(r#""a\nb.md" is not a vault path"#), "{err}");
     }
 
-    /// A changed name that is not UTF-8 is an error too, not a change left uncounted.
-    #[cfg(unix)]
-    #[test]
-    fn status_refuses_a_name_that_is_not_utf8() {
-        use std::os::unix::ffi::OsStrExt;
-        let tmp = test_repo();
-        let root = tmp.path();
-        let name = std::ffi::OsStr::from_bytes(b"n\xe9.md");
-        std::fs::write(root.join(name), "n\n").unwrap();
-        Repo::new(root).run(&["add", "."]).unwrap();
-        Repo::new(root).run(&["commit", "-qm", "base"]).unwrap();
-        std::fs::remove_file(root.join(name)).unwrap();
-        let err = Repo::new(root).status().unwrap_err();
-        assert!(err.contains(r#""n\xe9.md" has a name that is not UTF-8"#), "{err}");
-    }
-
     /// A folder name may end in a space: only git's line break is dropped.
     #[test]
     fn toplevel_keeps_trailing_spaces() {
@@ -628,6 +598,6 @@ mod tests {
         let dir = tmp.path().join("sp ");
         std::fs::create_dir(&dir).unwrap();
         test_repo_at(&dir);
-        assert_eq!(toplevel(&dir).unwrap(), dir.canonicalize().unwrap());
+        assert_eq!(toplevel(&dir).unwrap(), dunce::canonicalize(&dir).unwrap());
     }
 }

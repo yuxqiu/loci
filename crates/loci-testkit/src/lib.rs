@@ -1,9 +1,10 @@
 //! Test helpers shared by the integration tests of `loci` and `loci-learn` (m0 §13.1):
 //! fixture vaults copied to a temp dir, deterministic git, a binary run with `--json`,
-//! envelope checks and a stub plugin script.
+//! envelope checks and a stub plugin.
 //!
-//! The stub plugin is a shell script, and the integration tests built on this kit are
-//! `#![cfg(unix)]` for now: Windows CI builds and lints them only (D263).
+//! What differs between Unix and Windows is in [`platform`].
+
+pub mod platform;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -44,16 +45,11 @@ impl TestVault {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("vault");
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::create_dir_all(tmp.path().join("home")).unwrap();
-        let bin = tmp.path().join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        #[cfg(unix)]
-        use std::os::unix::fs::symlink as symlink_file;
-        #[cfg(windows)]
-        use std::os::windows::fs::symlink_file;
-        let git = format!("git{}", std::env::consts::EXE_SUFFIX);
-        symlink_file(find_on_path(&git), bin.join(&git)).unwrap();
-        let root = root.canonicalize().unwrap();
+        for dir in ["home", "temp", "bin"] {
+            std::fs::create_dir_all(tmp.path().join(dir)).unwrap();
+        }
+        platform::link_tool(&tmp.path().join("bin"), "git");
+        let root = dunce::canonicalize(&root).unwrap();
         Self { tmp, root, exe: PathBuf::from(exe) }
     }
 
@@ -87,8 +83,11 @@ impl TestVault {
     }
 
     /// `git init` in the vault, with no commit.
+    /// `git init`, listing names as their bytes on every system: macOS's default
+    /// `core.precomposeUnicode` would list an NFD name as NFC, hiding `path.not-nfc`.
     pub fn init_git(&self) {
         self.git(&["init", "-q", "-b", "main"]);
+        self.git(&["config", "core.precomposeUnicode", "false"]);
     }
 
     pub fn home(&self) -> PathBuf {
@@ -99,10 +98,21 @@ impl TestVault {
         self.tmp.path().join("bin")
     }
 
+    /// The test environment: nothing of the runner's but `SystemRoot`, which Windows
+    /// programs need (rust-lang/rust#114737); home and temporary files inside the test.
     fn env(&self, c: &mut Command) {
-        c.env_clear()
-            .env("PATH", self.bin())
+        let temp = self.tmp.path().join("temp");
+        c.env_clear();
+        if let Some(root) = std::env::var_os("SystemRoot") {
+            c.env("SystemRoot", root);
+        }
+        c.env("PATH", self.bin())
             .env("HOME", self.home())
+            .env("USERPROFILE", self.home())
+            .env("APPDATA", self.home())
+            .env("TMPDIR", &temp)
+            .env("TEMP", &temp)
+            .env("TMP", &temp)
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_AUTHOR_NAME", "Test")
             .env("GIT_AUTHOR_EMAIL", "test@example.org")
@@ -113,7 +123,7 @@ impl TestVault {
     }
 
     pub fn git(&self, args: &[&str]) -> String {
-        let mut c = Command::new(self.bin().join("git"));
+        let mut c = Command::new(self.bin().join(format!("git{}", std::env::consts::EXE_SUFFIX)));
         self.env(&mut c);
         let out = c.arg("-C").arg(&self.root).args(args).output().unwrap();
         assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
@@ -208,20 +218,18 @@ impl TestVault {
         out
     }
 
-    /// Installs the stub plugin `loci-stub` in the `PATH` dir.
-    #[cfg(unix)]
+    /// Installs the stub plugin `loci-stub` in the `PATH` dir, answering as `stub` says.
     pub fn install_stub(&self, stub: &Stub) {
-        use std::os::unix::fs::PermissionsExt;
-        let p = self.bin().join("loci-stub");
-        std::fs::write(&p, stub.script()).unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let exe = format!("loci-stub{}", std::env::consts::EXE_SUFFIX);
+        std::fs::copy(env!("LOCI_STUB_EXE"), self.bin().join(exe)).unwrap();
+        std::fs::write(self.bin().join("loci-stub.replies"), stub.replies()).unwrap();
     }
 
     /// Replaces the vault root (and its temp dir) in a JSON value's strings by `[vault]`
     /// / `[tmp]`, and ULIDs by `[ulid]`.
     pub fn redact(&self, v: &Value) -> Value {
         let root = self.root.to_string_lossy().into_owned();
-        let tmp = self.tmp.path().canonicalize().unwrap().to_string_lossy().into_owned();
+        let tmp = dunce::canonicalize(self.tmp.path()).unwrap().to_string_lossy().into_owned();
         map_strings(v, &|s| redact_ulids(&s.replace(&root, "[vault]").replace(&tmp, "[tmp]")))
     }
 }
@@ -351,10 +359,9 @@ pub fn covered<'a>(text: &'a str, d: &Value) -> &'a str {
     &text[s..e]
 }
 
-/// A stub plugin (a shell script) with fixed replies to its `lint` and `skills` hooks;
-/// `lint` also prints [`STUB_LINT_STDERR`] on stderr.
-/// `crash` kills the stub with a signal. Any other first argument prints its arguments
-/// and environment and exits 7.
+/// The replies of the stub plugin (`stub/main.rs`) to its `lint` and `skills` hooks;
+/// `lint` also prints [`STUB_LINT_STDERR`] on stderr. `crash` aborts the stub. Any other
+/// first argument prints its arguments and environment and exits 7.
 pub struct Stub {
     pub lint: String,
     pub lint_exit: i32,
@@ -405,20 +412,10 @@ impl Default for Stub {
 }
 
 impl Stub {
-    #[cfg(unix)]
-    fn script(&self) -> String {
-        assert!(!self.lint.contains('\'') && !self.skills.contains('\''));
-        format!(
-            "#!/bin/sh\n\
-             case \"$1\" in\n\
-             lint) echo '{STUB_LINT_STDERR}' >&2; printf '%s\\n' '{}'; exit {};;\n\
-             skills) printf '%s\\n' '{}'; exit {};;\n\
-             crash) kill -KILL $$;;\n\
-             *) printf 'args=%s\\n' \"$*\"; printf 'vault=%s\\n' \"$LOCI_VAULT\"; \
-                printf 'version=%s\\n' \"$LOCI_VERSION\"; exit 7;;\n\
-             esac\n",
-            self.lint, self.lint_exit, self.skills, self.skills_exit
-        )
+    /// The stub's `loci-stub.replies`: one reply per line.
+    fn replies(&self) -> String {
+        assert!(!self.lint.contains('\n') && !self.skills.contains('\n'), "a reply is one line");
+        format!("{STUB_LINT_STDERR}\n{}\n{}\n{}\n{}\n", self.lint, self.lint_exit, self.skills, self.skills_exit)
     }
 }
 

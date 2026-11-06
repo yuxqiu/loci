@@ -66,7 +66,7 @@ impl Vault {
                 .ok_or_else(|| not_found("no loci.toml in this directory or any parent".into()))?,
         };
 
-        let root = root.canonicalize().map_err(|e| not_found(e.to_string()))?;
+        let root = dunce::canonicalize(&root).map_err(|e| not_found(e.to_string()))?;
         let why = match crate::git::toplevel(&root) {
             Ok(top) if top == root => None,
             Ok(_) => Some("is not the root of a git work tree".to_string()),
@@ -352,19 +352,17 @@ fn bulleted(header: &str, items: &[String]) -> String {
 
 /// Writes a file via a temporary sibling and a rename, so readers never see a partial file.
 /// A file it replaces keeps its permissions.
-fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     persist(stage(path, bytes)?, path)
 }
 
 /// `bytes` in a uniquely named file in `path`'s folder, synced, not yet in its place
-/// ([`persist`]). On Unix it is created with mode 0o666 less the umask, as a plain
-/// write creates a file (tempfile's default is owner-only).
+/// ([`persist`]), with the mode a plain write gives.
 pub(crate) fn stage(path: &Path, bytes: &[u8]) -> std::io::Result<tempfile::NamedTempFile> {
     use std::io::Write;
     let dir = path.parent().expect("an absolute file path has a folder");
     let builder = &mut tempfile::Builder::new();
-    #[cfg(unix)]
-    builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o666));
+    crate::platform::plain_file_mode(builder);
     let mut tmp = builder.tempfile_in(dir)?;
     tmp.write_all(bytes)?;
     tmp.as_file().sync_all()?;
@@ -413,13 +411,12 @@ mod tests {
     use super::*;
     use crate::testing::vp;
 
-    #[cfg(unix)]
     #[test]
     fn copy_dir_names_a_link_it_cannot_copy() {
         let tmp = tempfile::tempdir().unwrap();
         let (from, to) = (tmp.path().join("from"), tmp.path().join("to"));
         std::fs::create_dir_all(from.join("d")).unwrap();
-        std::os::unix::fs::symlink("d", from.join("dir-link")).unwrap();
+        crate::platform::symlink_dir(&from.join("d"), &from.join("dir-link"));
         let e = copy_dir(&from, &to, &[]).unwrap_err();
         assert!(e.to_string().contains("dir-link"), "{e}");
     }
@@ -445,30 +442,5 @@ mod tests {
             (written("n/b.md"), written("a.md.md"), written("x.png.md")),
             ("n/b".into(), "a.md.md".into(), "x.png.md".into())
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_rewritten_file_keeps_its_mode() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("v.md");
-        std::fs::write(&path, "old").unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o664)).unwrap();
-        write_atomic(&path, b"new").unwrap();
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!((std::fs::read_to_string(&path).unwrap(), mode), ("new".into(), 0o664));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_new_file_gets_the_mode_of_a_plain_write() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
-        let (plain, staged) = (dir.path().join("plain"), dir.path().join("staged"));
-        std::fs::write(&plain, "x").unwrap();
-        write_atomic(&staged, b"x").unwrap();
-        assert_eq!(mode(&staged), mode(&plain));
     }
 }

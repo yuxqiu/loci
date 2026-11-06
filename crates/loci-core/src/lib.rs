@@ -16,6 +16,7 @@ pub mod merge;
 pub mod mv;
 pub mod parse;
 pub mod path;
+pub mod platform;
 pub mod plugin;
 pub mod relink;
 pub mod splice;

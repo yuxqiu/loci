@@ -292,6 +292,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dunce"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
+
+[[package]]
 name = "either"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -551,6 +557,7 @@ name = "loci"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "dunce",
  "insta",
  "loci-core",
  "loci-testkit",
@@ -569,6 +576,7 @@ dependencies = [
 name = "loci-core"
 version = "0.1.0"
 dependencies = [
+ "dunce",
  "insta",
  "proptest",
  "pulldown-cmark",
@@ -606,6 +614,7 @@ dependencies = [
 name = "loci-testkit"
 version = "0.1.0"
 dependencies = [
+ "dunce",
  "loci-core",
  "regex",
  "serde_json",
