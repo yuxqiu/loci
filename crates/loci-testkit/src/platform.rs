@@ -21,6 +21,17 @@ pub fn symlink_dir(target: &Path, link: &Path) {
     made.unwrap_or_else(|e| link_failed(link, e));
 }
 
+/// Removes the link `link` to a folder: Windows removes it as a folder, Unix as a file.
+#[cfg(unix)]
+pub fn remove_symlink_dir(link: &Path) {
+    std::fs::remove_file(link).unwrap();
+}
+
+#[cfg(windows)]
+pub fn remove_symlink_dir(link: &Path) {
+    std::fs::remove_dir(link).unwrap();
+}
+
 /// Windows lets only an administrator make a link, unless Developer Mode is on (CI's
 /// runners have it on).
 fn link_failed(link: &Path, e: std::io::Error) -> ! {

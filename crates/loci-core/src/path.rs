@@ -76,7 +76,10 @@ pub const AREA: &str = "AREA.md";
 /// control character (`path.control`).
 pub(crate) fn normalize_arg(p: &str) -> Result<String, Refusal> {
     let outside = || Refusal::refused("path.outside", format!("`{p}` leads outside the vault"));
-    if Path::new(p).is_absolute() {
+    // A root or a drive: on Windows `/etc` and `C:etc` are not absolute, yet leave the
+    // vault.
+    if matches!(Path::new(p).components().next(), Some(std::path::Component::RootDir | std::path::Component::Prefix(_)))
+    {
         return Err(outside());
     }
     // `normalize` keeps a `..` it cannot resolve at the front.

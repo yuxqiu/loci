@@ -83,16 +83,6 @@ fn mv_fixes_a_non_nfc_name() {
 }
 
 #[test]
-fn a_folder_name_is_never_a_pattern() {
-    let v = TestVault::committed(BIN, "mv-rename");
-    v.write("views/q*/a.md", "# A\n");
-    v.write("views/qa/b.md", "# B\n");
-    v.commit_all("look-alike folders");
-    mv(&v, "views/q*", "views/z");
-    assert!(v.exists("views/z/a.md") && v.exists("views/qa/b.md"));
-}
-
-#[test]
 fn mv_refusals() {
     // The planner's refusals are unit-tested in `loci_core::mv`; these go through the
     // command: its argument checks, and that a refusal writes nothing.

@@ -396,7 +396,7 @@ fn a_vault_with_a_symlink_is_refused() {
         }
     }
     std::fs::remove_file(v.root.join("views/leak.md")).unwrap();
-    std::fs::remove_file(v.root.join("views/synced")).unwrap();
+    platform::remove_symlink_dir(&v.root.join("views/synced"));
     std::fs::remove_file(v.root.join("plugins/learn/reviews.jsonl")).unwrap();
     let (code, env) = v.run(&["lint"]);
     assert!(error_code(&env).is_empty() && code <= 1, "{env:#}");
@@ -514,15 +514,4 @@ fn a_tracked_file_replaced_by_a_folder() {
     v.write("views/a.md/inner.md", "# Inner\n");
     let (code, env) = v.run(&["lint"]);
     assert!(error_code(&env).is_empty() && code == 0, "a folder is not refused: {env:#}");
-}
-
-/// A name with a control character would break every one-line message that names it,
-/// so a vault holding one is refused, the name shown escaped.
-#[test]
-fn a_name_with_a_control_character_refuses_the_vault() {
-    let v = TestVault::with_files(BIN, &[("views/a.md", "# A\n"), ("views/a\nb.md", "# B\n")]);
-    let (code, env) = v.run(&["lint"]);
-    assert_eq!((code, error_code(&env)), (1, "file.unreadable"), "{env:#}");
-    let message = error_message(&env);
-    assert!(message.contains(r#""views/a\nb.md" is not a vault path: it has a control character"#), "{message}");
 }

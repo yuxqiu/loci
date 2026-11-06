@@ -62,7 +62,8 @@ fn core_command_names_are_never_dispatched() {
         ..Stub::default()
     };
     v.install_stub(&fake);
-    std::fs::rename(v.bin().join("loci-stub"), v.bin().join("loci-lint")).unwrap();
+    let exe = |name: &str| v.bin().join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    std::fs::rename(exe("loci-stub"), exe("loci-lint")).unwrap();
     let (code, env) = v.run(&["lint"]);
     assert_eq!(code, 0, "{}", diag_lines(&env));
     assert_eq!(env["data"]["plugins"], json!([]));

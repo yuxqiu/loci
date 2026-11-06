@@ -238,7 +238,9 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<String>) {
     for entry in std::fs::read_dir(dir).unwrap() {
         let entry = entry.unwrap();
         let p = entry.path();
-        let rel = p.strip_prefix(root).unwrap().to_string_lossy().into_owned();
+        // `/` between names on every system, as git and loci write vault paths.
+        let names = p.strip_prefix(root).unwrap().iter().map(|n| n.to_string_lossy()).collect::<Vec<_>>();
+        let rel = names.join("/");
         if rel == ".git" {
             continue;
         }

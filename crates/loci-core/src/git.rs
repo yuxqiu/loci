@@ -575,22 +575,6 @@ pub(crate) mod tests {
         assert_eq!(strs(&ch.added), ["copy.md", "gone.md", "y.md"]);
     }
 
-    /// A changed name that is no vault path (a control character) is an error, not a
-    /// panic: a file whose deletion is staged is no longer listed, so opening the vault
-    /// does not refuse it.
-    #[test]
-    fn status_refuses_a_name_that_is_no_vault_path() {
-        let tmp = test_repo();
-        let root = tmp.path();
-        let git = |args: &[&str]| Repo::new(root).run(args).unwrap();
-        std::fs::write(root.join("a\nb.md"), "a\n").unwrap();
-        git(&["add", "."]);
-        git(&["commit", "-qm", "base"]);
-        std::fs::remove_file(root.join("a\nb.md")).unwrap();
-        let err = Repo::new(root).status().unwrap_err();
-        assert!(err.contains(r#""a\nb.md" is not a vault path"#), "{err}");
-    }
-
     /// A folder name may end in a space: only git's line break is dropped.
     #[test]
     fn toplevel_keeps_trailing_spaces() {

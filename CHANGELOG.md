@@ -39,6 +39,8 @@ them under its version.
 
 ### Changed
 
+- On Windows, a path argument starting at a root or drive (`/etc/passwd`, `C:x`) is
+  `path.outside`; it was read as a vault path (`etc/passwd`).
 - A plugin exiting with a code outside 0–255 (possible on Windows, as when it
   aborts) is `plugin.failed`, instead of a wrapped exit code (possibly 0).
 - On Windows, paths in messages and `LOCI_VAULT` have no `\\?\` prefix.

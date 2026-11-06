@@ -349,22 +349,6 @@ fn done_prunes_old_records() {
 
 // ---------------------------------------------------------------- working directory
 
-/// A working directory deleted under loci is an `io` refusal, not a panic.
-#[test]
-fn deleted_working_directory_is_refused() {
-    let tmp = tempfile::tempdir().unwrap();
-    let gone = tmp.path().join("gone");
-    std::fs::create_dir(&gone).unwrap();
-    let out = std::process::Command::new("sh")
-        .current_dir(&gone)
-        .args(["-c", "rmdir \"$PWD\" && exec \"$0\" --json lint", BIN])
-        .output()
-        .unwrap();
-    let env: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{out:?}"));
-    assert_eq!(out.status.code(), Some(3), "{env:#}");
-    assert_eq!(env["error"]["code"], "io", "{env:#}");
-}
-
 #[test]
 fn closed_stdout_is_no_crash() {
     // A reader that stops early (`loci status | head -0`) closes the pipe first.

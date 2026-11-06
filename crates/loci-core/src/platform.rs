@@ -60,7 +60,8 @@ pub(crate) fn symlink_dir(target: &std::path::Path, link: &std::path::Path) {
     made.unwrap_or_else(|e| panic!("cannot link {}: {e} (on Windows, enable Developer Mode)", link.display()));
 }
 
-/// Unit tests of what only Unix has: file modes and names that are bytes.
+/// Unit tests of what only Unix has: file modes, names Windows forbids and, except on
+/// macOS, names that are bytes.
 #[cfg(all(test, unix))]
 mod unix_tests {
     use std::os::unix::fs::PermissionsExt;
@@ -104,18 +105,41 @@ mod unix_tests {
         assert_eq!(Repo::new(root).status().unwrap(), Changes::default());
     }
 
-    /// A changed name that is not UTF-8 is an error too, not a change left uncounted.
+    /// A changed name that is no vault path (a control character) is an error, not a
+    /// panic: a file whose deletion is staged is no longer listed, so opening the vault
+    /// does not refuse it.
     #[test]
-    fn status_refuses_a_name_that_is_not_utf8() {
-        use std::os::unix::ffi::OsStrExt;
+    fn status_refuses_a_name_that_is_no_vault_path() {
         let tmp = test_repo();
         let root = tmp.path();
-        let name = std::ffi::OsStr::from_bytes(b"n\xe9.md");
-        std::fs::write(root.join(name), "n\n").unwrap();
-        Repo::new(root).run(&["add", "."]).unwrap();
-        Repo::new(root).run(&["commit", "-qm", "base"]).unwrap();
-        std::fs::remove_file(root.join(name)).unwrap();
+        let git = |args: &[&str]| Repo::new(root).run(args).unwrap();
+        std::fs::write(root.join("a\nb.md"), "a\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "base"]);
+        std::fs::remove_file(root.join("a\nb.md")).unwrap();
         let err = Repo::new(root).status().unwrap_err();
-        assert!(err.contains(r#""n\xe9.md" has a name that is not UTF-8"#), "{err}");
+        assert!(err.contains(r#""a\nb.md" is not a vault path"#), "{err}");
+    }
+
+    /// macOS's file system refuses names that are bytes.
+    #[cfg(not(target_os = "macos"))]
+    mod byte_names {
+        use std::os::unix::ffi::OsStrExt;
+
+        use crate::git::{Repo, tests::test_repo};
+
+        /// A changed name that is not UTF-8 is an error too, not a change left uncounted.
+        #[test]
+        fn status_refuses_a_name_that_is_not_utf8() {
+            let tmp = test_repo();
+            let root = tmp.path();
+            let name = std::ffi::OsStr::from_bytes(b"n\xe9.md");
+            std::fs::write(root.join(name), "n\n").unwrap();
+            Repo::new(root).run(&["add", "."]).unwrap();
+            Repo::new(root).run(&["commit", "-qm", "base"]).unwrap();
+            std::fs::remove_file(root.join(name)).unwrap();
+            let err = Repo::new(root).status().unwrap_err();
+            assert!(err.contains(r#""n\xe9.md" has a name that is not UTF-8"#), "{err}");
+        }
     }
 }
