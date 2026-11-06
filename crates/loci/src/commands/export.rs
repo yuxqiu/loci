@@ -32,29 +32,41 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
     let index = Index::open(&vault);
     let note = index.note_named(target)?.of_kind(|k| matches!(k, Kind::View | Kind::Concept), "a view or a concept")?;
 
-    let doc = export::Export::of(&index, note, depth);
+    // Images go in `<stem>.assets/` beside the document, so exports written to one
+    // folder keep their own.
+    let output = output.map(|o| ctx.cwd.join(o));
+    let stem = match &output {
+        None => note.path.stem(),
+        Some(o) => o
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| Refusal::io(format!("`{}` names no file with a UTF-8 name", o.display())))?,
+    };
+    let images = format!("{stem}.assets");
+    let doc = export::Export::of(&index, note, depth, &images);
     let text = match format {
         Format::Md => doc.markdown.clone(),
         Format::Html => html(&doc, &note.title()).map_err(|m| Refusal::internal("export.html", m))?,
     };
-    let out_path = write_out(&vault, &doc, &note.path, format, output.map(|o| ctx.cwd.join(o)), text)?;
+    let out_path = write_out(&vault, &doc, &images, &note.path, format, output, text)?;
     let data = json!({
         "output": out_path,
         "notes": doc.notes,
-        "assets": doc.assets.iter().map(|(_, n)| format!("{}/{n}", export::ASSETS)).collect::<Vec<_>>(),
+        "assets": doc.assets.iter().map(|(_, n)| format!("{images}/{n}")).collect::<Vec<_>>(),
     });
 
     Ok(Report::ok(data, format!("{}\n", out_path.display())))
 }
 
-/// Writes the export and its images: to `output` when given (the user's path, written
-/// as given, not as a vault file), else into `.loci/export/<note path>/` (in the
-/// vault, gitignored, so written as vault files are; a folder named by the note's whole
-/// path, which no other note's folder can be inside, so no export overwrites
-/// another's images). Returns where the document went.
+/// Writes the export, and its images into folder `images` beside it: to `output` when
+/// given (the user's path, written as given, not as a vault file), else into
+/// `.loci/export/<note path>/` (in the vault, gitignored, so written as vault files
+/// are; a folder named by the note's whole path, which no other note's folder can be
+/// inside, so no export overwrites another's images). Returns where the document went.
 fn write_out(
     vault: &Vault,
     doc: &export::Export,
+    images: &str,
     note_path: &VaultPath,
     format: Format,
     output: Option<PathBuf>,
@@ -69,17 +81,15 @@ fn write_out(
             let in_export =
                 |name: &str| VaultPath::new(format!(".loci/export/{note_path}/{name}")).expect("a file name");
             for (src, name) in &doc.assets {
-                vault.write(&in_export(&format!("{}/{name}", export::ASSETS)), &read(src)?)?;
+                vault.write(&in_export(&format!("{images}/{name}")), &read(src)?)?;
             }
             let out = in_export(&format!("{}.{}", note_path.stem(), format.ext()));
             vault.write(&out, text.as_bytes())?;
             Ok(vault.abs(&out))
         }
         Some(out_path) => {
-            let Some(out_dir) = out_path.parent() else {
-                return Err(Refusal::io(format!("`{}` names no file", out_path.display())));
-            };
-            let assets_dir = out_dir.join(export::ASSETS);
+            let out_dir = out_path.parent().expect("an absolute path with a file name has a folder");
+            let assets_dir = out_dir.join(images);
             let dir = if doc.assets.is_empty() { out_dir } else { &assets_dir };
             std::fs::create_dir_all(dir).map_err(Refusal::io_at(dir))?;
             for (src, name) in &doc.assets {

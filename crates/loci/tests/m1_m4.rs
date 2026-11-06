@@ -277,8 +277,8 @@ fn export_collects_links_and_assets() {
     let d = &env["data"];
     assert_eq!(d["output"].as_str().unwrap(), v.root.join(".loci/export/views/study.md/study.md").to_str().unwrap());
     assert_eq!(strs(&d["notes"]), ["views/study.md", "concepts/g/bfs.md", "concepts/g/dijkstra.md"]);
-    assert_eq!(strs(&d["assets"]), ["assets/grid.png"]);
-    assert_eq!(v.read(".loci/export/views/study.md/assets/grid.png"), "PNG");
+    assert_eq!(strs(&d["assets"]), ["study.assets/grid.png"]);
+    assert_eq!(v.read(".loci/export/views/study.md/study.assets/grid.png"), "PNG");
 
     // Depth 2 pulls graph in.
     let (_, env) = v.run(&["export", "views/study", "--depth", "2"]);
@@ -332,7 +332,7 @@ fn export_html_is_rendered_in_process() {
         assert!(page.contains("<msub>") && page.contains("O(V+E)"), "math is MathML, source kept: {page}");
         assert!(!page.contains("http"), "nothing from the network: {page}");
     }
-    assert!(!v.exists("assets"), "no images, no assets folder");
+    assert!(!v.exists("plan.assets") && !v.exists("out/plan.assets"), "no images, no images folder");
     let (code, env) = v.run(&["export", "views/plan", "-o", "/"]);
     assert_eq!((code, error_code(&env)), (3, "io"), "a path that names no file: {env:#}");
 }
@@ -346,16 +346,35 @@ fn default_exports_keep_their_own_images() {
         ("views/p/g.png", "AAA".to_string()),
         ("views/q/p.md", "# Q\n\n![[views/q/g.png]]\n".to_string()),
         ("views/q/g.png", "BBB".to_string()),
-        // Its folder would sit inside `views/p/p.md`'s `assets/` if `.md` were cut.
-        ("views/p/p/assets/g.png.md", "# R\n\n![[views/q/g.png]]\n".to_string()),
+        // Its folder would sit inside `views/p/p.md`'s `p.assets/` if `.md` were cut.
+        ("views/p/p/p.assets/g.png.md", "# R\n\n![[views/q/g.png]]\n".to_string()),
     ]);
     // The same stem, in different folders.
-    for view in ["views/p/p", "views/q/p", "views/p/p/assets/g.png.md"] {
+    for view in ["views/p/p", "views/q/p", "views/p/p/p.assets/g.png.md"] {
         let (code, env) = v.run(&["export", view]);
         assert_eq!(code, 0, "{env:#}");
     }
-    assert_eq!(v.read(".loci/export/views/p/p.md/assets/g.png"), "AAA");
-    assert_eq!(v.read(".loci/export/views/q/p.md/assets/g.png"), "BBB");
+    assert_eq!(v.read(".loci/export/views/p/p.md/p.assets/g.png"), "AAA");
+    assert_eq!(v.read(".loci/export/views/q/p.md/p.assets/g.png"), "BBB");
+}
+
+/// Exports written with `-o` into one folder keep their own images: each output's
+/// images go in a folder named by the output's stem.
+#[test]
+fn output_exports_keep_their_own_images() {
+    let v = vault(&[
+        ("views/p/v.md", "# P\n\n![[views/p/g.png]]\n".to_string()),
+        ("views/p/g.png", "AAA".to_string()),
+        ("views/q/v.md", "# Q\n\n![[views/q/g.png]]\n".to_string()),
+        ("views/q/g.png", "BBB".to_string()),
+    ]);
+    for (view, out) in [("views/p/v", "out/p.md"), ("views/q/v", "out/q.md")] {
+        let (code, env) = v.run(&["export", view, "-o", out]);
+        assert_eq!(code, 0, "{env:#}");
+    }
+    assert!(v.read("out/p.md").contains("](p.assets/g.png)"), "{}", v.read("out/p.md"));
+    assert_eq!(v.read("out/p.assets/g.png"), "AAA");
+    assert_eq!(v.read("out/q.assets/g.png"), "BBB");
 }
 
 #[test]

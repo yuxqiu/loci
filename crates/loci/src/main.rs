@@ -69,7 +69,7 @@ enum Cmd {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Show what has changed: uncommitted changes, agent work to review, the inbox.
+    /// Show what has changed: uncommitted changes, agent work to review, the inbox, waiting vault updates.
     Status,
     /// Create a concept note with a new id; missing folders are created.
     New {

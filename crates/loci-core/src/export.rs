@@ -146,7 +146,7 @@ pub struct Export {
     pub heading_ids: Vec<String>,
     /// Included note paths, in order.
     pub notes: Vec<VaultPath>,
-    /// Images to copy: (vault path, file name under `assets/`).
+    /// Images to copy: (vault path, file name in the images folder).
     pub assets: Vec<(VaultPath, String)>,
 }
 
@@ -171,13 +171,15 @@ fn is_image(path: &VaultPath) -> bool {
 }
 
 impl Export {
-    pub fn of(index: &Index, root: &Note, depth: usize) -> Export {
+    /// The export of `root` and the notes it links within `depth`, its images linked
+    /// in folder `images` beside the document.
+    pub fn of(index: &Index, root: &Note, depth: usize, images: &str) -> Export {
         // 1. Collect, then name every heading once.
         let units = collect(index, root, depth);
         let (anchors, heading_ids) = anchors(&units);
 
         // 2–4. Assemble, rewriting headings, links, images and block ids.
-        let mut assembly = Assembly { index, anchors, assets: Assets::default() };
+        let mut assembly = Assembly { index, anchors, images, assets: Assets::default() };
         let mut doc = String::new();
         for u in &units {
             let edited = assembly.unit_text(u);
@@ -202,11 +204,12 @@ fn append(doc: &mut String, title: Option<&Title>, edited: &str) {
     doc.push_str(edited.trim_start_matches('\n'));
 }
 
-/// What rewriting a unit needs: the index, the anchors of each included note, and the
-/// images collected so far.
+/// What rewriting a unit needs: the index, the anchors of each included note, the
+/// images folder, and the images collected so far.
 struct Assembly<'a> {
     index: &'a Index<'a>,
     anchors: BTreeMap<&'a VaultPath, Anchors>,
+    images: &'a str,
     assets: Assets,
 }
 
@@ -265,7 +268,7 @@ impl Assembly<'_> {
         splice::apply(&note.text, edits).expect("heading, block id and link edits never overlap")
     }
 
-    /// What `link` in `note` becomes in the document: an image under `assets/`, a link
+    /// What `link` in `note` becomes in the document: an image in the images folder, a link
     /// to an included note's anchor, or plain text (its label, heading or title; for a
     /// link that does not resolve, its target as written) for anything left out. A
     /// label, heading or title is markdown and goes in as written; a target, path or file
@@ -279,7 +282,7 @@ impl Assembly<'_> {
             Some(Resolved::File(p)) if link.form == LinkForm::Embed && is_image(p) => {
                 let name = self.assets.name(p);
                 let alt = label.unwrap_or_else(|| escape(&name));
-                return format!("![{alt}]({ASSETS}/{})", percent_encoded(&name));
+                return format!("![{alt}]({}/{})", percent_encoded(self.images), percent_encoded(&name));
             }
             Some(Resolved::File(p)) => return label.unwrap_or_else(|| escape(p.as_str())),
             Some(Resolved::Note(n, _)) => n,
@@ -368,7 +371,7 @@ fn collect<'a>(index: &'a Index, root: &'a Note, depth: usize) -> Vec<Unit<'a>> 
     units
 }
 
-/// The images an export copies, each under a file name unique in its `assets/` folder.
+/// The images an export copies, each under a file name unique in its folder.
 #[derive(Default)]
 struct Assets {
     names: BTreeMap<VaultPath, String>,
@@ -376,7 +379,7 @@ struct Assets {
 }
 
 impl Assets {
-    /// The name of image `path` in `assets/`: its file name, with `-1`, `-2`, … before
+    /// The name of image `path` in the images folder: its file name, with `-1`, `-2`, … before
     /// the extension when another image has it.
     fn name(&mut self, path: &VaultPath) -> String {
         if let Some(name) = self.names.get(path) {
@@ -423,9 +426,6 @@ fn edited(text: &str, range: &Range<usize>, edits: &[Edit]) -> String {
     splice::apply(&text[range.clone()], inside).expect("edits inside one heading never overlap")
 }
 
-/// The folder, beside the exported file, that holds the images it embeds.
-pub const ASSETS: &str = "assets";
-
 /// Whether an image embed's `|` part is a size (`300` or `300x200`), not alt text.
 fn is_size(label: &str) -> bool {
     label.split('x').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
@@ -442,7 +442,7 @@ mod tests {
     }
 
     fn export(i: &Index, root: &str, depth: usize) -> Export {
-        Export::of(i, i.note_at(&vp(root)).unwrap(), depth)
+        Export::of(i, i.note_at(&vp(root)).unwrap(), depth, "assets")
     }
 
     #[test]

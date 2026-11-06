@@ -5,6 +5,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
+use unicode_script::{Script, UnicodeScript};
+
 use crate::envelope::Refusal;
 use crate::id::Slug;
 use crate::parse::{self, Fragment, Link, Names, Note, Spanned};
@@ -254,10 +256,39 @@ impl<'v> Index<'v> {
     }
 }
 
-/// ASCII case folded and `-` read as a space, byte for byte, so offsets into the
-/// folded text are offsets into the original.
+/// Case folded (a letter is lowercased when that keeps its UTF-8 length) and `-` read
+/// as a space, byte for byte, so offsets into the folded text are offsets into the
+/// original.
 fn fold(s: &str) -> String {
-    s.to_ascii_lowercase().replace('-', " ")
+    let lower = |c: char| {
+        let mut l = c.to_lowercase();
+        match (l.next(), l.next()) {
+            (Some(l), None) if l.len_utf8() == c.len_utf8() => l,
+            _ => c,
+        }
+    };
+    s.chars().map(|c| if c == '-' { ' ' } else { lower(c) }).collect()
+}
+
+/// Scripts where a word may end at any letter: written without spaces between words,
+/// or, for Hangul, with particles attached to the noun.
+const UNSPACED: [Script; 8] = [
+    Script::Han,
+    Script::Hiragana,
+    Script::Katakana,
+    Script::Hangul,
+    Script::Thai,
+    Script::Lao,
+    Script::Khmer,
+    Script::Myanmar,
+];
+
+/// Whether `c` belongs to a word that ends only at a space or punctuation: a letter or
+/// digit not of an [`UNSPACED`] script.
+fn in_word(c: char) -> bool {
+    let ext = c.script_extension();
+    let unspaced = !ext.is_common() && !ext.is_inherited() && UNSPACED.iter().any(|&s| ext.contains_script(s));
+    c.is_alphanumeric() && !unspaced
 }
 
 /// The names a mention of `note` may use, folded: its title, the title without its
@@ -285,10 +316,13 @@ fn mention_names(note: &Note) -> Vec<String> {
     names
 }
 
-/// The byte range of the first mention of any of `names` in the body of `note`: a
-/// Latin match stands as whole words, and text inside a wikilink or embed does not count.
+/// The byte range of the first mention of any of `names` in the body of `note`: a match
+/// may not split a word, that is, have a word character ([`in_word`]) at its edge with
+/// another right beside it (`graph` is not found in `paragraph`), and text inside a
+/// wikilink or embed does not count.
 fn first_mention(note: &Note, names: &[String]) -> Option<Range<usize>> {
-    let edge = |c: Option<char>| !c.is_some_and(|c| c.is_ascii_alphanumeric());
+    let edge =
+        |inside: Option<char>, beside: Option<char>| !(inside.is_some_and(in_word) && beside.is_some_and(in_word));
     let text = fold(&note.text);
     let start = note.body_start();
     let in_link = |at: usize| note.links.iter().any(|l| l.span.clone().contains(&at));
@@ -299,7 +333,9 @@ fn first_mention(note: &Note, names: &[String]) -> Option<Range<usize>> {
                 .match_indices(name.as_str())
                 .map(|(i, _)| start + i)
                 .find(|&at| {
-                    edge(text[..at].chars().next_back()) && edge(text[at + name.len()..].chars().next()) && !in_link(at)
+                    edge(name.chars().next(), text[..at].chars().next_back())
+                        && edge(name.chars().next_back(), text[at + name.len()..].chars().next())
+                        && !in_link(at)
                 })
                 .map(|at| at..at + name.len())
         })
@@ -429,6 +465,32 @@ mod tests {
 
         // "graph" inside "paragraph" is no mention.
         assert!(found("concepts/a/graph.md").is_empty());
+    }
+
+    /// Word edges and case beyond ASCII: a match may not split a word of a script
+    /// whose words end only at spaces or punctuation.
+    #[test]
+    fn unlinked_mentions_are_whole_unicode_words() {
+        let i = crate::testing::index(&[
+            ("concepts/a/sum.md", "# Sum\n"),
+            ("concepts/a/ecole.md", "# École\n"),
+            ("concepts/a/stra.md", "# Stra\n"),
+            ("concepts/a/dijkstra.md", "# Dijkstra\n"),
+            ("concepts/b/探索.md", "# 探索\n"),
+            ("concepts/b/그래프.md", "# 그래프\n"),
+            ("views/v.md", "# V\n\nMy résumé. 3SUM. Straße. L'école. Dijkstra's queue. 广度优先探索算法。\n"),
+            ("views/w.md", "# W\n\n探索2回。그래프를 탐색.\n"),
+        ]);
+        let found = |p: &str| -> Vec<String> {
+            let n = i.note_at(&vp(p)).unwrap();
+            i.unlinked_mentions_of(n).into_iter().map(|(m, r)| m.text[r].to_string()).collect()
+        };
+        assert!(found("concepts/a/sum.md").is_empty(), "no mention inside `résumé`");
+        assert!(found("concepts/a/stra.md").is_empty(), "no mention inside `Straße`");
+        assert_eq!(found("concepts/a/ecole.md"), ["école"], "case folded beyond ASCII");
+        assert_eq!(found("concepts/a/dijkstra.md"), ["Dijkstra"], "`'` ends a word");
+        assert_eq!(found("concepts/b/探索.md"), ["探索", "探索"], "a Han name ends anywhere, a digit beside it too");
+        assert_eq!(found("concepts/b/그래프.md"), ["그래프"], "a Korean particle attaches to the noun");
     }
 
     #[test]

@@ -11,8 +11,9 @@ prefixed `learn.`.
 The plugin binary never writes notes. It writes only under `plugins/learn/`:
 `.gitattributes` and `reviews.jsonl` (§2.4, §3). It reads
 `plugins/learn/config.toml` (§2.1), which the user writes. `log`, `state` and `review`
-first refuse a symlink on the way to these three files, even an ignored one
-(`file.symlink`, m0 §3).
+first refuse a symlink on the way to `reviews.jsonl` or `.gitattributes`, and `state`
+and `review` refuse one on the way to `config.toml` before reading it, even an ignored
+one (`file.symlink`, m0 §3).
 
 ## 1. Cards
 
@@ -62,7 +63,8 @@ Optional; written by the user, read by `loci learn review` and `loci learn state
 | `new_per_day` | 20 | integer ≥ 0 | new cards introduced per day |
 | `desired_retention` | 0.9 | number, 0 < x < 1 | retrievability at which a card becomes due (§4.1) |
 
-An unknown key, a wrong type or a value out of range is `learn.config` (exit 1).
+An unknown key, a wrong type or a value out of range is `learn.config` (exit 1); the
+message names the file and, for a TOML error, the line.
 
 ### 2.2 `loci learn lint`
 
@@ -103,6 +105,9 @@ It adds `t` (now, UTC), validates, and appends the line to
 - A `card` that is not a card id in the working tree: `learn.unknown-card`.
 - A `concept` that does not name a concept note in the working tree:
   `learn.unknown-concept`.
+- Two cards in the working tree with the same id (§2.2): `learn.id-duplicate`, naming
+  the notes of one such id, for `log` and `review` alike, since a grade could not say
+  which card it is for.
 
 **Appending** (shared by `log` and `review`): before the first append, if
 `plugins/learn/` or `plugins/learn/.gitattributes` is missing, it is created, the
@@ -136,7 +141,7 @@ was computed from (§4.2), in timestamp order; empty for `unknown`.
 ### 2.6 `loci learn review`
 
 1. Reads every card from the working tree through `loci-core`, and
-   `config.toml` (§2.1).
+   `config.toml` (§2.1). Two cards with the same id are `learn.id-duplicate` (§2.4).
 2. Replays each card's FSRS state from `reviews.jsonl` (§4.1). Lines whose card id
    no longer exists are ignored.
 3. Selects, in this order:
@@ -225,8 +230,9 @@ module (unit tests in `crates/loci-learn/src/`).
 | Tests | Asserts |
 |---|---|
 | `cards_lint`, `cards.rs` | cards in a tight list and in a loose list parse the same; a multi-line card; a card with a nested list in its answer and its id before the nested list is valid; `std::vector` and `::` inside inline code do not split; `q ::` at a line end splits; missing `::` → `learn.card-format`; a card without a block id → `learn.no-id` with the `block-ids` hint; a hand-written short id → `learn.id-form`; the same id in two notes → `learn.id-duplicate`; a second `## Cards` H2 → `learn.card-format`; `lint` writes nothing and returns `data: null` |
-| `config.rs`, `review_session_and_config` | without a file, `review` uses `new_per_day` 20 and `desired_retention` 0.9; a file overrides them; an unknown key, a wrong type, a negative `new_per_day` and a `desired_retention` of 0 or 1 are each `learn.config` |
+| `config.rs`, `review_session_and_config` | without a file, `review` uses `new_per_day` 20 and `desired_retention` 0.9; a file overrides them; an unknown key, a wrong type, a negative `new_per_day` and a `desired_retention` of 0 or 1 are each `learn.config`, whose message names the file and the line |
 | `version_and_direct_runs` | an incompatible `LOCI_VERSION` is `plugin.version`; an unset `LOCI_VERSION` is `plugin.direct` |
 | `log_commits_alone_and_validates`, `reviewlog.rs`, the `a_failed_…` and symlink tests | an unknown grade, or both or neither of `card` and `concept`, is `learn.bad-input`; the first line ever creates `plugins/learn/` and its `.gitattributes`, and the line and `.gitattributes` are committed alone; nothing outside `plugins/learn/` is written; later lines likewise; other uncommitted and intent-to-add changes stay untouched; `learn.bad-input`, `learn.unknown-card`, `learn.unknown-concept` |
 | `state_kinds`, `schedule.rs` | each `estimate` kind; mean R over reviewed cards only; the lines behind the estimate; an unknown slug |
 | `review_session_and_config`, `new_per_day_limit`, `deleted_card_lines_are_ignored`, `schedule.rs` | due cards by due time (a card becomes due when its predicted retrievability reaches `desired_retention`), then at most `new_per_day` new cards in note-path and position order; a line for a deleted card is ignored; grades are appended one by one and committed once at the end; a failed final commit leaves the lines and exits 3; a session with no grades commits nothing and exits 0; no note is written |
+| `duplicate_card_ids_refuse_review_and_log` | two cards with one id make `review` and `log` refuse with `learn.id-duplicate`, naming both notes, and log nothing |

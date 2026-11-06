@@ -100,22 +100,22 @@ impl Out {
 /// The inbox: counts by folder, and the files not yet committed, which block work (at
 /// most [`LISTED`] named), then the next step.
 fn inbox(files: &[VaultPath], changes: Option<&git::Changes>, out: &mut Out) -> serde_json::Value {
-    let mut inbox: Vec<&VaultPath> = vec![];
+    let mut inbox_files: Vec<&VaultPath> = vec![];
     let mut by_place: BTreeMap<InboxPlace, usize> = BTreeMap::new();
     for f in files {
         if let Ok(Some(Place::Inbox(place))) = f.place() {
-            inbox.push(f);
+            inbox_files.push(f);
             *by_place.entry(place).or_default() += 1;
         }
     }
 
     let uncommitted: Option<Vec<&VaultPath>> = changes.map(|c| {
         let changed = |f: &VaultPath| c.untracked.contains(f) || c.modified.contains(f) || c.added.contains(f);
-        inbox.iter().copied().filter(|f| changed(f)).collect()
+        inbox_files.iter().copied().filter(|f| changed(f)).collect()
     });
 
     let count = uncommitted.as_ref().map_or("unknown".to_string(), |u| u.len().to_string());
-    out.human.push_str(&format!("\n## Inbox\n\n{} file(s), {count} uncommitted", inbox.len()));
+    out.human.push_str(&format!("\n## Inbox\n\n{} file(s), {count} uncommitted", inbox_files.len()));
     let folders: Vec<String> = by_place
         .iter()
         .map(|(place, n)| match place {
@@ -129,12 +129,12 @@ fn inbox(files: &[VaultPath], changes: Option<&git::Changes>, out: &mut Out) -> 
 
     out.human.push('\n');
 
-    next_step(inbox.len(), uncommitted.as_deref(), out);
+    next_step(inbox_files.len(), uncommitted.as_deref(), out);
 
     // In JSON, files directly in `inbox/` are counted under `""` (m0 §9.6).
     let by_folder: BTreeMap<&str, usize> =
         by_place.iter().map(|(place, n)| (if let InboxPlace::Folder(d) = place { *d } else { "" }, *n)).collect();
-    json!({"files": inbox.len(), "by_folder": by_folder, "uncommitted": uncommitted})
+    json!({"files": inbox_files.len(), "by_folder": by_folder, "uncommitted": uncommitted})
 }
 
 /// Vault updates waiting for the user's decision (`loci updates`): their ids, or a

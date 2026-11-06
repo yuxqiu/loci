@@ -22,7 +22,7 @@ impl Default for Config {
 
 impl Config {
     pub fn parse(text: &str) -> Result<Self, String> {
-        let c: Config = toml::from_str(text).map_err(|e| e.message().to_string())?;
+        let c: Config = toml::from_str(text).map_err(|e| e.to_string().trim_end().to_string())?;
         let r = c.desired_retention;
         if !(r > 0.0 && r < 1.0) {
             return Err(format!("`desired_retention` must be between 0 and 1, got {r}"));
@@ -36,7 +36,7 @@ impl Config {
         vault.refuse_symlink(&VaultPath::fixed(PATH))?;
         let path = vault.abs(&VaultPath::fixed(PATH));
         match std::fs::read_to_string(&path) {
-            Ok(text) => Self::parse(&text).map_err(|e| Refusal::refused("learn.config", e)),
+            Ok(text) => Self::parse(&text).map_err(|e| Refusal::refused("learn.config", format!("{PATH}: {e}"))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(Refusal::io_at(&path)(e)),
         }

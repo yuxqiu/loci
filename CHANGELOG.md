@@ -75,6 +75,16 @@ them under its version.
   (`"n\xe9.md"`).
 - `loci learn` I/O errors name the file or folder that failed. A `learn` command whose
   `git add` fails (an ignored log) leaves nothing staged.
+- `loci export` copies images to `<stem>.assets/` beside the output (was `assets/`),
+  so two exports written with `-o` to one folder no longer overwrite each other's
+  images. An `-o` path whose file name is not UTF-8 is `io`.
+- Unlinked mentions (`loci links`) fold case and find word edges beyond ASCII: `sum`
+  is no longer found in `résumé`, and `École` matches `école`. Chinese, Japanese,
+  Korean, Thai, Lao, Khmer and Myanmar names still match inside running text, now
+  also next to a digit.
+- `learn.config` names `plugins/learn/config.toml` and, for a TOML error, the line.
+- `loci learn review` and `log` refuse while two cards share an id
+  (`learn.id-duplicate`); review asked both and logged two grades for one id.
 - `loci export` percent-encodes an image's file name in its link, so a name with
   spaces, brackets, `%` or `?` stays an image of that file.
 - A vault with a sparse index opens; git's hints are no longer read as warnings that

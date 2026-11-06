@@ -214,7 +214,7 @@ self-contained document, by default under `.loci/export/`:
 - a concept appearing twice is inlined once;
 - links to inlined notes become anchors, and other links plain text;
 - frontmatter is stripped;
-- images are copied to `assets/`;
+- images are copied to `<stem>.assets/` beside the output;
 - HTML is rendered by loci, math as MathML, with nothing loaded from the network;
   a PDF is the page printed from a browser (D180).
 

@@ -146,12 +146,12 @@ impl Vault {
     }
 
     /// Refuses a symlink on the way to vault path `rel` (`file.symlink`): loci never
-    /// writes through one (m0 §3).
+    /// reads or writes through one (m0 §3).
     pub fn refuse_symlink(&self, rel: &VaultPath) -> Result<(), Refusal> {
         match symlink_on_path(&self.root, rel) {
             Some(link) => Err(Refusal::refused(
                 "file.symlink",
-                format!("`{link}` is a symlink, which loci does not write through"),
+                format!("`{link}` is a symlink, which loci does not read or write through"),
             )),
             None => Ok(()),
         }

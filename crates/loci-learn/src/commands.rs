@@ -30,7 +30,7 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
     let index = Index::open(vault);
     let mut diags = vec![];
     let mut count = 0;
-    let mut by_id: BTreeMap<Ulid, Vec<(&Note, std::ops::Range<usize>)>> = BTreeMap::new();
+    let mut ids: Vec<(Ulid, (&Note, std::ops::Range<usize>))> = vec![];
     for note in index.concepts() {
         let (cards, issues) = cards::of_note(note);
         for span in issues {
@@ -39,25 +39,25 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
         }
 
         count += cards.len();
+        let assign_ids = format!("loci block-ids {} --section Cards", note.path);
         for c in cards {
-            let fix_hint = format!("loci block-ids {} --section Cards", note.path);
             match &c.id {
                 CardId::Missing => diags.push(
                     Diagnostic::error("learn.no-id", "card has no block id")
                         .in_note(note, c.span.clone())
-                        .with_hint(fix_hint),
+                        .with_hint(assign_ids.clone()),
                 ),
                 CardId::Malformed(id) => diags.push(
                     Diagnostic::error("learn.id-form", format!("card id `^{id}` is not a ULID"))
                         .in_note(note, c.span.clone())
-                        .with_hint(format!("delete the id and run `{fix_hint}`")),
+                        .with_hint(format!("delete the id and run `{assign_ids}`")),
                 ),
-                CardId::Valid(id) => by_id.entry(*id).or_default().push((note, c.span.clone())),
+                CardId::Valid(id) => ids.push((*id, (note, c.span.clone()))),
             }
         }
     }
 
-    for (id, cs) in by_id.iter().filter(|(_, cs)| cs.len() > 1) {
+    for (id, cs) in shared_ids(ids) {
         let others: Vec<&str> = cs[1..].iter().map(|(n, _)| n.path.as_str()).collect();
         let msg = format!("card id `^{id}` is used by {}", others.join(", "));
         diags.push(Diagnostic::error("learn.id-duplicate", msg).in_note(cs[0].0, cs[0].1.clone()));
@@ -65,6 +65,28 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
 
     let errors = diags.len();
     Ok(Report::ok(serde_json::Value::Null, format!("{count} cards, {errors} errors\n")).with_diagnostics(diags))
+}
+
+/// The ids given to more than one card, each with what `items` holds for those cards
+/// (card ids are vault-unique, §1.2).
+fn shared_ids<T>(items: impl IntoIterator<Item = (Ulid, T)>) -> impl Iterator<Item = (Ulid, Vec<T>)> {
+    let mut by_id: BTreeMap<Ulid, Vec<T>> = BTreeMap::new();
+    for (id, item) in items {
+        by_id.entry(id).or_default().push(item);
+    }
+    by_id.into_iter().filter(|(_, items)| items.len() > 1)
+}
+
+/// Refuses when two cards share an id (`learn.id-duplicate`): a grade could not say
+/// which card it is for.
+fn refuse_shared_ids(all: &[Spanned<Card>]) -> Result<(), Refusal> {
+    match shared_ids(all.iter().filter_map(|c| Some((c.id.valid()?, c.path.as_str())))).next() {
+        Some((id, paths)) => Err(Refusal::refused(
+            "learn.id-duplicate",
+            format!("card id `^{id}` is used by {}; `loci learn lint` lists every such id", paths.join(", ")),
+        )),
+        None => Ok(()),
+    }
 }
 
 /// Validates a line against the working tree: its card or concept must exist.
@@ -89,6 +111,7 @@ pub fn log(vault: &Vault, mut stdin: impl Read) -> Result<Report, Refusal> {
     let line = parsed.into_line(Timestamp::now()).map_err(bad)?;
     let index = Index::open(vault);
     let all = cards::all(&index);
+    refuse_shared_ids(&all)?;
     check_exists(&line, &all, &index)?;
     let before = log.append(&line)?;
     match log.commit("log") {
@@ -126,6 +149,7 @@ pub fn review(vault: &Vault) -> Result<Report, Refusal> {
     let lines = log.read()?;
     let index = Index::open(vault);
     let all = cards::all(&index);
+    refuse_shared_ids(&all)?;
     let scheduler = Scheduler::new(config.desired_retention);
     let (session, new_count) = scheduler.select(&all, &lines, config.new_per_day, Timestamp::now());
 

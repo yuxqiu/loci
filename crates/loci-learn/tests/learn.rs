@@ -1,6 +1,6 @@
 //! Integration tests for `loci-learn` (learn-plugin §5), run against temporary vaults.
 
-use loci_testkit::{TestVault, codes, error_code};
+use loci_testkit::{TestVault, codes, error_code, error_message};
 use serde_json::Value;
 
 const BIN: &str = env!("CARGO_BIN_EXE_loci-learn");
@@ -234,6 +234,11 @@ fn review_session_and_config() {
     v.write("plugins/learn/config.toml", "new_per_day = -1\n");
     let (_, env) = learn(&v, &["review"], "");
     assert_eq!(error_code(&env), "learn.config");
+    // The message names the file and the line.
+    v.write("plugins/learn/config.toml", "new_per_day = 5\nnew_per_day = 6\n");
+    let (_, env) = learn(&v, &["review"], "");
+    let message = error_message(&env);
+    assert!(message.starts_with("plugins/learn/config.toml: ") && message.contains("line 2"), "{message}");
 }
 
 #[test]
@@ -270,4 +275,18 @@ fn grades_left_uncommitted_by_an_interrupted_review_are_committed_by_the_next_lo
     let (code, env) = learn(&v, &["log"], &format!("{{\"card\":\"{ID1}\",\"grade\":\"hard\"}}"));
     assert_eq!(code, 0, "{env}");
     assert_eq!(v.git(&["status", "--porcelain", "--", "plugins/learn"]), "", "the whole log is committed");
+}
+
+#[test]
+fn duplicate_card_ids_refuse_review_and_log() {
+    let v = vault(&[
+        ("concepts/a/x.md", &concept(CONCEPT, &format!("- q1 :: a1 ^{ID1}\n"))),
+        ("concepts/a/y.md", &concept("01JB9XQ7Z3K4M5N6P7Q8R9S0TW", &format!("- q2 :: a2 ^{ID1}\n"))),
+    ]);
+    let (code, env) = learn(&v, &["review"], "\ngood\n\ngood\n");
+    assert_eq!((code, error_code(&env)), (1, "learn.id-duplicate"));
+    assert!(error_message(&env).contains("concepts/a/x.md, concepts/a/y.md"), "{env}");
+    let (code, env) = learn(&v, &["log"], &format!(r#"{{"concept": "{CONCEPT}", "grade": "good"}}"#));
+    assert_eq!((code, error_code(&env)), (1, "learn.id-duplicate"));
+    assert!(!v.root.join("plugins/learn/reviews.jsonl").exists(), "nothing is logged");
 }
