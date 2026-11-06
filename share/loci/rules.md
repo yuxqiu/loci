@@ -32,8 +32,9 @@ This vault is a loci knowledge base. These rules apply to every agent working in
 3. Check your work with `loci lint` as you go; `loci lint --fix --allow-dirty`
    applies the fixes that keep the meaning anywhere in the vault (their edits join
    your uncommitted diff), and `loci lint --json` shows each diagnostic's other fixes.
-   `--unsafe-fixes --only <code>` applies every unsafe fix of that code in the vault:
-   use it only when each one is right, otherwise make the edit by hand.
+   `loci lint --fix --allow-dirty --unsafe-fixes --only <code>` applies every unsafe
+   fix of that code in the vault: use it only when each one is right, otherwise make
+   the edit by hand.
    An `update.<id>` diagnostic is a vault update's old form: offer the update
    (`loci updates`) rather than fixing it unasked.
    Finish every task by running

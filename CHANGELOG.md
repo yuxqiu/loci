@@ -19,8 +19,8 @@ them under its version.
   tree with uncommitted changes unless given `--allow-dirty`. `lint --json` shows each diagnostic's
   fixes as exact edits.
 - `update.<id>` warnings: what a waiting vault update changes (u0001's `digest:`),
-  with its fix, which `loci lint --fix --only update.<id>` applies. Once the update is
-  handled, what is left is an ordinary lint error.
+  with its fix, which `loci lint --fix --unsafe-fixes --only update.<id>` applies.
+  Once the update is handled, what is left is an ordinary lint error.
 - `loci mv --dry-run` and `loci merge --dry-run` report the change without writing.
 - `loci links <note>` (or any vault file by its path): a note's links and the links
   pointing at it.

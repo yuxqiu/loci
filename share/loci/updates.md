@@ -13,8 +13,8 @@ meet (Done when). `loci updates` prints the waiting ones with the procedure.
   removed by hand.
 - **How:** If a digest says something the note's text does not, ask the user whether
   to add it to the text first. Then run
-  `loci lint --fix --unsafe-fixes --only update.u0001`, which deletes every `digest:`
-  field, and show the diff.
+  `loci lint --fix --allow-dirty --unsafe-fixes --only update.u0001`, which deletes
+  every `digest:` field, and show the diff.
 - **Done when:**
   - `loci lint` reports no `update.u0001`;
   - anything the user asked to keep from a digest is in that note's text;

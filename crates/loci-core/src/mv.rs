@@ -22,7 +22,7 @@ pub fn plan(
 ) -> Result<Change, Refusal> {
     refuse_ends(from, to, &ignored)?;
     let moves = moves(index, from, to)?;
-    refuse_changed_kinds(&moves)?;
+    refuse_invalid_new_paths(&moves)?;
     let vault = index.vault();
     refuse_taken(vault, to, Some(from), &|p| exists(p) || has_entry(vault, p), "mv.exists")?;
     refuse_lost_files(&moves, &ignored, &exists)?;
@@ -56,13 +56,8 @@ fn moves(index: &Index, from: &VaultPath, to: &VaultPath) -> Result<BTreeMap<Vau
     if index.vault().contains(from) {
         return Ok(BTreeMap::from([(from.clone(), to.clone())]));
     }
-    let moves: BTreeMap<VaultPath, VaultPath> = index
-        .vault()
-        .files()
-        .iter()
-        .filter(|f| f.starts_with_folder(from))
-        .map(|f| (f.clone(), f.with_prefix_replaced(from, to).expect("`f` is inside `from`")))
-        .collect();
+    let moves: BTreeMap<VaultPath, VaultPath> =
+        index.vault().files().iter().filter_map(|f| Some((f.clone(), f.with_prefix_replaced(from, to)?))).collect();
     if moves.is_empty() {
         return Err(Refusal::refused("mv.from", format!("`{from}` does not exist or is ignored")));
     }
@@ -71,7 +66,7 @@ fn moves(index: &Index, from: &VaultPath, to: &VaultPath) -> Result<BTreeMap<Vau
 
 /// Every moved file stays what it is, and its new path follows the path rules lint
 /// checks ([`VaultPath::place`]).
-fn refuse_changed_kinds(moves: &BTreeMap<VaultPath, VaultPath>) -> Result<(), Refusal> {
+fn refuse_invalid_new_paths(moves: &BTreeMap<VaultPath, VaultPath>) -> Result<(), Refusal> {
     // A source can be renamed, keeping its extension, but not moved out of `sources/`.
     let ext = |p: &VaultPath| match p.place() {
         Ok(Some(Place::Source { ext })) => Some(ext.to_string()),

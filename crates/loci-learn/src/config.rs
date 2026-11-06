@@ -33,12 +33,9 @@ impl Config {
     /// Reads the vault's config, or the defaults if the file is absent. An invalid
     /// file is `learn.config`; a symlink on the way to it is `file.symlink` (m0 §3).
     pub fn load(vault: &Vault) -> Result<Self, Refusal> {
-        vault.refuse_symlink(&VaultPath::fixed(PATH))?;
-        let path = vault.abs(&VaultPath::fixed(PATH));
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Self::parse(&text).map_err(|e| Refusal::refused("learn.config", format!("{PATH}: {e}"))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
-            Err(e) => Err(Refusal::io_at(&path)(e)),
+        match vault.read_text(&VaultPath::fixed(PATH))? {
+            Some(text) => Self::parse(&text).map_err(|e| Refusal::refused("learn.config", format!("{PATH}: {e}"))),
+            None => Ok(Self::default()),
         }
     }
 }

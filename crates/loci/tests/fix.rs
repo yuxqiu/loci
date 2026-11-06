@@ -251,7 +251,7 @@ fn before_an_update_its_old_form_is_valid_but_reported_with_its_fix() {
     let old = with_code(&env, "update.u0001");
     assert_eq!(old.len(), 1, "{env:#}");
     assert_eq!(old[0]["severity"], "warning");
-    assert!(old[0]["hint"].as_str().unwrap().contains("loci lint --fix --only update.u0001"));
+    assert!(old[0]["hint"].as_str().unwrap().contains("loci lint --fix --unsafe-fixes --only update.u0001"));
     // `digest` is a field in this edition; only `note` is unknown.
     let unknown = with_code(&env, "fm.unknown-field");
     assert_eq!(unknown.len(), 1, "{env:#}");

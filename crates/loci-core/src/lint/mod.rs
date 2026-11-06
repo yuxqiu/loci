@@ -188,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn a_lone_prereq_gets_the_quoting_fix() {
+    fn a_lone_prereq_is_put_in_a_list() {
         for lone in ["[[x]]", "\"[[x]]\""] {
             let note = format!("---\nid: 01JB9XQ7Z3K4M5N6P7Q8R9S0TV\nprereqs: {lone}\n---\n# Y\n");
             let index = crate::testing::index(&[("concepts/a/y.md", note.as_str()), ("concepts/a/x.md", "")]);

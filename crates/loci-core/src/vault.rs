@@ -145,6 +145,24 @@ impl Vault {
         write_atomic(&path, bytes).map_err(Refusal::io_at(&path))
     }
 
+    /// The bytes of the file at vault path `rel`, `None` if there is none. A symlink on
+    /// the way is refused (`file.symlink`), as for [`Vault::write`].
+    pub fn read(&self, rel: &VaultPath) -> Result<Option<Vec<u8>>, Refusal> {
+        self.refuse_symlink(rel)?;
+        let path = self.abs(rel);
+        match std::fs::read(&path) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(Refusal::io_at(&path)(e)),
+        }
+    }
+
+    /// [`Vault::read`] as UTF-8 text; other bytes are `io`, naming the file.
+    pub fn read_text(&self, rel: &VaultPath) -> Result<Option<String>, Refusal> {
+        let invalid = |e| Refusal::io_at(&self.abs(rel))(std::io::Error::new(std::io::ErrorKind::InvalidData, e));
+        self.read(rel)?.map(|b| String::from_utf8(b).map_err(invalid)).transpose()
+    }
+
     /// Refuses a symlink on the way to vault path `rel` (`file.symlink`): loci never
     /// reads or writes through one (m0 §3).
     pub fn refuse_symlink(&self, rel: &VaultPath) -> Result<(), Refusal> {

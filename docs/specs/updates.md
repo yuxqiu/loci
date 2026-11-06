@@ -59,13 +59,13 @@ the shipped text):
   18 §7, research 19): the row of what the update removes gets `until` the update.
   Before the vault handles it, lint reports each old form as `update.uNNNN` (a
   warning, with a fix where one can be made); after, the current rules judge the
-  vault. The How runs `loci lint --fix --only update.uNNNN` (with `--unsafe-fixes`
-  when the fix needs a look) and shows the diff; `--fix` wants a clean tree, so the
-  diff is the update's. The Done when names `update.uNNNN`, since a pending update's
-  diagnostics are warnings and "`loci lint` passes" alone does not show them gone; the
-  Offer says what declining means (the old forms become errors of the current rules).
-  A unit test checks all three for every update the tables name. An update that
-  needs judgement has no row.
+  vault. The How runs `loci lint --fix --allow-dirty --only update.uNNNN` (with
+  `--unsafe-fixes` when the fix needs a look) and shows the diff; `--allow-dirty`,
+  since the How's own edits and earlier accepted updates stay uncommitted. The Done
+  when names `update.uNNNN`, since a pending update's diagnostics are warnings and
+  "`loci lint` passes" alone does not show them gone; the Offer says what declining
+  means (the old forms become errors of the current rules). A unit test checks all
+  three for every update the tables name. An update that needs judgement has no row.
 
 ## 3. State
 

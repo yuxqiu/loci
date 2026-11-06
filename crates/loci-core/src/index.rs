@@ -299,8 +299,8 @@ fn mention_names(note: &Note) -> Vec<String> {
     let mut names = vec![title.to_string(), note.path.stem().to_string()];
     let (mut bare, mut rest) = (String::new(), &*title);
     while let Some((before, after)) = rest.split_once('(') {
-        bare.push_str(before);
         let Some((inner, tail)) = after.split_once(')') else { break };
+        bare.push_str(before);
         names.push(inner.to_string());
         rest = tail;
     }
@@ -321,7 +321,7 @@ fn mention_names(note: &Note) -> Vec<String> {
 /// another right beside it (`graph` is not found in `paragraph`), and text inside a
 /// wikilink or embed does not count.
 fn first_mention(note: &Note, names: &[String]) -> Option<Range<usize>> {
-    let edge =
+    let keeps_word_whole =
         |inside: Option<char>, beside: Option<char>| !(inside.is_some_and(in_word) && beside.is_some_and(in_word));
     let text = fold(&note.text);
     let start = note.body_start();
@@ -333,8 +333,8 @@ fn first_mention(note: &Note, names: &[String]) -> Option<Range<usize>> {
                 .match_indices(name.as_str())
                 .map(|(i, _)| start + i)
                 .find(|&at| {
-                    edge(name.chars().next(), text[..at].chars().next_back())
-                        && edge(name.chars().next_back(), text[at + name.len()..].chars().next())
+                    keeps_word_whole(name.chars().next(), text[..at].chars().next_back())
+                        && keeps_word_whole(name.chars().next_back(), text[at + name.len()..].chars().next())
                         && !in_link(at)
                 })
                 .map(|at| at..at + name.len())
@@ -491,6 +491,12 @@ mod tests {
         assert_eq!(found("concepts/a/dijkstra.md"), ["Dijkstra"], "`'` ends a word");
         assert_eq!(found("concepts/b/探索.md"), ["探索", "探索"], "a Han name ends anywhere, a digit beside it too");
         assert_eq!(found("concepts/b/그래프.md"), ["그래프"], "a Korean particle attaches to the noun");
+    }
+
+    #[test]
+    fn an_unclosed_parenthesis_names_the_title_once() {
+        let i = crate::testing::index(&[("concepts/a/x.md", "# Foo (bar\n")]);
+        assert_eq!(mention_names(i.note_at(&vp("concepts/a/x.md")).unwrap()), ["foo (bar", "x"]);
     }
 
     #[test]

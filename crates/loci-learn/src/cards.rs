@@ -7,7 +7,7 @@ use loci_core::index::Index;
 use loci_core::parse::{Block, Note, Spanned};
 use loci_core::path::VaultPath;
 
-const SECTION: &str = "Cards";
+pub(crate) const SECTION: &str = "Cards";
 
 /// A card (`of_note` spans it with its list item).
 #[derive(Debug, Clone, PartialEq, Eq)]

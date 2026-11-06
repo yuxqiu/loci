@@ -39,7 +39,7 @@ pub fn lint(vault: &Vault) -> Result<Report, Refusal> {
         }
 
         count += cards.len();
-        let assign_ids = format!("loci block-ids {} --section Cards", note.path);
+        let assign_ids = format!("loci block-ids {} --section {}", note.path, cards::SECTION);
         for c in cards {
             match &c.id {
                 CardId::Missing => diags.push(

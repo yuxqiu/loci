@@ -104,8 +104,7 @@ fn handle(vault: &loci_core::vault::Vault, list: &[Update], id: &str) -> Result<
     }
 
     let path = VaultPath::fixed(config::FILE);
-    let abs = vault.abs(&path);
-    let text = std::fs::read_to_string(&abs).map_err(Refusal::io_at(&abs))?;
+    let text = vault.read_text(&path)?.ok_or_else(|| Refusal::io(format!("{}: not found", config::FILE)))?;
     let updated = Config::set_updates(&text, target.id)
         .map_err(|e| Refusal::refused("config.invalid", format!("{}: {e}", config::FILE)))?;
     vault.write(&path, updated.as_bytes())?;
@@ -136,7 +135,7 @@ mod tests {
         for id in loci_core::lint::update_ids() {
             let entry = list.iter().find(|u| u.id == id).unwrap_or_else(|| panic!("{id} is in updates.md"));
             let code = loci_core::lint::Code::Update(id);
-            assert!(entry.text.contains(&format!("--only {code}")), "{id}'s How runs `loci lint --fix --only {code}`");
+            assert!(entry.text.contains(&format!("--only {code}")), "{id}'s How runs `--only {code}`");
             let done = entry.text.split("**Done when:**").nth(1).expect("an entry has Done when");
             assert!(done.contains(&format!("`{code}`")), "{id}'s Done when names `{code}`");
             assert!(entry.text.contains("Declining"), "{id}'s Offer says what declining means");

@@ -74,7 +74,8 @@ fn id_field(note: &Note) -> Option<Diagnostic> {
 }
 
 /// `prereqs`: a list of strings `[[slug]]`. An unquoted `[[slug]]`, or a lone prereq
-/// outside a list, gets a fix quoting every such item of the note.
+/// outside a list, gets the `quote-prereqs` fix, which quotes every such item of the
+/// note and puts a lone one in a list.
 fn prereqs_field(note: &Note) -> Vec<Diagnostic> {
     let lone = note.fm(ConceptField::Prereqs.key()).is_some_and(|v| v.is_lone_prereq());
     let (hint, label) = if lone {
@@ -105,7 +106,7 @@ pub(super) fn outdated_fields(ctx: &Ctx, out: &mut Vec<Diagnostic>) {
                 Diagnostic::warning(code, format!("vault update {update} removes the concept field `{}`", *e.key))
                     .in_note(note, e.key.span.clone())
                     .with_hint(format!(
-                        "offer {update} with `loci updates` if it is waiting; it applies with `loci lint --fix --only {code}`"
+                        "offer {update} with `loci updates` if it is waiting; it applies with `loci lint --fix --unsafe-fixes --only {code}`"
                     ))
                     .with_fix(fix),
             );
