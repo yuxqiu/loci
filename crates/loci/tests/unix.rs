@@ -11,7 +11,8 @@ use std::os::unix::net::UnixListener;
 use common::*;
 
 /// Every file core reads must be readable: one that is not, by content, permission or
-/// folder, refuses the vault for every command, naming each (names: `byte_names`).
+/// folder, refuses the vault for every command, naming each. (Names that are not UTF-8:
+/// see `byte_names`.)
 #[test]
 fn an_unreadable_file_refuses_the_vault() {
     let v = TestVault::committed(BIN, "kinds");
@@ -162,7 +163,7 @@ mod byte_names {
     #[test]
     fn a_non_utf8_name_anywhere_refuses_the_vault() {
         let v = TestVault::committed(BIN, "mv-rename");
-        let raw = |p: &[u8]| v.root.join(std::ffi::OsStr::from_bytes(p));
+        let raw = |p: &[u8]| v.root.join(OsStr::from_bytes(p));
         std::fs::create_dir_all(v.root.join("plugins/x")).unwrap();
         std::fs::write(raw(b"plugins/x/data\xff"), "x").unwrap();
         v.commit_all("odd");

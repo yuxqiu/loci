@@ -1,5 +1,6 @@
-//! What differs between Unix and Windows for the tests: each difference is a pair of
-//! functions here, so the test files have no `cfg` (research 24).
+//! What differs between Unix and Windows for the tests: each difference is a function
+//! here (a `cfg` pair, or `cfg` lines inside one), so the test files have no `cfg`
+//! (research 24).
 
 use std::path::Path;
 
@@ -48,16 +49,22 @@ pub fn make_executable(path: &Path) {
 #[cfg(windows)]
 pub fn make_executable(_: &Path) {}
 
-/// Puts the host's program `name` in the test `PATH` folder `bin`.
+/// Makes the host's program `name` runnable from the test `PATH` folder `bin`: links it
+/// there.
 #[cfg(unix)]
 pub fn link_tool(bin: &Path, name: &str) {
-    symlink_file(&crate::find_on_path(name), &bin.join(name));
+    let path = std::env::var_os("PATH").expect("PATH is set");
+    let found = std::env::split_paths(&path)
+        .map(|d| d.join(name))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| panic!("`{name}` is not on PATH"));
+    symlink_file(&found, &bin.join(name));
 }
 
-/// Puts Git for Windows' wrapper for `git` or `sh` in the test `PATH` folder `bin`. The
-/// wrappers find their install through their own links, where a link to the real
-/// program may miss its DLLs; the `sh` wrapper puts Git's tools (`grep`, `head`) on its
-/// `PATH`, so those need no link.
+/// Makes `git`, `sh`, `grep` or `head` runnable from the test `PATH` folder `bin`: links
+/// Git for Windows' wrapper for `git` or `sh` there. The wrappers find their install
+/// through their own links, where a link to the real program may miss its DLLs; the
+/// `sh` wrapper puts Git's tools (`grep`, `head`) on its `PATH`, so those need no link.
 #[cfg(windows)]
 pub fn link_tool(bin: &Path, name: &str) {
     // `git --exec-path` is `<root>/<mingw64 or clangarm64>/libexec/git-core`.

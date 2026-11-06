@@ -71,29 +71,39 @@ pub const AREA: &str = "AREA.md";
 /// A path argument given by the user (m0 §8), normalized by the `relative-path` crate:
 /// `.` and repeated or trailing `/` dropped, each `..` stepping back one folder; then
 /// put in NFC. Resolving `..` by name is exact because a vault holds no symlinks (§3).
-/// Refuses an absolute path, or one whose `..` climbs above the vault root
-/// (`path.outside`), one that names the root itself (`path.root`), and one holding a
-/// control character (`path.control`).
+/// Refuses a path that starts at a root or a drive, given or after normalizing (`/x`;
+/// on Windows also `\x`, `C:x` and `./C:/x`), or one whose `..` climbs above the vault
+/// root (`path.outside`), one that names the root itself (`path.root`), and one holding
+/// a control character (`path.control`).
 pub(crate) fn normalize_arg(p: &str) -> Result<String, Refusal> {
     let outside = || Refusal::refused("path.outside", format!("`{p}` leads outside the vault"));
-    // A root or a drive: on Windows `/etc` and `C:etc` are not absolute, yet leave the
-    // vault.
-    if matches!(Path::new(p).components().next(), Some(std::path::Component::RootDir | std::path::Component::Prefix(_)))
-    {
+    // A root or a drive: on Windows `/etc` and `C:etc` are not absolute, yet joining
+    // either onto the root leaves the vault.
+    let at_root = |s: &str| {
+        matches!(
+            Path::new(s).components().next(),
+            Some(std::path::Component::RootDir | std::path::Component::Prefix(_))
+        )
+    };
+    if at_root(p) {
         return Err(outside());
     }
-    // `normalize` keeps a `..` it cannot resolve at the front.
-    let path = RelativePath::new(p).normalize();
-    if path.components().next() == Some(Component::ParentDir) {
+    // The system's separator (`\` on Windows) is a `/`, as it is when the path is
+    // joined onto the root.
+    let slashed = p.replace(std::path::MAIN_SEPARATOR, "/");
+    // `normalize` keeps a `..` it cannot resolve at the front; NFC can make a drive
+    // (`\u{212A}:` is `K:`).
+    let path = nfc(RelativePath::new(&slashed).normalize().as_str());
+    if RelativePath::new(&path).components().next() == Some(Component::ParentDir) || at_root(&path) {
         return Err(outside());
     }
-    if path.as_str().is_empty() {
+    if path.is_empty() {
         return Err(Refusal::refused("path.root", format!("`{p}` is the vault root, not a file or folder in it")));
     }
     if has_control(p) {
         return Err(Refusal::refused("path.control", format!("{p:?} has a control character")));
     }
-    Ok(nfc(path.as_str()))
+    Ok(path)
 }
 
 /// NFC form of a string.
@@ -419,6 +429,30 @@ mod tests {
             ("a/..", "path.root"),
         ] {
             assert_eq!(VaultPath::from_arg(bad).unwrap_err().code(), code, "{bad}");
+        }
+    }
+
+    /// The system's separator separates (`\` on Windows, where joining the path onto
+    /// the root reads it so): its `..` cannot climb out unseen.
+    #[test]
+    fn user_paths_with_the_system_separator() {
+        let sep = |p: &str| p.replace('/', std::path::MAIN_SEPARATOR_STR);
+        assert_eq!(VaultPath::from_arg(&sep("views/sub/a.md")).unwrap().as_str(), "views/sub/a.md");
+        assert_eq!(VaultPath::from_arg(&sep("views/x/../../../e.md")).unwrap_err().code(), "path.outside");
+    }
+
+    /// A drive that normalizing brings to the front leaves the vault on Windows; on Unix
+    /// `C:` is a name.
+    #[test]
+    fn user_paths_never_start_at_a_drive_after_normalizing() {
+        for given in ["./C:/x", "a/../C:x", "\u{212A}:/x"] {
+            match VaultPath::from_arg(given) {
+                Ok(p) => assert!(
+                    Path::new(p.as_str()).components().all(|c| matches!(c, std::path::Component::Normal(_))),
+                    "{given}: {p}"
+                ),
+                Err(e) => assert_eq!(e.code(), "path.outside", "{given}"),
+            }
         }
     }
 

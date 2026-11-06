@@ -11,6 +11,14 @@
         "aarch64-linux"
         "aarch64-darwin"
       ];
+      # x86_64-pc-windows-gnu builds and unit tests under wine (nix/windows.nix).
+      windows = nixpkgs.lib.genAttrs [ "x86_64-linux" ] (
+        system:
+        import ./nix/windows.nix {
+          pkgs = nixpkgs.legacyPackages.${system};
+          inherit (self.packages.${system}) loci;
+        }
+      );
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
@@ -45,7 +53,7 @@
             cargo fmt --check
             touch $out
           '';
-      });
+      } // nixpkgs.lib.optionalAttrs (windows ? ${pkgs.system}) { windows = windows.${pkgs.system}.check; });
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
@@ -58,6 +66,6 @@
             cargo-insta
           ];
         };
-      });
+      } // nixpkgs.lib.optionalAttrs (windows ? ${pkgs.system}) { windows = windows.${pkgs.system}.shell; });
     };
 }

@@ -55,8 +55,8 @@ impl std::fmt::Display for Skill {
     }
 }
 
-/// Every `loci-<name>` executable on `path_var`, first match per name, excluding core
-/// command names. Sorted by name.
+/// Every `loci-<name>` (`.exe` on Windows) executable on `path_var`, first match per
+/// name, excluding core command names. Sorted by name.
 pub fn discover(path_var: Option<&std::ffi::OsStr>, core_commands: &[&str]) -> Vec<Plugin> {
     let mut found: BTreeMap<String, PathBuf> = BTreeMap::new();
     let Some(path_var) = path_var else { return vec![] };
@@ -79,6 +79,17 @@ pub fn discover(path_var: Option<&std::ffi::OsStr>, core_commands: &[&str]) -> V
         }
     }
     found.into_iter().map(|(name, path)| Plugin { name, path }).collect()
+}
+
+/// The plugin's exit code, or why it has none in 0–255: killed by a signal (Unix), or a
+/// 32-bit Windows code such as an abort's 0xC0000409 (shown as a negative number), which
+/// fails rather than wrapping, possibly to 0.
+pub fn exit_code(status: std::process::ExitStatus) -> Result<u8, String> {
+    match status.code() {
+        Some(c) => u8::try_from(c).map_err(|_| format!("exited with code {c}")),
+        None => Err(crate::platform::signal(&status)
+            .map_or("was killed by a signal".to_string(), |s| format!("was killed by signal {s}"))),
+    }
 }
 
 fn is_executable(path: &Path) -> bool {
@@ -154,10 +165,10 @@ impl Plugin {
             format!(": {}", &stderr[..cut])
         };
 
-        match out.status.code() {
-            Some(0 | 1) => {}
-            Some(code) => return Err(format!("exited with code {code}{why}")),
-            None => return Err(format!("was killed by a signal{why}")),
+        match exit_code(out.status) {
+            Ok(0 | 1) => {}
+            Ok(code) => return Err(format!("exited with code {code}{why}")),
+            Err(e) => return Err(format!("{e}{why}")),
         }
 
         let env: Envelope =

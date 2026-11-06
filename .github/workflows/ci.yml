@@ -1,8 +1,9 @@
 name: CI
 
 # `nix flake check` is the source of truth on Linux and macOS: both packages with
-# their tests (loci-core's included), Clippy (warnings denied) and rustfmt. Windows
-# has no Nix: cargo builds, lints and tests there (research 24).
+# their tests (loci-core's included), Clippy (warnings denied) and rustfmt; on
+# x86_64-linux also the Windows lints and unit tests under wine (nix/windows.nix).
+# Windows has no Nix: cargo lints and runs every test there (research 24).
 
 on:
   push:
@@ -32,7 +33,7 @@ jobs:
   check:
     name: nix flake check (${{ matrix.system }})
     # A pull request from a branch of this repository is already checked by its push.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    if: &not-own-pr github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     strategy:
       fail-fast: false
       matrix:
@@ -53,8 +54,8 @@ jobs:
       - run: nix flake check --print-build-logs
 
   windows:
-    name: build, clippy and test (windows)
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    name: clippy and test (windows)
+    if: *not-own-pr
     runs-on: windows-2025
     timeout-minutes: 60
     env:
@@ -65,6 +66,5 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --locked --workspace --all-targets
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace --no-fail-fast

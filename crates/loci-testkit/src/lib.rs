@@ -21,22 +21,13 @@ pub fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures")
 }
 
-/// A test vault: a temp dir holding `home/`, `bin/` (the only `PATH` entry, with `git`
-/// and optionally `loci-stub`) and `vault/`.
+/// A test vault: a temp dir holding `home/`, `temp/`, `bin/` (the only `PATH` entry, with
+/// `git` and optionally `loci-stub` and its `loci-stub.replies`) and `vault/`.
 pub struct TestVault {
     pub tmp: tempfile::TempDir,
     pub root: PathBuf,
     /// The binary under test (`loci` or a plugin).
     pub exe: PathBuf,
-}
-
-/// The path of executable `name` on the test runner's `PATH`.
-pub fn find_on_path(name: &str) -> PathBuf {
-    let path = std::env::var_os("PATH").expect("PATH is set");
-    std::env::split_paths(&path)
-        .map(|d| d.join(name))
-        .find(|p| p.is_file())
-        .unwrap_or_else(|| panic!("`{name}` is not on PATH"))
 }
 
 impl TestVault {
@@ -82,9 +73,9 @@ impl TestVault {
         v
     }
 
-    /// `git init` in the vault, with no commit.
-    /// `git init`, listing names as their bytes on every system: macOS's default
-    /// `core.precomposeUnicode` would list an NFD name as NFC, hiding `path.not-nfc`.
+    /// `git init` in the vault, with no commit, listing names as their bytes on every
+    /// system: macOS's default `core.precomposeUnicode` would list an NFD name as NFC,
+    /// hiding `path.not-nfc`.
     pub fn init_git(&self) {
         self.git(&["init", "-q", "-b", "main"]);
         self.git(&["config", "core.precomposeUnicode", "false"]);
@@ -123,7 +114,7 @@ impl TestVault {
     }
 
     pub fn git(&self, args: &[&str]) -> String {
-        let mut c = Command::new(self.bin().join(format!("git{}", std::env::consts::EXE_SUFFIX)));
+        let mut c = Command::new(self.bin().join("git"));
         self.env(&mut c);
         let out = c.arg("-C").arg(&self.root).args(args).output().unwrap();
         assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));

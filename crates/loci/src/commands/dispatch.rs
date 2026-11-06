@@ -31,28 +31,14 @@ pub fn run(ctx: &Ctx, args: Vec<String>) -> ExitCode {
         cmd.arg("--json");
     }
 
-    match cmd.status() {
-        Ok(status) => match status.code() {
-            // Windows codes are 32 bits (an aborted process has 0xC0000409): one that is
-            // no Unix exit code fails rather than wrapping, possibly to 0.
-            Some(c) => match u8::try_from(c) {
-                Ok(c) => ExitCode::from(c),
-                Err(_) => {
-                    fail(ctx, name, Refusal::internal("plugin.failed", format!("{} exited with {c}", p.path.display())))
-                }
-            },
-            None => {
-                let signal =
-                    loci_core::platform::signal(&status).map_or("a signal".to_string(), |s| format!("signal {s}"));
-                fail(
-                    ctx,
-                    name,
-                    Refusal::internal("plugin.failed", format!("{} was killed by {signal}", p.path.display())),
-                )
-            }
+    let message = match cmd.status() {
+        Ok(status) => match loci_core::plugin::exit_code(status) {
+            Ok(c) => return ExitCode::from(c),
+            Err(e) => format!("{} {e}", p.path.display()),
         },
-        Err(e) => fail(ctx, name, Refusal::internal("plugin.failed", format!("cannot run {}: {e}", p.path.display()))),
-    }
+        Err(e) => format!("cannot run {}: {e}", p.path.display()),
+    };
+    fail(ctx, name, Refusal::internal("plugin.failed", message))
 }
 
 fn fail(ctx: &Ctx, name: &str, refusal: Refusal) -> ExitCode {

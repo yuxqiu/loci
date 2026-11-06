@@ -1,5 +1,6 @@
-//! What differs between Unix and Windows: each difference is a pair of functions here,
-//! so the rest of loci has no `cfg` (research 24).
+//! What differs between Unix and Windows: each difference is a function here (a `cfg`
+//! pair, or `cfg` lines inside one), so the rest of loci has no `cfg` (research 24).
+//! The unit tests of what only Unix has are here too.
 
 use std::fs::Metadata;
 use std::process::ExitStatus;
@@ -30,13 +31,13 @@ pub(crate) fn can_execute(_: &Metadata) -> bool {
 
 /// The signal that ended a process that has no exit code.
 #[cfg(unix)]
-pub fn signal(status: &ExitStatus) -> Option<i32> {
+pub(crate) fn signal(status: &ExitStatus) -> Option<i32> {
     std::os::unix::process::ExitStatusExt::signal(status)
 }
 
 /// A Windows process always has an exit code.
 #[cfg(not(unix))]
-pub fn signal(_: &ExitStatus) -> Option<i32> {
+pub(crate) fn signal(_: &ExitStatus) -> Option<i32> {
     None
 }
 
