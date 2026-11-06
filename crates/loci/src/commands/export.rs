@@ -48,17 +48,17 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
         Format::Md => doc.markdown.clone(),
         Format::Html => html(&doc, &note.title()).map_err(|m| Refusal::internal("export.html", m))?,
     };
-    let out_path = write_out(&vault, &doc, &assets_folder, &note.path, format, output, text)?;
+    let out_path = write_out(&vault, &doc, &note.path, format, output, text)?;
     let data = json!({
         "output": out_path,
         "notes": doc.notes,
-        "assets": doc.assets.iter().map(|(_, n)| format!("{assets_folder}/{n}")).collect::<Vec<_>>(),
+        "assets": doc.assets.iter().map(|(_, rel)| rel).collect::<Vec<_>>(),
     });
 
     Ok(Report::ok(data, format!("{}\n", out_path.display())))
 }
 
-/// Writes the export, and its images into folder `assets_folder` beside it: to `output` when
+/// Writes the export, and its images beside it: to `output` when
 /// given (the user's path, written as given, not as a vault file), else into
 /// `.loci/export/<note path>/` (in the vault, gitignored, so written as vault files
 /// are; a folder named by the note's whole path, which no other note's folder can be
@@ -66,7 +66,6 @@ pub fn run(ctx: &Ctx, target: &str, depth: usize, format: Format, output: Option
 fn write_out(
     vault: &Vault,
     doc: &export::Export,
-    assets_folder: &str,
     note_path: &VaultPath,
     format: Format,
     output: Option<PathBuf>,
@@ -75,10 +74,9 @@ fn write_out(
     let read = |src: &VaultPath| vault.read(src)?.ok_or_else(|| Refusal::io(format!("{src}: not found")));
     match output {
         None => {
-            let in_export =
-                |name: &str| VaultPath::new(format!(".loci/export/{note_path}/{name}")).expect("a file name");
-            for (src, name) in &doc.assets {
-                vault.write(&in_export(&format!("{assets_folder}/{name}")), &read(src)?)?;
+            let in_export = |rel: &str| VaultPath::new(format!(".loci/export/{note_path}/{rel}")).expect("a file name");
+            for (src, rel) in &doc.assets {
+                vault.write(&in_export(rel), &read(src)?)?;
             }
             let out = in_export(&format!("{}.{}", note_path.stem(), format.ext()));
             vault.write(&out, text.as_bytes())?;
@@ -86,11 +84,11 @@ fn write_out(
         }
         Some(out_path) => {
             let out_dir = out_path.parent().expect("an absolute path with a file name has a folder");
-            let assets_dir = out_dir.join(assets_folder);
-            let dir = if doc.assets.is_empty() { out_dir } else { &assets_dir };
-            std::fs::create_dir_all(dir).map_err(Refusal::io_at(dir))?;
-            for (src, name) in &doc.assets {
-                let dest = assets_dir.join(name);
+            std::fs::create_dir_all(out_dir).map_err(Refusal::io_at(out_dir))?;
+            for (src, rel) in &doc.assets {
+                let dest = out_dir.join(rel);
+                let dir = dest.parent().expect("a path joined with a file name has a folder");
+                std::fs::create_dir_all(dir).map_err(Refusal::io_at(dir))?;
                 std::fs::write(&dest, read(src)?).map_err(Refusal::io_at(&dest))?;
             }
             std::fs::write(&out_path, text).map_err(Refusal::io_at(&out_path))?;

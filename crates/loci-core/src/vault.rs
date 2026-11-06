@@ -357,10 +357,15 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// `bytes` in a uniquely named file in `path`'s folder, synced, not yet in its place
-/// ([`persist`]).
+/// ([`persist`]). On Unix it is created with mode 0o666 less the umask, as a plain
+/// write creates a file (tempfile's default is owner-only).
 pub(crate) fn stage(path: &Path, bytes: &[u8]) -> std::io::Result<tempfile::NamedTempFile> {
     use std::io::Write;
-    let mut tmp = tempfile::NamedTempFile::new_in(path.parent().expect("an absolute file path has a folder"))?;
+    let dir = path.parent().expect("an absolute file path has a folder");
+    let builder = &mut tempfile::Builder::new();
+    #[cfg(unix)]
+    builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o666));
+    let mut tmp = builder.tempfile_in(dir)?;
     tmp.write_all(bytes)?;
     tmp.as_file().sync_all()?;
     Ok(tmp)
@@ -408,6 +413,7 @@ mod tests {
     use super::*;
     use crate::testing::vp;
 
+    #[cfg(unix)]
     #[test]
     fn copy_dir_names_a_link_it_cannot_copy() {
         let tmp = tempfile::tempdir().unwrap();
@@ -452,5 +458,17 @@ mod tests {
         write_atomic(&path, b"new").unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!((std::fs::read_to_string(&path).unwrap(), mode), ("new".into(), 0o664));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_new_file_gets_the_mode_of_a_plain_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let (plain, staged) = (dir.path().join("plain"), dir.path().join("staged"));
+        std::fs::write(&plain, "x").unwrap();
+        write_atomic(&staged, b"x").unwrap();
+        assert_eq!(mode(&staged), mode(&plain));
     }
 }

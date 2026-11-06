@@ -1,0 +1,69 @@
+name: CI
+
+# `nix flake check` is the source of truth on Linux and macOS: both packages with
+# their tests (loci-core's included), Clippy (warnings denied) and rustfmt. Windows
+# has no Nix, so it builds and lints every target; its tests are Unix only for now (D263).
+
+on:
+  push:
+    paths: &paths
+      - "crates/**"
+      - "tests/**"
+      - "share/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rustfmt.toml"
+      - "flake.nix"
+      - "flake.lock"
+      - "nix/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths: *paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: nix flake check (${{ matrix.system }})
+    # A pull request from a branch of this repository is already checked by its push.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - system: aarch64-darwin
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31.11.1
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }} # avoid API rate limits fetching flake inputs
+      - run: nix flake check --print-build-logs
+
+  windows:
+    name: build and clippy (windows)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --workspace --all-targets
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings

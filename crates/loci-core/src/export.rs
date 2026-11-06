@@ -100,10 +100,12 @@ struct Anchors {
     headings: BTreeMap<String, String>,
 }
 
-/// The first of `candidate(0)`, `candidate(1)`, … not in `taken`, now taken.
+/// The first of `candidate(0)`, `candidate(1)`, … not in `taken`, now taken. Names
+/// are compared lowercased, since a case-insensitive file system (macOS, Windows) holds
+/// `Graph.png` and `graph.png` as one file.
 fn take_unique(taken: &mut BTreeSet<String>, candidate: impl Fn(usize) -> String) -> String {
-    let name = (0..).map(candidate).find(|c| !taken.contains(c)).expect("an untaken name exists");
-    taken.insert(name.clone());
+    let name = (0..).map(candidate).find(|c| !taken.contains(&c.to_lowercase())).expect("an untaken name exists");
+    taken.insert(name.to_lowercase());
     name
 }
 
@@ -146,7 +148,7 @@ pub struct Export {
     pub heading_ids: Vec<String>,
     /// Included note paths, in order.
     pub notes: Vec<VaultPath>,
-    /// Images to copy: (vault path, file name in the assets folder).
+    /// Images to copy: (vault path, path relative to the document: `<assets folder>/<name>`).
     pub assets: Vec<(VaultPath, String)>,
 }
 
@@ -156,11 +158,9 @@ pub struct Export {
 fn anchor_id(text: &str) -> String {
     let s: String = text
         .chars()
-        .filter_map(|c| match c {
-            c if c.is_alphanumeric() || c == '_' || c == '-' => Some(c.to_lowercase().collect::<String>()),
-            ' ' => Some("-".to_string()),
-            _ => None,
-        })
+        .filter(|&c| c.is_alphanumeric() || matches!(c, '_' | '-' | ' '))
+        .flat_map(char::to_lowercase)
+        .map(|c| if c == ' ' { '-' } else { c })
         .collect();
     if s.is_empty() { "section".to_string() } else { s }
 }
@@ -191,7 +191,8 @@ impl Export {
         }
 
         let notes = units.iter().map(|u| u.note.path.clone()).collect();
-        let assets = assembly.assets.names.into_iter().collect();
+        let folder = assembly.assets.folder;
+        let assets = assembly.assets.names.into_iter().map(|(p, name)| (p, format!("{folder}/{name}"))).collect();
         Export { markdown: format!("{}\n", doc.trim_end()), notes, assets, heading_ids }
     }
 }
@@ -467,6 +468,18 @@ mod tests {
     }
 
     #[test]
+    fn image_names_differing_only_in_case_stay_apart() {
+        // One file on a case-insensitive file system (macOS, Windows).
+        let i = crate::testing::index(&[
+            ("views/v.md", "# V\n\n![[views/a/Graph.png]]\n\n![[views/b/graph.png]]\n"),
+            ("views/a/Graph.png", ""),
+            ("views/b/graph.png", ""),
+        ]);
+        let names: Vec<_> = export(&i, "views/v.md", 0).assets.into_iter().map(|(_, n)| n).collect();
+        assert_eq!(names, ["assets/Graph.png", "assets/graph-1.png"]);
+    }
+
+    #[test]
     fn an_embed_size_is_no_link_text() {
         let i = crate::testing::index(&[
             ("views/v.md", "# V\n\n![[views/d.pdf|300]] and ![[views/w|300x200]]\n"),
@@ -502,7 +515,7 @@ mod tests {
 
         let e = export(&i, "views/algo.md", 1);
         assert_eq!(e.notes, vec!["views/algo.md", "concepts/a/bfs.md", "concepts/a/dfs.md"]);
-        assert_eq!(e.assets, vec![(vp("concepts/a/attachments/g.png"), "g.png".to_string())]);
+        assert_eq!(e.assets, vec![(vp("concepts/a/attachments/g.png"), "assets/g.png".to_string())]);
 
         let md = &e.markdown;
         assert!(md.contains("[BFS](#bfs) and [depth-first](#dfs)."), "{md}");

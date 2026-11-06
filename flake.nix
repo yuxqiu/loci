@@ -24,6 +24,15 @@
 
       checks = forAllSystems (pkgs: {
         inherit (self.packages.${pkgs.system}) loci loci-learn;
+        # The package's source and vendored dependencies, with Clippy for the build.
+        clippy = self.packages.${pkgs.system}.loci.overrideAttrs (old: {
+          pname = "loci-clippy";
+          nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.clippy ];
+          buildPhase = "cargo clippy --offline --workspace --all-targets -- -D warnings";
+          doCheck = false;
+          installPhase = "touch $out";
+          dontFixup = true;
+        });
         fmt =
           let
             src = pkgs.lib.fileset.toSource {

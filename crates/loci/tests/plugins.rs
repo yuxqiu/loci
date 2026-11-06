@@ -1,6 +1,10 @@
 //! Plugin dispatch and the plugin contract (m0 §2.2, §2.3) with a stub plugin
 //! `loci-stub` first on `PATH` (fixture `dispatch`).
 
+// Unix only for now: the test vaults isolate PATH with symlinks and the stub plugin is
+// a shell script (D263).
+#![cfg(unix)]
+
 mod common;
 
 use common::*;

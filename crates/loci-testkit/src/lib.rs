@@ -1,8 +1,10 @@
 //! Test helpers shared by the integration tests of `loci` and `loci-learn` (m0 §13.1):
 //! fixture vaults copied to a temp dir, deterministic git, a binary run with `--json`,
 //! envelope checks and a stub plugin script.
+//!
+//! The stub plugin is a shell script, and the integration tests built on this kit are
+//! `#![cfg(unix)]` for now: Windows CI builds and lints them only (D263).
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
@@ -45,7 +47,12 @@ impl TestVault {
         std::fs::create_dir_all(tmp.path().join("home")).unwrap();
         let bin = tmp.path().join("bin");
         std::fs::create_dir_all(&bin).unwrap();
-        std::os::unix::fs::symlink(find_on_path("git"), bin.join("git")).unwrap();
+        #[cfg(unix)]
+        use std::os::unix::fs::symlink as symlink_file;
+        #[cfg(windows)]
+        use std::os::windows::fs::symlink_file;
+        let git = format!("git{}", std::env::consts::EXE_SUFFIX);
+        symlink_file(find_on_path(&git), bin.join(&git)).unwrap();
         let root = root.canonicalize().unwrap();
         Self { tmp, root, exe: PathBuf::from(exe) }
     }
@@ -202,7 +209,9 @@ impl TestVault {
     }
 
     /// Installs the stub plugin `loci-stub` in the `PATH` dir.
+    #[cfg(unix)]
     pub fn install_stub(&self, stub: &Stub) {
+        use std::os::unix::fs::PermissionsExt;
         let p = self.bin().join("loci-stub");
         std::fs::write(&p, stub.script()).unwrap();
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -396,6 +405,7 @@ impl Default for Stub {
 }
 
 impl Stub {
+    #[cfg(unix)]
     fn script(&self) -> String {
         assert!(!self.lint.contains('\'') && !self.skills.contains('\''));
         format!(

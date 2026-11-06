@@ -66,7 +66,10 @@ pub fn discover(path_var: Option<&std::ffi::OsStr>, core_commands: &[&str]) -> V
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {
             let file_name = entry.file_name();
-            let Some(name) = file_name.to_str().and_then(|n| n.strip_prefix("loci-")) else { continue };
+            // `loci-<name>`, with `.exe` on Windows.
+            let name =
+                file_name.to_str().and_then(|n| n.strip_prefix("loci-")?.strip_suffix(std::env::consts::EXE_SUFFIX));
+            let Some(name) = name else { continue };
             if !NAME.is_match(name) || core_commands.contains(&name) || found.contains_key(name) {
                 continue;
             }
@@ -78,9 +81,18 @@ pub fn discover(path_var: Option<&std::ffi::OsStr>, core_commands: &[&str]) -> V
     found.into_iter().map(|(name, path)| Plugin { name, path }).collect()
 }
 
+/// A file with an execute bit; on Windows, which has none, any file (`discover` has
+/// required the `.exe` name).
 fn is_executable(path: &Path) -> bool {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    std::fs::metadata(path).is_ok_and(|m| {
+        #[cfg(unix)]
+        let runnable = m.permissions().mode() & 0o111 != 0;
+        #[cfg(not(unix))]
+        let runnable = true;
+        m.is_file() && runnable
+    })
 }
 
 /// A hook core calls on a plugin (§2.3).
@@ -228,10 +240,13 @@ mod tests {
     fn discovery_skips_core_names_and_bad_names() {
         let dir = tempfile::tempdir().unwrap();
         for n in ["loci-stub", "loci-lint", "loci-Bad", "other"] {
-            let p = dir.path().join(n);
+            let p = dir.path().join(format!("{n}{}", std::env::consts::EXE_SUFFIX));
             std::fs::write(&p, "#!/bin/sh\n").unwrap();
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
         }
         let found = discover(Some(dir.path().as_os_str()), &["lint"]);
         assert_eq!(found.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), vec!["stub"]);

@@ -2,6 +2,10 @@
 //! run that changes nothing, a dry run that writes nothing, and verification that
 //! refuses fixes that make the vault worse.
 
+// Unix only for now: the test vaults isolate PATH with symlinks and the stub plugin is
+// a shell script (D263).
+#![cfg(unix)]
+
 mod common;
 
 use common::*;

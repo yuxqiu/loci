@@ -1,5 +1,9 @@
 //! Integration tests for `loci-learn` (learn-plugin §5), run against temporary vaults.
 
+// Unix only for now: the test vaults isolate PATH with symlinks and the stub plugin is
+// a shell script (D263).
+#![cfg(unix)]
+
 use loci_testkit::{TestVault, codes, error_code, error_message};
 use serde_json::Value;
 

@@ -49,7 +49,7 @@ fn tight_paragraphs<'a>(events: impl Iterator<Item = (Event<'a>, Range<usize>)>)
     let mut out = vec![];
     let mut run: Vec<(Event<'a>, Range<usize>)> = vec![];
     // For each open tag, whether it is an item; inline tags are not on it.
-    let mut in_item: Vec<bool> = vec![];
+    let mut open_is_item: Vec<bool> = vec![];
     for (event, range) in events {
         let inline = match &event {
             Event::Start(tag) => is_inline(&tag.to_end()),
@@ -57,7 +57,7 @@ fn tight_paragraphs<'a>(events: impl Iterator<Item = (Event<'a>, Range<usize>)>)
             Event::Rule => false,
             _ => true,
         };
-        if inline && in_item.last() == Some(&true) {
+        if inline && open_is_item.last() == Some(&true) {
             run.push((event, range));
             continue;
         }
@@ -68,9 +68,9 @@ fn tight_paragraphs<'a>(events: impl Iterator<Item = (Event<'a>, Range<usize>)>)
             out.push((Event::End(TagEnd::Paragraph), span));
         }
         match &event {
-            Event::Start(tag) if !inline => in_item.push(matches!(tag, Tag::Item)),
+            Event::Start(tag) if !inline => open_is_item.push(matches!(tag, Tag::Item)),
             Event::End(tag) if !inline => {
-                in_item.pop();
+                open_is_item.pop();
             }
             _ => {}
         }

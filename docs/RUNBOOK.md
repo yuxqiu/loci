@@ -10,7 +10,8 @@ toolchain (cargo, clippy, rustfmt, cargo-insta).
 | Format (config: `rustfmt.toml`) | `cargo fmt` (check: `cargo fmt --check`) |
 | Review changed snapshots | `cargo insta review` |
 | Build the packages | `nix build .#loci .#loci-learn` |
-| All flake checks (packages with their tests, `loci-core`'s included; formatting) | `nix flake check` |
+| All flake checks (packages with their tests, `loci-core`'s included; Clippy with warnings denied; formatting) | `nix flake check` |
+| CI (GitHub Actions, `.github/workflows/ci.yml`) | `nix flake check` on x86_64-linux, aarch64-linux and aarch64-darwin; `cargo build` and `cargo clippy -D warnings` (all targets) on Windows, whose tests are Unix only for now. Locally: `cargo clippy --target x86_64-pc-windows-gnu --workspace --all-targets -- -D warnings` (after `rustup target add x86_64-pc-windows-gnu`) |
 | Code-quality pass (review, verify, apply, check, record) | the `quality-pass` skill, `.claude/skills/quality-pass/SKILL.md` |
 | Function-length stats | `python3 .claude/skills/quality-pass/fnlen.py` |
 | Agent evals (calls a real agent; costs money; not in CI) | `REPS=3 evals/run.sh <suite> <model>...`, e.g. `evals/run.sh finding sonnet haiku` |

@@ -248,10 +248,10 @@ impl Markdown {
     /// matches, or the block with its id.
     pub fn fragment_range(&self, fragment: &Fragment) -> Option<Range<usize>> {
         match fragment {
-            Fragment::Heading(h) => {
-                let key = heading_key(h);
+            Fragment::Heading(wanted) => {
+                let key = heading_key(wanted);
                 let text = &self.text;
-                self.sections().find(|(n, _)| heading_key(n.content.value(text)) == key).map(|(_, section)| section)
+                self.sections().find(|(h, _)| heading_key(h.content.value(text)) == key).map(|(_, section)| section)
             }
             Fragment::Block(id) => self.block_ids().find(|b| b.id.value(&self.text) == id).map(|b| b.span.clone()),
         }

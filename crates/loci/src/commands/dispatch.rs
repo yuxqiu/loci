@@ -1,6 +1,5 @@
 //! Plugin dispatch (m0 §2.2): `loci <name> args...` runs `loci-<name> args...`.
 
-use std::os::unix::process::ExitStatusExt;
 use std::process::ExitCode;
 
 use loci_core::envelope::{Refusal, Report};
@@ -36,7 +35,12 @@ pub fn run(ctx: &Ctx, args: Vec<String>) -> ExitCode {
         Ok(status) => match status.code() {
             Some(c) => ExitCode::from(c as u8),
             None => {
-                let signal = status.signal().map_or("a signal".to_string(), |s| format!("signal {s}"));
+                // Only Unix ends a process without a code.
+                #[cfg(unix)]
+                let signal = std::os::unix::process::ExitStatusExt::signal(&status)
+                    .map_or("a signal".to_string(), |s| format!("signal {s}"));
+                #[cfg(not(unix))]
+                let signal = "a signal";
                 fail(
                     ctx,
                     name,

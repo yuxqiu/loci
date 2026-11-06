@@ -35,17 +35,17 @@ pub fn all() -> Vec<Update> {
     parse(assets::UPDATES)
 }
 
-/// The entries of `list`: each is a level-2 heading `<id> · <date> · <title>` and its
+/// The entries of `markdown`: each is a level-2 heading `<id> · <date> · <title>` and its
 /// section, as loci's markdown parser reads them (a `## ` line in a code block is text).
-fn parse(list: &str) -> Vec<Update> {
-    let note = loci_core::parse::Markdown::parse(list.to_string());
-    note.sections()
+fn parse(markdown: &str) -> Vec<Update> {
+    let doc = loci_core::parse::Markdown::parse(markdown.to_string());
+    doc.sections()
         .filter(|(h, _)| h.level == 2)
         .map(|(h, section)| {
-            let mut parts = h.content.value(list).splitn(3, " · ");
+            let mut parts = h.content.value(markdown).splitn(3, " · ");
             let id = parts.next().expect("an id").parse().expect("ids are `u` and four digits");
             let title = parts.nth(1).expect("a date and a title").to_string();
-            Update { id, title, text: format!("{}\n", list[section].trim_end()) }
+            Update { id, title, text: format!("{}\n", markdown[section].trim_end()) }
         })
         .collect()
 }

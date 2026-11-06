@@ -26,7 +26,7 @@ pub enum Kind {
     Inbox,
     /// A non-markdown file outside `sources/` and `inbox/` (images, attachments).
     Asset,
-    /// A `.md` file outside every known folder.
+    /// Any other `.md` file: outside every known folder, or directly in `concepts/`.
     Unknown,
 }
 
@@ -219,7 +219,9 @@ impl VaultPath {
         self.kind().is_some()
     }
 
-    /// The area of a path under `concepts/`.
+    /// The second segment of a path under `concepts/`: the area of a concept or area
+    /// file. A file directly in `concepts/` gives its own name, so callers filter by kind
+    /// first.
     pub fn area(&self) -> Option<&str> {
         let mut parts = self.components();
         (parts.next() == Some("concepts")).then(|| parts.next()).flatten()

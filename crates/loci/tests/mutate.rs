@@ -1,6 +1,10 @@
 //! Mutating commands on the fixture vaults (m0 §13.2): `mv`, `block-ids`, `init`.
 //! Goldens hold the envelope and the resulting tree with ULIDs redacted.
 
+// Unix only for now: the test vaults isolate PATH with symlinks and the stub plugin is
+// a shell script (D263).
+#![cfg(unix)]
+
 mod common;
 
 use common::*;
@@ -354,6 +358,14 @@ fn init_creates_a_vault_without_committing() {
     let (code, env) = init_in(&v.root, &v);
     assert_eq!((code, error_code(&env)), (1, "init.exists"));
     assert_eq!(v.tree(), before);
+}
+
+#[test]
+fn init_creates_a_missing_vault_folder() {
+    let v = TestVault::empty(BIN);
+    let (code, env) = v.run(&["--vault", "a/b", "init"]);
+    assert_eq!(code, 0, "{env:#}");
+    assert!(v.root.join("a/b/loci.toml").is_file() && v.root.join("a/b/.git").is_dir());
 }
 
 #[test]

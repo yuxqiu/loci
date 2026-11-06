@@ -1,5 +1,9 @@
 //! `merge`, `closure`, `bench`, `export` and `links` (docs/specs/m1-m4.md).
 
+// Unix only for now: the test vaults isolate PATH with symlinks and the stub plugin is
+// a shell script (D263).
+#![cfg(unix)]
+
 mod common;
 
 use common::*;

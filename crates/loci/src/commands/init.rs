@@ -15,8 +15,10 @@ use crate::assets;
 const GITIGNORE_LINE: &str = "/.loci/";
 
 pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
-    // `init` creates the vault where it is told, or right here: it never searches up.
+    // `init` creates the vault where it is told (the folder too, as `git init` does),
+    // or right here: it never searches up.
     let dir = ctx.vault.dir().to_path_buf();
+    std::fs::create_dir_all(&dir).map_err(Refusal::io_at(&dir))?;
     refuse_destination(&dir)?;
     ensure_repo_root(&dir)?;
     let (created, skipped) = write_files(&dir)?;
@@ -26,7 +28,7 @@ pub fn run(ctx: &Ctx) -> Result<Report, Refusal> {
 
 /// Refuses a folder that is a vault already (`init.exists`), or where a file `init`
 /// manages is a symlink (`file.symlink`): there is no vault to check yet (`Vault::open`
-/// refuses symlinks), so this is checked before anything is written (m0 §3).
+/// refuses symlinks), so this is checked before any file is written (m0 §3).
 fn refuse_destination(dir: &Path) -> Result<(), Refusal> {
     if dir.join(config::FILE).symlink_metadata().is_ok() {
         return Err(Refusal::refused("init.exists", "loci.toml already exists"));

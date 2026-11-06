@@ -8,6 +8,8 @@ them under its version.
 
 ### Added
 
+- loci builds on Windows; a plugin there is `loci-<name>.exe` on `PATH`. CI checks
+  Linux and macOS with the full tests, and Windows with a build and Clippy.
 - `path.name-clash` (warning): a note `x.md` in a folder beside a file `x`, which
   `[[x]]` names.
 - `loci lint --fix`: applies the fixes that keep the meaning (a missing id, a
@@ -37,6 +39,12 @@ them under its version.
 
 ### Changed
 
+- Files loci creates in the vault (a default `loci export`, its images) get the
+  usual mode (0666 less the umask), not owner-only 0600.
+- `loci export` names images that differ only in letter case apart (`Graph.png`,
+  `graph-1.png`), so they stay two files on macOS and Windows.
+- `loci init --vault <dir>` creates `<dir>` when it does not exist, instead of failing
+  in `git init`.
 - `loci lint --fix` also fixes a lone prereq outside a list (`prereqs: [[x]]` or
   `prereqs: "[[x]]"`), rewriting it as `["[[x]]"]`.
 - `link.dangling-block` says when the target holds the id but it is no block id
